@@ -19,7 +19,7 @@ KERNEL_SOURCES = $(SRC_DIR)/kernel/entry.asm $(SRC_DIR)/kernel/main.c \
                  $(SRC_DIR)/kernel/arch/x86_64/gdt.asm $(SRC_DIR)/kernel/arch/x86_64/idt.c \
                  $(SRC_DIR)/kernel/arch/x86_64/keyboard.c $(SRC_DIR)/kernel/arch/x86_64/paging.c \
                  $(SRC_DIR)/kernel/arch/x86_64/tss.asm $(SRC_DIR)/kernel/arch/x86_64/vga.c \
-                 $(SRC_DIR)/kernel/syscall.c
+                 $(SRC_DIR)/kernel/syscall.c $(SRC_DIR)/user/shell.c
 
 KERNEL_ASM_SOURCES = $(filter %.asm,$(KERNEL_SOURCES))
 KERNEL_C_SOURCES = $(filter %.c,$(KERNEL_SOURCES))
@@ -78,12 +78,11 @@ $(USER_BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(USER_BUILD_DIR)
 $(USER_BIN): $(USER_OBJS) user.ld
 	$(LD) -T user.ld $(USER_OBJS) -o $@ --oformat binary
 
-# Create image (allocate 1.44MB, bootloader sector 1, kernel sectors 2-20, user sectors 21+)
-$(OS_IMAGE): $(BOOTLOADER_BIN) $(KERNEL_BIN) $(USER_BIN) | $(DIST_DIR)
+# Create image (allocate 1.44MB, bootloader sector 1, kernel sectors 2-20)
+$(OS_IMAGE): $(BOOTLOADER_BIN) $(KERNEL_BIN) | $(DIST_DIR)
 	dd if=/dev/zero of=$@ bs=512 count=2880
 	dd if=$(BOOTLOADER_BIN) of=$@ bs=512 count=1 conv=notrunc
 	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=1 count=19 conv=notrunc
-	dd if=$(USER_BIN) of=$@ bs=512 seek=20 conv=notrunc
 
 # Run in QEMU
 run: $(OS_IMAGE)

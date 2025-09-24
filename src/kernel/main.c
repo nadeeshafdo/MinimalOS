@@ -1,24 +1,72 @@
-// Simple test kernel to verify boot process works
+#include "arch/x86_64/vga.h"
+#include "arch/x86_64/idt.h"
+#include "arch/x86_64/keyboard.h"
+#include "arch/x86_64/paging.h"
+#include "syscall.h"
+#include "stddef.h"
+
+// Simple memory management
+static char kernel_heap[0x100000]; // 1MB heap
+static size_t heap_offset = 0;
+
+void* kmalloc(size_t size) {
+    if (heap_offset + size >= sizeof(kernel_heap)) {
+        return NULL; // Out of memory
+    }
+    void* ptr = &kernel_heap[heap_offset];
+    heap_offset += size;
+    return ptr;
+}
+
+// Simple memory copy function
+void* memcpy(void* dest, const void* src, size_t n) {
+    char* d = (char*)dest;
+    const char* s = (const char*)src;
+    while (n--) {
+        *d++ = *s++;
+    }
+    return dest;
+}
+
 void kernel_main() {
-    // Direct VGA memory access - simple and reliable
-    volatile char *vga = (volatile char *)0xB8000;
-    const char *msg = "KERNEL WORKS!";
-    int i = 0;
+    // Initialize VGA
+    vga_init();
+    vga_set_color(VGA_COLOR_LIGHT_GREEN);
+    vga_print("MinimalOS Kernel Starting...\n");
+    vga_set_color(VGA_COLOR_WHITE);
     
-    // Clear first line
-    for (int j = 0; j < 80 * 2; j += 2) {
-        vga[j] = ' ';      // Character
-        vga[j + 1] = 0x07; // Attribute (light gray on black)
-    }
+    // Set up interrupt handling
+    setup_idt();
+    vga_print("IDT initialized\n");
     
-    // Write message to VGA memory
-    while (msg[i] && i < 80) {
-        vga[i * 2] = msg[i];      // Character
-        vga[i * 2 + 1] = 0x0A;    // Attribute (bright green on black)
-        i++;
-    }
+    // Initialize keyboard
+    setup_keyboard();
+    vga_print("Keyboard initialized\n");
     
-    // Simple infinite loop with halt to save CPU
+    // Set up syscalls
+    setup_syscalls();
+    vga_print("Syscalls initialized\n");
+    
+    // Set up basic memory management
+    setup_paging();
+    vga_print("Memory management initialized\n");
+    
+    vga_set_color(VGA_COLOR_LIGHT_GREEN);
+    vga_print("Kernel initialization complete!\n");
+    vga_set_color(VGA_COLOR_LIGHT_BROWN);
+    vga_print("Starting interactive shell...\n\n");
+    vga_set_color(VGA_COLOR_WHITE);
+    
+    // Switch to user mode and run shell
+    // For now, we'll run the shell in kernel mode for simplicity
+    // In a real OS, this would involve setting up user space properly
+    extern void user_shell_main();
+    user_shell_main();
+    
+    // Should not reach here
+    vga_set_color(VGA_COLOR_LIGHT_RED);
+    vga_print("ERROR: Kernel returned from user shell!\n");
+    vga_set_color(VGA_COLOR_WHITE);
     while (1) {
         asm volatile("hlt");
     }
