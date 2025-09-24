@@ -48,37 +48,20 @@ start:
     test edx, 1 << 29
     jz no_lm
 
-    mov si, success_msg
+    mov si, pmode_msg
     call print_string
 
-    ; Setup paging
-    mov edi, 0x1000
-    xor eax, eax
-    mov ecx, 4096
-    rep stosd
-    mov edi, 0x1000
-    mov dword [edi], 0x2003
-    mov edi, 0x2000
-    mov dword [edi], 0x3003
-    mov edi, 0x3000
-    mov dword [edi], 0x00000083
-
-    ; Enable PAE, set CR3, enable LM, enable paging
-    mov eax, cr4
-    or eax, 0x20
-    mov cr4, eax
-    mov eax, 0x1000
-    mov cr3, eax
-    mov ecx, 0xC0000080
-    rdmsr
-    or eax, 0x100
-    wrmsr
+    ; ===== STEP 1: 16-bit Real Mode → 32-bit Protected Mode =====
+    ; Load 32-bit GDT
+    lgdt [gdt32_ptr]
+    
+    ; Enter 32-bit protected mode
     mov eax, cr0
-    or eax, 0x80000001
+    or eax, 1
     mov cr0, eax
-
-    lgdt [gdt64_ptr]
-    jmp 0x08:long_mode
+    
+    ; Far jump to 32-bit protected mode
+    jmp 0x08:protected_mode
 
 print_string:
     lodsb
@@ -104,8 +87,64 @@ no_lm:
     call print_string
     jmp $
 
+; ===== STEP 2: 32-bit Protected Mode =====
+[bits 32]
+protected_mode:
+    ; Set up 32-bit data segments
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    mov esp, 0x90000
+
+    ; Setup paging for long mode at safe address
+    mov edi, 0x70000    ; Use 0x70000 instead of 0x1000 to avoid conflicts
+    xor eax, eax
+    mov ecx, 4096
+    rep stosd
+    
+    ; PML4 at 0x70000
+    mov edi, 0x70000
+    mov dword [edi], 0x71003      ; Point to PDP at 0x71000
+    
+    ; PDP at 0x71000  
+    mov edi, 0x71000
+    mov dword [edi], 0x72003      ; Point to PD at 0x72000
+    
+    ; PD at 0x72000 - Identity map first 2MB with 2MB pages
+    mov edi, 0x72000
+    mov dword [edi], 0x00000083   ; 2MB page, present, writable
+
+    ; ===== STEP 3: 32-bit Protected Mode → 64-bit Long Mode =====
+    ; Enable PAE
+    mov eax, cr4
+    or eax, 0x20
+    mov cr4, eax
+    
+    ; Set CR3 to page tables
+    mov eax, 0x70000
+    mov cr3, eax
+    
+    ; Enable long mode in EFER MSR
+    mov ecx, 0xC0000080
+    rdmsr
+    or eax, 0x100
+    wrmsr
+    
+    ; Enable paging to activate long mode
+    mov eax, cr0
+    or eax, 0x80000000
+    mov cr0, eax
+
+    ; Load 64-bit GDT and jump to long mode
+    lgdt [gdt64_ptr]
+    jmp 0x08:long_mode
+
 [bits 64]
 long_mode:
+    ; Set up 64-bit segments
     mov ax, 0x10
     mov ds, ax
     mov es, ax
@@ -119,6 +158,7 @@ long_mode:
     mov rcx, 19 * 512 / 8
     rep movsq
 
+    ; Jump to kernel
     jmp 0x100000
 
 ; Data
@@ -127,16 +167,26 @@ boot_drive db 0
 ; Messages
 loading_msg db 'MinimalOS Loading...', 13, 10, 0
 loaded_msg db 'Kernel loaded successfully.', 13, 10, 0
-success_msg db 'Entering long mode...', 13, 10, 0
+pmode_msg db 'Entering protected mode...', 13, 10, 0
 disk_err_msg db 'Disk error on drive ', 0
 no_lm_msg db 'Long mode not supported!', 13, 10, 0
 
-; 64-bit GDT
+; 32-bit GDT for protected mode transition
+align 8
+gdt32:
+    dq 0x0000000000000000    ; Null descriptor
+    dq 0x00CF9A000000FFFF    ; 32-bit code segment
+    dq 0x00CF92000000FFFF    ; 32-bit data segment
+gdt32_ptr:
+    dw $ - gdt32 - 1
+    dd gdt32
+
+; 64-bit GDT for long mode
 align 8
 gdt64:
-    dq 0x0000000000000000    ; Null
-    dq 0x00AF9A000000FFFF    ; Code
-    dq 0x00AF92000000FFFF    ; Data
+    dq 0x0000000000000000    ; Null descriptor
+    dq 0x00AF9A000000FFFF    ; 64-bit code segment  
+    dq 0x00AF92000000FFFF    ; 64-bit data segment
 gdt64_ptr:
     dw $ - gdt64 - 1
     dq gdt64
