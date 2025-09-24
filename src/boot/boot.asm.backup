@@ -9,16 +9,19 @@ start:
     mov ss, ax
     mov sp, 0x7C00
 
-    ; Print loading message
-    mov si, loading_msg
-    call print_string
+    ; Print a simple character to show we're running
+    mov ah, 0x0E
+    mov al, 'H'
+    int 0x10
+    mov al, 'i'
+    int 0x10
 
     ; Enable A20 line
     in al, 0x92
     or al, 2
     out 0x92, al
 
-    ; Load kernel from sector 2 to 0x1000 (19 sectors)
+    ; Load kernel from sector 2 to 0x10000 (19 sectors)
     mov ah, 0x02
     mov al, 19  ; Sectors to read
     mov ch, 0
@@ -28,9 +31,10 @@ start:
     int 0x13
     jc load_error
 
-    ; Print loaded message
-    mov si, loaded_msg
-    call print_string
+    ; Show we loaded successfully
+    mov ah, 0x0E
+    mov al, 'L'
+    int 0x10
 
     ; Check for long mode support
     mov eax, 0x80000000
@@ -43,9 +47,10 @@ start:
     test edx, 1 << 29  ; Test LM bit
     jz no_long_mode
 
-    ; Print success message - last BIOS call before long mode
-    mov si, success_msg
-    call print_string
+    ; Show long mode supported
+    mov ah, 0x0E
+    mov al, 'M'
+    int 0x10
 
     ; Set up paging for long mode (identity map first 2MB)
     mov edi, 0x2000   ; PML4 at 0x2000
@@ -80,35 +85,28 @@ start:
     ; Load GDT for long mode
     lgdt [gdt64_ptr]
 
-    ; Far jump to long mode - NO MORE BIOS CALLS AFTER THIS POINT
+    ; Show we're about to jump
+    mov ah, 0x0E
+    mov al, 'J'
+    int 0x10
+
+    ; Far jump to long mode
     jmp 0x08:long_mode
 
-print_string:
-    push ax
-.next_char:
-    lodsb
-    test al, al
-    jz .done
-    mov ah, 0x0E
-    int 0x10
-    jmp .next_char
-.done:
-    pop ax
-    ret
-
 load_error:
-    mov si, error_msg
-    call print_string
+    mov ah, 0x0E
+    mov al, 'E'
+    int 0x10
     jmp $
 
 no_long_mode:
-    mov si, no_longmode_msg
-    call print_string
+    mov ah, 0x0E
+    mov al, 'N'
+    int 0x10
     jmp $
 
 [bits 64]
 long_mode:
-    ; Set up segments for long mode
     mov ax, 0x10
     mov ds, ax
     mov es, ax
@@ -124,13 +122,6 @@ long_mode:
 
     ; Jump to kernel entry at 0x10000
     jmp 0x10000
-
-; String messages
-loading_msg db 'MinimalOS Loading...', 13, 10, 0
-loaded_msg db 'Kernel loaded successfully.', 13, 10, 0
-success_msg db 'Entering long mode...', 13, 10, 0
-error_msg db 'Error: Could not load kernel!', 13, 10, 0
-no_longmode_msg db 'Error: Long mode not supported!', 13, 10, 0
 
 gdt64:
     dq 0  ; Null

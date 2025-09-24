@@ -1,5 +1,5 @@
 #include "arch/x86_64/vga.h"
-#include "arch/x86_64/idt.h"
+#include "arch/x86_64/idt.h" 
 #include "arch/x86_64/keyboard.h"
 #include "arch/x86_64/paging.h"
 #include "arch/x86_64/tss.h"
@@ -29,32 +29,35 @@ void hlt() {
 
 void kernel_main() {
     vga_init();
-    vga_print("Kernel loaded in long mode.\n");
+    vga_print("MinimalOS Kernel Started!\n");
 
     setup_paging();  // Set up kernel paging
-    setup_gdt();     // Load GDT with user segments
-    setup_tss();     // Set up TSS for ring switches
-    setup_idt();     // Interrupts
-    setup_keyboard(); // Keyboard IRQ
-    setup_syscalls(); // Syscall MSR
-
-    vga_print("Setting up user space...\n");
-
-    // Load user shell from sectors 21+ (we'll read it from disk)
-    // For now, we'll create a simple placeholder
+    vga_print("Paging initialized.\n");
     
-    // Set up user stack (map a page for it)
-    map_user_stack(USER_STACK_ADDR, USER_STACK_SIZE);
+    setup_gdt();     // Load GDT with user segments
+    vga_print("GDT loaded.\n");
+    
+    setup_tss();     // Set up TSS for ring switches
+    vga_print("TSS configured.\n");
+    
+    setup_idt();     // Interrupts
+    vga_print("Interrupts enabled.\n");
+    
+    setup_keyboard(); // Keyboard IRQ
+    vga_print("Keyboard ready.\n");
+    
+    setup_syscalls(); // Syscall MSR
+    vga_print("Syscalls initialized.\n");
 
-    vga_print("Kernel initialization complete. Starting user shell...\n");
+    vga_print("Kernel initialization complete.\n");
+    vga_print("MinimalOS> ");
 
-    // For now, just stay in kernel mode and provide a simple interface
+    // Simple keyboard loop
     while (1) {
-        vga_print("MinimalOS> ");
         char ch = kb_read();
         vga_putchar(ch);
         if (ch == '\n') {
-            vga_print("Command received!\n");
+            vga_print("MinimalOS> ");
         }
     }
 }
