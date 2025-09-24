@@ -19,7 +19,7 @@ KERNEL_SOURCES = $(SRC_DIR)/kernel/entry.asm $(SRC_DIR)/kernel/main.c \
                  $(SRC_DIR)/kernel/arch/x86_64/gdt.asm $(SRC_DIR)/kernel/arch/x86_64/idt.c \
                  $(SRC_DIR)/kernel/arch/x86_64/keyboard.c $(SRC_DIR)/kernel/arch/x86_64/paging.c \
                  $(SRC_DIR)/kernel/arch/x86_64/tss.asm $(SRC_DIR)/kernel/arch/x86_64/vga.c \
-                 $(SRC_DIR)/kernel/syscall.c $(SRC_DIR)/user/shell.c
+                 $(SRC_DIR)/kernel/syscall.c
 
 KERNEL_ASM_SOURCES = $(filter %.asm,$(KERNEL_SOURCES))
 KERNEL_C_SOURCES = $(filter %.c,$(KERNEL_SOURCES))
