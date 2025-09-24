@@ -99,6 +99,29 @@ The OS image is a raw 1.44MB floppy disk with the following layout:
 3. **Kernel** initializes VGA, GDT, IDT, keyboard, syscalls, and enters a simple interactive loop
 4. **User Shell** (future enhancement) will run in ring 3 using syscalls for I/O
 
+## Running on Real Hardware
+
+### USB Boot Instructions
+
+The OS can be booted from USB drives on real hardware:
+
+1. **Write image to USB drive:**
+   ```bash
+   sudo dd if=build/dist/os.img of=/dev/sdX bs=512
+   ```
+   (Replace `/dev/sdX` with your USB drive - **be very careful with this command!**)
+
+2. **Boot from USB:**
+   - Insert USB drive into target computer
+   - Boot and select USB drive in BIOS boot menu
+   - The OS will auto-detect whether it's running from floppy (0x00) or USB/hard drive (0x80+)
+
+### Hardware Compatibility
+
+- **Tested Platforms**: QEMU emulation, BIOS-compatible x86-64 systems
+- **Requirements**: x86-64 processor with long mode support
+- **Boot Methods**: Floppy disk emulation, USB drive, CD-ROM (as floppy image)
+
 ## System Calls
 
 Currently implemented syscalls:
