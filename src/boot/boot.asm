@@ -74,16 +74,12 @@ print_string:
     ret
 
 disk_error:
-    mov si, disk_err_msg
+    mov si, loading_msg  ; Reuse message to save space
     call print_string
-    mov al, [boot_drive]
-    add al, '0'
-    mov ah, 0x0E
-    int 0x10
     jmp $
 
 no_lm:
-    mov si, no_lm_msg
+    mov si, loading_msg  ; Reuse message to save space  
     call print_string
     jmp $
 
@@ -164,12 +160,10 @@ long_mode:
 ; Data
 boot_drive db 0
 
-; Messages
+; Messages (shortened to save space)
 loading_msg db 'MinimalOS Loading...', 13, 10, 0
-loaded_msg db 'Kernel loaded successfully.', 13, 10, 0
-pmode_msg db 'Entering protected mode...', 13, 10, 0
-disk_err_msg db 'Disk error on drive ', 0
-no_lm_msg db 'Long mode not supported!', 13, 10, 0
+loaded_msg db 'Kernel loaded.', 13, 10, 0
+pmode_msg db 'Protected mode...', 13, 10, 0
 
 ; 32-bit GDT for protected mode transition
 align 8
@@ -191,5 +185,6 @@ gdt64_ptr:
     dw $ - gdt64 - 1
     dq gdt64
 
+; Bootloader signature (pad to 512 bytes total)
 times 510 - ($ - $$) db 0
 dw 0xAA55
