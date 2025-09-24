@@ -18,13 +18,13 @@ start:
     or al, 2
     out 0x92, al
 
-    ; Load kernel from sector 2 to 0x1000 (19 sectors)
+    ; Load kernel from sector 2 to 0x8000 (19 sectors)
     mov ah, 0x02
     mov al, 19  ; Sectors to read
     mov ch, 0
     mov cl, 2   ; Start sector
     mov dh, 0
-    mov bx, 0x1000   ; Load to 0x1000 temporarily
+    mov bx, 0x8000   ; Load to 0x8000 (32KB) 
     int 0x13
     jc load_error
 
@@ -47,40 +47,46 @@ start:
     mov si, success_msg
     call print_string
 
-    ; Set up paging for long mode (identity map first 2MB)
-    mov edi, 0x2000   ; PML4 at 0x2000
-    mov cr3, edi
+    ; Clear 4 pages for paging structures
+    mov edi, 0x1000   ; Use 0x1000 instead of 0x2000 to avoid conflicts
     xor eax, eax
-    mov ecx, 4096 * 4  ; Clear 4 page tables
+    mov ecx, 4096
     rep stosd
-    mov edi, 0x2000
 
-    mov dword [edi], 0x3003   ; PML4[0] = PDP at 0x3000, present+rw
-    add edi, 0x1000           ; PDP at 0x3000
-    mov dword [edi], 0x4003   ; PDP[0] = PD at 0x4000, present+rw
-    add edi, 0x1000           ; PD at 0x4000
+    ; Set up page tables (identity map first 2MB)
+    mov edi, 0x1000   ; PML4 at 0x1000
+    mov dword [edi], 0x2003   ; PML4[0] = PDP at 0x2000, present+rw
+
+    mov edi, 0x2000   ; PDP at 0x2000  
+    mov dword [edi], 0x3003   ; PDP[0] = PD at 0x3000, present+rw
+
+    mov edi, 0x3000   ; PD at 0x3000
     mov dword [edi], 0x00000083  ; PD[0] = 2MB page, present+rw+big
 
-    ; Enable PAE and PGE
+    ; Enable PAE
     mov eax, cr4
-    or eax, 1 << 5 | 1 << 7
+    or eax, 0x20
     mov cr4, eax
 
-    ; Set LM bit in EFER MSR
+    ; Set page table in CR3
+    mov eax, 0x1000
+    mov cr3, eax
+
+    ; Set long mode bit in EFER MSR
     mov ecx, 0xC0000080
     rdmsr
-    or eax, 1 << 8
+    or eax, 0x100
     wrmsr
 
-    ; Enable paging and protected mode
+    ; Enable paging
     mov eax, cr0
-    or eax, 1 << 31 | 1 << 0
+    or eax, 0x80000001
     mov cr0, eax
 
-    ; Load GDT for long mode
+    ; Load GDT
     lgdt [gdt64_ptr]
 
-    ; Far jump to long mode - NO MORE BIOS CALLS AFTER THIS POINT
+    ; Far jump to 64-bit mode
     jmp 0x08:long_mode
 
 print_string:
@@ -108,7 +114,7 @@ no_long_mode:
 
 [bits 64]
 long_mode:
-    ; Set up segments for long mode
+    ; Now we're in 64-bit mode - set up segments
     mov ax, 0x10
     mov ds, ax
     mov es, ax
@@ -116,14 +122,21 @@ long_mode:
     mov gs, ax
     mov ss, ax
 
-    ; Copy kernel from 0x1000 to 0x10000 
-    mov rsi, 0x1000      ; Source
-    mov rdi, 0x10000     ; Destination  
-    mov rcx, 19 * 512 / 8 ; Size in qwords (19 sectors)
+    ; Write to VGA to prove we're in 64-bit mode
+    mov rax, 0xB8000
+    mov byte [rax], '6'
+    mov byte [rax+1], 0x2F    ; Green on white
+    mov byte [rax+2], '4'
+    mov byte [rax+3], 0x2F
+
+    ; Copy kernel from 0x8000 to 0x100000 (1MB) to avoid conflicts
+    mov rsi, 0x8000      ; Source (loaded at 0x8000 by disk read)
+    mov rdi, 0x100000    ; Destination (1MB)
+    mov rcx, 19 * 512 / 8 ; Size in qwords
     rep movsq
 
-    ; Jump to kernel entry at 0x10000
-    jmp 0x10000
+    ; Jump to kernel at new location
+    jmp 0x100000
 
 ; String messages
 loading_msg db 'MinimalOS Loading...', 13, 10, 0
@@ -132,12 +145,14 @@ success_msg db 'Entering long mode...', 13, 10, 0
 error_msg db 'Error: Could not load kernel!', 13, 10, 0
 no_longmode_msg db 'Error: Long mode not supported!', 13, 10, 0
 
+; 64-bit GDT
+align 8
 gdt64:
-    dq 0  ; Null
-    dq 0x00AF9B000000FFFF  ; Code: long mode, present, DPL=0
-    dq 0x00AF93000000FFFF  ; Data: present, DPL=0
+    dq 0x0000000000000000    ; Null descriptor
+    dq 0x00AF9A000000FFFF    ; Code segment (64-bit)
+    dq 0x00AF92000000FFFF    ; Data segment (64-bit)
 gdt64_ptr:
-    dw gdt64_ptr - gdt64 - 1
+    dw $ - gdt64 - 1
     dq gdt64
 
 times 510 - ($ - $$) db 0
