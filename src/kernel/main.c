@@ -1,63 +1,24 @@
-#include "arch/x86_64/vga.h"
-#include "arch/x86_64/idt.h" 
-#include "arch/x86_64/keyboard.h"
-#include "arch/x86_64/paging.h"
-#include "arch/x86_64/tss.h"
-#include "syscall.h"
-#include "stddef.h"
-
-// Function declarations
-void setup_gdt(void);
-
-// Simple memory copy function
-void *memcpy(void *dest, const void *src, size_t n) {
-    char *d = dest;
-    const char *s = src;
-    while (n--) *d++ = *s++;
-    return dest;
-}
-
-// User space address for shell (matches user.ld)
-#define USER_CODE_ADDR 0x400000
-#define USER_STACK_ADDR 0x500000
-#define USER_STACK_SIZE 0x1000
-
-// Halt function
-void hlt() {
-    asm volatile("hlt");
-}
-
+// Ultra-simple kernel for debugging - no function calls
 void kernel_main() {
-    vga_init();
-    vga_print("MinimalOS Kernel Started!\n");
-
-    setup_paging();  // Set up kernel paging
-    vga_print("Paging initialized.\n");
+    // Direct VGA memory access - write a test pattern
+    volatile char *vga = (volatile char *)0xB8000;
     
-    setup_gdt();     // Load GDT with user segments
-    vga_print("GDT loaded.\n");
+    // Write a distinctive pattern that should be visible
+    vga[0] = 'K';   vga[1] = 0x4F;  // 'K' in white on red
+    vga[2] = 'E';   vga[3] = 0x4F;  // 'E' in white on red  
+    vga[4] = 'R';   vga[5] = 0x4F;  // 'R' in white on red
+    vga[6] = 'N';   vga[7] = 0x4F;  // 'N' in white on red
+    vga[8] = 'E';   vga[9] = 0x4F;  // 'E' in white on red
+    vga[10] = 'L';  vga[11] = 0x4F; // 'L' in white on red
     
-    setup_tss();     // Set up TSS for ring switches
-    vga_print("TSS configured.\n");
+    // Fill more of the screen for visibility
+    for (int i = 12; i < 80 * 2; i += 2) {
+        vga[i] = '!';       // Character
+        vga[i + 1] = 0x2F;  // Green on white - very visible
+    }
     
-    setup_idt();     // Interrupts
-    vga_print("Interrupts enabled.\n");
-    
-    setup_keyboard(); // Keyboard IRQ
-    vga_print("Keyboard ready.\n");
-    
-    setup_syscalls(); // Syscall MSR
-    vga_print("Syscalls initialized.\n");
-
-    vga_print("Kernel initialization complete.\n");
-    vga_print("MinimalOS> ");
-
-    // Simple keyboard loop
+    // Infinite loop - no function calls, just halt
     while (1) {
-        char ch = kb_read();
-        vga_putchar(ch);
-        if (ch == '\n') {
-            vga_print("MinimalOS> ");
-        }
+        __asm__ volatile ("hlt");
     }
 }

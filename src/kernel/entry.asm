@@ -2,11 +2,12 @@
 section .text
 global _kernel_entry
 _kernel_entry:
-    ; Set up a stack for the kernel
-    mov rsp, 0x90000  ; Set stack pointer to a safe location
+    ; Set up a stack for the kernel - using 64-bit register
+    mov rax, 0x90000  ; Load stack address into 64-bit register first
+    mov rsp, rax      ; Then move to stack pointer
     
     ; Ensure segments are correct
-    mov ax, 0x10      ; Data segment
+    mov ax, 0x10      ; Data segment (segment registers are still 16-bit)
     mov ds, ax
     mov es, ax
     mov fs, ax
