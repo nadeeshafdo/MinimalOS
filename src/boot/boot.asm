@@ -14,13 +14,13 @@ start:
     or al, 2
     out 0x92, al
 
-    ; Load kernel from sector 2 to 0x1000 (19 sectors)
+    ; Load kernel from sector 2 to 0x10000 (19 sectors)
     mov ah, 0x02
     mov al, 19  ; Sectors to read
     mov ch, 0
     mov cl, 2   ; Start sector
     mov dh, 0
-    mov bx, 0x1000
+    mov bx, 0x1000   ; Load to 0x1000 temporarily
     int 0x13
     jc load_error
 
@@ -75,8 +75,14 @@ long_mode:
     mov gs, ax
     mov ss, ax
 
-    ; Jump to kernel entry at 0x100000
-    jmp 0x100000
+    ; Copy kernel from 0x1000 to 0x10000 
+    mov rsi, 0x1000      ; Source
+    mov rdi, 0x10000     ; Destination  
+    mov rcx, 19 * 512 / 8 ; Size in qwords (19 sectors)
+    rep movsq
+
+    ; Jump to kernel entry at 0x10000
+    jmp 0x10000
 
 gdt64:
     dq 0  ; Null
