@@ -95,11 +95,19 @@ protected_mode:
     mov ss, ax
     mov esp, 0x90000
 
+    ; Write 'P' to VGA to show we reached protected mode
+    mov byte [0xB8000], 'P'
+    mov byte [0xB8001], 0x0E  ; Yellow on black
+
     ; Setup paging for long mode at safe address
     mov edi, 0x70000    ; Use 0x70000 instead of 0x1000 to avoid conflicts
     xor eax, eax
     mov ecx, 4096 * 4   ; Clear 4 pages worth of memory (16KB total)
     rep stosd
+    
+    ; Write '1' to show paging cleared
+    mov byte [0xB8002], '1'
+    mov byte [0xB8003], 0x0E  ; Yellow on black
     
     ; PML4 at 0x70000
     mov edi, 0x70000
@@ -120,15 +128,27 @@ protected_mode:
     mov dword [edi + 8], 0x00200083   ; 2MB page starting at 2MB
     mov dword [edi + 12], 0           ; Clear upper 32 bits
 
+    ; Write '2' to show paging set up
+    mov byte [0xB8004], '2'
+    mov byte [0xB8005], 0x0E  ; Yellow on black
+
     ; ===== STEP 3: 32-bit Protected Mode → 64-bit Long Mode =====
-    ; Enable PAE and PGE
+    ; Enable PAE only (no PGE for compatibility)
     mov eax, cr4
-    or eax, 0xA0        ; Enable PAE (bit 5) and PGE (bit 7)
+    or eax, 0x20        ; Enable PAE (bit 5) only
     mov cr4, eax
+    
+    ; Write '3' to show PAE enabled
+    mov byte [0xB8006], '3'
+    mov byte [0xB8007], 0x0E  ; Yellow on black
     
     ; Set CR3 to page tables
     mov eax, 0x70000
     mov cr3, eax
+    
+    ; Write '4' to show CR3 set
+    mov byte [0xB8008], '4'
+    mov byte [0xB8009], 0x0E  ; Yellow on black
     
     ; Enable long mode in EFER MSR
     mov ecx, 0xC0000080
@@ -136,23 +156,27 @@ protected_mode:
     or eax, 0x100       ; Set LME bit (bit 8)
     wrmsr
     
+    ; Write '5' to show EFER set
+    mov byte [0xB800A], '5'
+    mov byte [0xB800B], 0x0E  ; Yellow on black
+    
+    ; Load 64-bit GDT BEFORE enabling paging
+    lgdt [gdt64_ptr]
+    
+    ; Write '6' to show GDT loaded
+    mov byte [0xB800C], '6'
+    mov byte [0xB800D], 0x0E  ; Yellow on black
+    
     ; Enable paging to activate long mode
     mov eax, cr0
     or eax, 0x80000000  ; Set PG bit (bit 31)
     mov cr0, eax
 
-    ; Add a small delay after enabling paging
-    nop
-    nop
-    nop
+    ; Write '7' to show paging enabled (this might not display if it crashes here)
+    mov byte [0xB800E], '7'
+    mov byte [0xB800F], 0x0E  ; Yellow on black
 
-    ; Load 64-bit GDT and jump to long mode
-    lgdt [gdt64_ptr]
-    
-    ; Add more delay before far jump
-    nop
-    nop
-    
+    ; Far jump to 64-bit mode (should be compatibility mode first)
     jmp 0x08:long_mode
 
 ; Add error handler right after protected mode section
@@ -161,23 +185,14 @@ paging_error:
 
 [bits 64]
 long_mode:
-    ; Set up 64-bit segments
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    mov ss, ax
-
-    ; Copy kernel from 0x8000 to 0x100000
-    mov rsi, 0x8000
-    mov rdi, 0x100000
-    mov rcx, 19 * 512 / 8  ; Copy in 8-byte chunks
-    rep movsq
-
-    ; Jump to kernel entry point (should match kernel.ld)
-    mov rax, 0x100000
-    jmp rax
+    ; First, test if we're actually in long mode by writing to screen
+    mov rax, 0xB8000
+    mov word [rax], 0x4F4C     ; 'L' in white on red background
+    mov word [rax + 2], 0x4F4D ; 'M' in white on red background
+    mov word [rax + 4], 0x4F21 ; '!' in white on red background
+    
+    ; Infinite loop - if we see "LM!" we know long mode is working
+    jmp $
 
 ; Data
 boot_drive db 0
@@ -198,11 +213,11 @@ gdt32_ptr:
     dd gdt32
 
 ; 64-bit GDT for long mode
-align 8
+align 8  
 gdt64:
     dq 0x0000000000000000    ; Null descriptor
-    dq 0x00209A0000000000    ; 64-bit code segment (proper long mode descriptor)
-    dq 0x0000920000000000    ; 64-bit data segment
+    dq 0x00209A0000000000    ; 64-bit code segment (L=1, D=0, P=1, DPL=0, S=1, Type=1010)
+    dq 0x0000920000000000    ; 64-bit data segment (P=1, DPL=0, S=1, Type=0010)
 gdt64_ptr:
     dw $ - gdt64 - 1
     dq gdt64
