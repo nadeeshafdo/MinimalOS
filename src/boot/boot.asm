@@ -157,14 +157,22 @@ paging_error:
 
 [bits 64]
 long_mode:
-    ; First, test if we're actually in long mode by writing to screen
-    mov rax, 0xB8000
-    mov word [rax], 0x4F4C     ; 'L' in white on red background
-    mov word [rax + 2], 0x4F4D ; 'M' in white on red background
-    mov word [rax + 4], 0x4F21 ; '!' in white on red background
+    cli                      ; Disable interrupts
     
-    ; Infinite loop - if we see "LM!" we know long mode is working
-    jmp $
+    ; Set up data segments (required in 64-bit mode)
+    mov ax, 0x10             ; Data segment from GDT
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    
+    ; Set up stack for kernel at 0x90000 (grows downward)
+    mov rsp, 0x90000
+    
+    ; Jump to kernel entry point at 0x8000
+    mov rax, 0x8000
+    jmp rax
 
 ; Data
 boot_drive db 0
@@ -186,8 +194,8 @@ gdt32_ptr:
 ; 64-bit GDT
 gdt64:
     dq 0x0000000000000000    ; Null
-    dq 0x00209A0000000000    ; Code
-    dq 0x0000920000000000    ; Data
+    dq 0x00AF9B000000FFFF    ; Code (64-bit, executable, readable)
+    dq 0x00AF93000000FFFF    ; Data (64-bit, writable)
 gdt64_ptr:
     dw $ - gdt64 - 1
     dq gdt64

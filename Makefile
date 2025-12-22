@@ -19,7 +19,7 @@ KERNEL_SOURCES = $(SRC_DIR)/kernel/entry.asm $(SRC_DIR)/kernel/main.c \
                  $(SRC_DIR)/kernel/arch/x86_64/gdt.asm $(SRC_DIR)/kernel/arch/x86_64/idt.c \
                  $(SRC_DIR)/kernel/arch/x86_64/keyboard.c $(SRC_DIR)/kernel/arch/x86_64/paging.c \
                  $(SRC_DIR)/kernel/arch/x86_64/tss.asm $(SRC_DIR)/kernel/arch/x86_64/vga.c \
-                 $(SRC_DIR)/kernel/syscall.c
+                 $(SRC_DIR)/kernel/syscall.c $(SRC_DIR)/user/shell.c
 
 KERNEL_ASM_SOURCES = $(filter %.asm,$(KERNEL_SOURCES))
 KERNEL_C_SOURCES = $(filter %.c,$(KERNEL_SOURCES))
@@ -28,10 +28,6 @@ KERNEL_C_OBJS = $(KERNEL_C_SOURCES:$(SRC_DIR)/%.c=$(KERNEL_BUILD_DIR)/%.o)
 KERNEL_OBJS = $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 KERNEL_ELF = $(KERNEL_BUILD_DIR)/kernel.elf
 KERNEL_BIN = $(KERNEL_BUILD_DIR)/kernel.bin
-
-USER_SOURCES = $(SRC_DIR)/user/shell.c
-USER_OBJS = $(USER_SOURCES:$(SRC_DIR)/%.c=$(USER_BUILD_DIR)/%.o)
-USER_BIN = $(USER_BUILD_DIR)/shell.bin
 
 OS_IMAGE = $(DIST_DIR)/os.img
 
@@ -45,7 +41,7 @@ LDFLAGS = -T kernel.ld
 all: $(OS_IMAGE)
 
 # Directories
-$(BUILD_DIR) $(BOOT_BUILD_DIR) $(KERNEL_BUILD_DIR) $(USER_BUILD_DIR) $(DIST_DIR):
+$(BUILD_DIR) $(BOOT_BUILD_DIR) $(KERNEL_BUILD_DIR) $(DIST_DIR):
 	mkdir -p $@
 
 # Bootloader
@@ -69,14 +65,7 @@ $(KERNEL_ELF): $(KERNEL_OBJS) kernel.ld | $(KERNEL_BUILD_DIR)
 $(KERNEL_BIN): $(KERNEL_ELF)
 	objcopy -O binary $< $@
 
-# User objects
-$(USER_BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(USER_BUILD_DIR)
-	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
 
-# Link user shell as flat binary
-$(USER_BIN): $(USER_OBJS) user.ld
-	$(LD) -T user.ld $(USER_OBJS) -o $@ --oformat binary
 
 # Create image (allocate 1.44MB, bootloader sector 1, kernel sectors 2-20)
 $(OS_IMAGE): $(BOOTLOADER_BIN) $(KERNEL_BIN) | $(DIST_DIR)

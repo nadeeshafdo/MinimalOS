@@ -1,7 +1,7 @@
 ENTRY(_kernel_entry)
 SECTIONS
 {
-    . = 0x100000;  /* Kernel loaded at 1MB physical */
+    . = 0x8000;  /* Kernel loaded at 32KB physical (where bootloader puts it) */
     .text ALIGN(4K) : { *(.text) }
     .rodata ALIGN(4K) : { *(.rodata) }
     .data ALIGN(4K) : { *(.data) }
