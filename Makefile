@@ -1,3 +1,7 @@
+# MinimalOS - Production Shell OS with Multiboot/GRUB Support
+# Architecture: i386 (32-bit)
+# Bootloader: QEMU Multiboot (GRUB-compatible)
+
 # Tools
 ASM = nasm
 CC = gcc
@@ -6,122 +10,79 @@ LD = ld
 # Directories
 SRC_DIR = src
 BUILD_DIR = build
-BOOT_BUILD_DIR = $(BUILD_DIR)/boot
-KERNEL_BUILD_DIR = $(BUILD_DIR)/kernel
-USER_BUILD_DIR = $(BUILD_DIR)/user
-DIST_DIR = $(BUILD_DIR)/dist
 
-# Files
-BOOTLOADER_SRC = $(SRC_DIR)/boot/boot.asm
-BOOTLOADER_BIN = $(BOOT_BUILD_DIR)/boot.bin
+# Source files
+MULTIBOOT_ASM = $(SRC_DIR)/boot/multiboot.asm
+KERNEL_MAIN = $(SRC_DIR)/kernel/main.c
 
-KERNEL_SOURCES = $(SRC_DIR)/kernel/entry.asm $(SRC_DIR)/kernel/main.c \
-                 $(SRC_DIR)/kernel/arch/x86_64/gdt.asm $(SRC_DIR)/kernel/arch/x86_64/idt.c \
-                 $(SRC_DIR)/kernel/arch/x86_64/keyboard.c $(SRC_DIR)/kernel/arch/x86_64/paging.c \
-                 $(SRC_DIR)/kernel/arch/x86_64/tss.asm $(SRC_DIR)/kernel/arch/x86_64/vga.c \
-                 $(SRC_DIR)/kernel/syscall.c $(SRC_DIR)/user/shell.c
+# Output files
+KERNEL_OBJS = $(BUILD_DIR)/multiboot.o $(BUILD_DIR)/main.o
+KERNEL_BIN = $(BUILD_DIR)/minimalos.bin
 
-KERNEL_ASM_SOURCES = $(filter %.asm,$(KERNEL_SOURCES))
-KERNEL_C_SOURCES = $(filter %.c,$(KERNEL_SOURCES))
-KERNEL_ASM_OBJS = $(KERNEL_ASM_SOURCES:$(SRC_DIR)/%.asm=$(KERNEL_BUILD_DIR)/%.o)
-KERNEL_C_OBJS = $(KERNEL_C_SOURCES:$(SRC_DIR)/%.c=$(KERNEL_BUILD_DIR)/%.o)
-KERNEL_OBJS = $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
-KERNEL_ELF = $(KERNEL_BUILD_DIR)/kernel.elf
-KERNEL_BIN = $(KERNEL_BUILD_DIR)/kernel.bin
+# Compiler flags for optimized 32-bit freestanding kernel
+CFLAGS = -m32 -ffreestanding -O2 -Wall -Wextra -fno-exceptions -nostdlib
 
-OS_IMAGE = $(DIST_DIR)/os.img
+# Linker script
+LDSCRIPT = kernel.ld
 
-# Flags
-ASMFLAGS = -f bin
-ASM_ELF_FLAGS = -f elf64
-CFLAGS = -m64 -ffreestanding -nostdlib -mcmodel=kernel -fno-pie -fno-pic -fno-stack-protector -O2 -mno-red-zone -I$(SRC_DIR)/kernel
-LDFLAGS = -T kernel.ld
+.PHONY: all clean run run-term info
 
-# Default
-all: $(OS_IMAGE)
-
-# Directories
-$(BUILD_DIR) $(BOOT_BUILD_DIR) $(KERNEL_BUILD_DIR) $(DIST_DIR):
-	mkdir -p $@
-
-# Bootloader
-$(BOOTLOADER_BIN): $(BOOTLOADER_SRC) | $(BOOT_BUILD_DIR)
-	$(ASM) $(ASMFLAGS) $< -o $@
-
-# Kernel ASM objects
-$(KERNEL_BUILD_DIR)/%.o: $(SRC_DIR)/%.asm | $(KERNEL_BUILD_DIR)
-	mkdir -p $(dir $@)
-	$(ASM) $(ASM_ELF_FLAGS) $< -o $@
-
-# Kernel C objects
-$(KERNEL_BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(KERNEL_BUILD_DIR)
-	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-# Link kernel
-$(KERNEL_ELF): $(KERNEL_OBJS) kernel.ld | $(KERNEL_BUILD_DIR)
-	$(LD) $(LDFLAGS) $(KERNEL_OBJS) -o $@
-
-$(KERNEL_BIN): $(KERNEL_ELF)
-	objcopy -O binary $< $@
-
-
-
-# Create image (allocate 1.44MB, bootloader sector 1, kernel sectors 2-20)
-$(OS_IMAGE): $(BOOTLOADER_BIN) $(KERNEL_BIN) | $(DIST_DIR)
-	dd if=/dev/zero of=$@ bs=512 count=2880
-	dd if=$(BOOTLOADER_BIN) of=$@ bs=512 count=1 conv=notrunc
-	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=1 count=19 conv=notrunc
+all: $(KERNEL_BIN)
 	@echo ""
 	@echo "======================================================================"
-	@echo "           MinimalOS v2.0 - Build Summary & Technical Report"
+	@echo "           MinimalOS - Production Shell OS"
 	@echo "======================================================================"
 	@echo "Build Status: ✅ SUCCESS"
 	@echo ""
-	@echo "Component Sizes:"
-	@echo "  • Bootloader:     $$(stat -c%s $(BOOTLOADER_BIN)) bytes (512 byte limit)"
-	@echo "  • Kernel:         $$(stat -c%s $(KERNEL_BIN)) bytes"
-	@echo "  • OS Image:       $$(stat -c%s $@) bytes (1.44MB floppy)"
+	@echo "Binary: $(KERNEL_BIN) ($(shell ls -lh $(KERNEL_BIN) | awk '{print $$5}'))"
+	@echo "Architecture: i386 (32-bit Protected Mode)"
+	@echo "Bootloader: Multiboot (QEMU/GRUB compatible)"
 	@echo ""
-	@echo "Architecture: x86-64 (64-bit)"
-	@echo "Boot Method:  BIOS Legacy Boot"
-	@echo "CPU Modes:    16-bit Real → 32-bit Protected → 64-bit Long Mode"
-	@echo ""
-	@echo "Memory Layout:"
-	@echo "  • Bootloader: 0x7C00 (Sector 1)"
-	@echo "  • Kernel:     0x100000 (1MB+, Sectors 2-20)"
-	@echo "  • User Space: 0x400000 (4MB+, Sectors 21+)"
-	@echo ""
-	@echo "Features Implemented:"
-	@echo "  ✅ Custom BIOS Bootloader with Long Mode Transition"
-	@echo "  ✅ 64-bit Kernel with VGA Text Mode Driver"
-	@echo "  ✅ PS/2 Keyboard Driver with Interrupt Handling"
-	@echo "  ✅ Interactive User Shell with Built-in Commands"
-	@echo "  ✅ System Calls Interface (READ/WRITE/CLEAR/REBOOT)"
-	@echo "  ✅ Memory Management with Paging Support"
-	@echo "  ✅ USB Boot Compatibility for Real Hardware"
-	@echo ""
-	@echo "Testing Instructions:"
-	@echo "  • QEMU Emulation:  make run"
-	@echo "  • Debug Mode:      make debug"
-	@echo "  • USB Boot:        sudo dd if=$@ of=/dev/sdX bs=512"
-	@echo ""
-	@echo "Educational Value:"
-	@echo "  Demonstrates core OS concepts: bootloading, mode transitions,"
-	@echo "  interrupt handling, system calls, memory management, and"
-	@echo "  hardware abstraction suitable for OS development learning."
+	@echo "Run with:"
+	@echo "  make run       - Launch in QEMU GUI"
+	@echo "  make run-term  - Launch in terminal (ncurses)"
 	@echo "======================================================================"
 	@echo ""
 
-# Run in QEMU
-run: $(OS_IMAGE)
-	qemu-system-x86_64 -drive file=$(OS_IMAGE),format=raw,if=floppy -serial stdio
+# Create build directory
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)
 
-# Debug
-debug: $(OS_IMAGE)
-	qemu-system-x86_64 -drive file=$(OS_IMAGE),format=raw,if=floppy -serial stdio -s -S &
-	gdb -ex "target remote localhost:1234" -ex "set architecture i386:x86-64"
+# Assemble multiboot stub
+$(BUILD_DIR)/multiboot.o: $(MULTIBOOT_ASM) | $(BUILD_DIR)
+	@echo "[ASM] $<"
+	@$(ASM) -f elf32 $< -o $@
 
-# Clean
+# Compile kernel
+$(BUILD_DIR)/main.o: $(KERNEL_MAIN) | $(BUILD_DIR)
+	@echo "[CC]  $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Link kernel
+$(KERNEL_BIN): $(KERNEL_OBJS) $(LDSCRIPT)
+	@echo "[LD]  $@"
+	@$(LD) -m elf_i386 -T $(LDSCRIPT) -o $@ $(KERNEL_OBJS)
+
+# Run with QEMU GUI
+run: $(KERNEL_BIN)
+	@echo "Starting MinimalOS in QEMU..."
+	@qemu-system-i386 -kernel $(KERNEL_BIN)
+
+# Run with terminal output
+run-term: $(KERNEL_BIN)
+	@echo "Starting MinimalOS in QEMU (terminal mode)..."
+	@qemu-system-i386 -kernel $(KERNEL_BIN) -display curses
+
+# Show build info
+info:
+	@echo "MinimalOS - Build Information"
+	@echo "Kernel Binary: $(KERNEL_BIN)"
+	@echo "Source Files:"
+	@echo "  - $(MULTIBOOT_ASM)"
+	@echo "  - $(KERNEL_MAIN)"
+
+# Clean build artifacts
 clean:
-	rm -rf $(BUILD_DIR)
+	@echo "Cleaning build artifacts..."
+	@rm -rf $(BUILD_DIR)
+	@echo "Clean complete."

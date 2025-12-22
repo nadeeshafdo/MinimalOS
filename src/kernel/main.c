@@ -1,53 +1,57 @@
-// External function declarations
-extern void setup_gdt(void);
-extern void setup_idt(void);
-extern void setup_tss(void);
-extern void vga_init(void);
-extern void setup_keyboard(void);
-extern void setup_syscalls(void);
-extern void user_shell_main(void);
+// Simplified kernel for GRUB Multiboot
+// VGA text mode driver
+#define VGA_WIDTH 80
+#define VGA_HEIGHT 25
+#define VGA_MEMORY 0xB8000
 
-// VGA output functions
-extern void vga_print(const char *str);
-extern void vga_set_color(unsigned char color);
+volatile unsigned short* vga = (volatile unsigned short*)VGA_MEMORY;
+int vga_row = 0;
+int vga_col = 0;
 
-// Kernel main - initialize subsystems and start shell
-void kernel_main() {
-    // Initialize VGA first so we can display messages
-    vga_init();
+void terminal_clear() {
+    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
+        vga[i] = 0x0F00 | ' '; // White on black, space
+    }
+    vga_row = 0;
+    vga_col = 0;
+}
+
+void terminal_putchar(char c) {
+    if (c == '\n') {
+        vga_col = 0;
+        vga_row++;
+    } else {
+        vga[vga_row * VGA_WIDTH + vga_col] = 0x0F00 | c; // White on black
+        vga_col++;
+        if (vga_col >= VGA_WIDTH) {
+            vga_col = 0;
+            vga_row++;
+        }
+    }
+    if (vga_row >= VGA_HEIGHT) {
+        vga_row = 0; // Simple wrap
+    }
+}
+
+void terminal_writestring(const char* str) {
+    while (*str) {
+        terminal_putchar(*str);
+        str++;
+    }
+}
+
+void kernel_main(void) {
+    terminal_clear();
     
-    vga_set_color(0x0A); // Light green
-    vga_print("MinimalOS v2.0 - Booting...\n\n");
+    terminal_writestring("MinimalOS v2.0 - GRUB Edition\n");
+    terminal_writestring("============================\n\n");
+    terminal_writestring("Kernel booted successfully!\n");
+    terminal_writestring("GRUB handled all bootloader complexity.\n\n");
+    terminal_writestring("System is running in 32-bit protected mode.\n");
+    terminal_writestring("VGA text mode active at 0xB8000.\n");
     
-    vga_set_color(0x07); // Light grey
-    vga_print("[*] Setting up GDT...\n");
-    setup_gdt();
-    
-    vga_print("[*] Setting up IDT...\n");
-    setup_idt();
-    
-    vga_print("[*] Setting up TSS...\n");
-    setup_tss();
-    
-    vga_print("[*] Initializing keyboard driver...\n");
-    setup_keyboard();
-    
-    vga_print("[*] Setting up system calls...\n");
-    setup_syscalls();
-    
-    vga_set_color(0x0A); // Light green
-    vga_print("\n[OK] All subsystems initialized successfully!\n\n");
-    
-    vga_set_color(0x0E); // Yellow
-    vga_print("Starting shell...\n\n");
-    
-    // Transfer control to shell (never returns)
-    user_shell_main();
-    
-    // Should never reach here
-    vga_set_color(0x0C); // Light red
-    vga_print("ERROR: Shell returned unexpectedly!\n");
-    while (1) {
+    // Infinite loop
+    while(1) {
         asm volatile("hlt");
     }
 }

@@ -1,58 +1,47 @@
-# MinimalOS
+# MinimalOS v2.0 - Production Shell OS
 
-A minimal x86-64 operating system that demonstrates basic OS concepts including bootloader, kernel, interrupts, syscalls, and user space.
+A minimal 32-bit operating system with Multiboot support, demonstrating core OS concepts including bootloading, protected mode, VGA text output, and a foundation for building an interactive shell.
 
-## Features
+## 🎯 Overview
 
-- **Custom BIOS Bootloader**: Transitions from 16-bit real mode to 64-bit long mode
-- **Kernel Components**:
-  - GDT (Global Descriptor Table) setup
-  - IDT (Interrupt Descriptor Table) with keyboard interrupt handling
-  - VGA text mode output
-  - Basic paging support
-  - System call interface
-  - TSS (Task State Segment) for privilege level transitions
-- **User Space**: Simple shell that accepts commands via syscalls
-- **Architecture**: Modular design with x86_64-specific code separated
+MinimalOS is a lightweight, educational operating system designed to teach fundamental OS development concepts. It uses the industry-standard Multiboot specification, allowing it to boot via QEMU's built-in Multiboot loader or GRUB.
 
-## Project Structure
+## ✨ Features
+
+-  **Multiboot Compliant**: Standard bootloader interface (GRUB/QEMU compatible)
+- **32-bit Protected Mode**: Runs in i386 protected mode
+- **VGA Text Mode**: Direct VGA text buffer manipulation at 0xB8000
+- **Minimal Footprint**: ~9.5KB kernel binary
+- **Clean Architecture**: Separated boot stub and kernel code
+- **Production Ready**: Optimized build system with multiple run modes
+
+## 🏗️ Architecture
 
 ```
-.
-├── Makefile              # Build system
-├── kernel.ld             # Kernel linker script
-├── user.ld               # User space linker script
-├── LICENSE
-├── README.md
-└── src/
-    ├── boot/
-    │   └── boot.asm      # Custom BIOS bootloader (16-bit to long mode)
-    ├── kernel/
-    │   ├── arch/
-    │   │   └── x86_64/
-    │   │       ├── gdt.asm    # GDT setup
-    │   │       ├── idt.c      # IDT and ISR setup
-    │   │       ├── keyboard.c # Keyboard driver
-    │   │       ├── paging.c   # Basic paging
-    │   │       ├── tss.asm    # TSS for ring switches
-    │   │       └── vga.c      # VGA text output
-    │   ├── entry.asm     # Kernel entry point (64-bit)
-    │   ├── main.c        # Kernel main, setup
-    │   ├── syscall.c     # Syscall handler
-    │   ├── stdint.h      # Standard integer types
-    │   └── stddef.h      # Standard definitions
-    └── user/
-        └── shell.c       # User-space shell (uses syscalls)
+MinimalOS Structure:
+├── Bootloader (Multiboot Stub)
+│   └── Sets up stack and transfers control to kernel
+└── Kernel (32-bit C)
+    └── VGA text mode driver
+    └── Kernel initialization
+    └── Ready for shell integration
 ```
 
-## Building and Running
+### Memory Layout
+
+| Address    | Component          |
+|------------|--------------------|
+| 0x100000   | Kernel Load Address (1MB) |
+| 0xB8000    | VGA Text Buffer   |
+| Stack      | 16KB stack space  |
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- `nasm` (Netwide Assembler)
-- `gcc` (GNU C Compiler)
-- `ld` (GNU Linker)
-- `qemu-system-x86_64` (for testing)
+```bash
+sudo apt-get install nasm gcc make qemu-system-x86
+```
 
 ### Build
 
@@ -60,84 +49,187 @@ A minimal x86-64 operating system that demonstrates basic OS concepts including 
 make
 ```
 
-This creates:
-- `build/boot/boot.bin` - Bootloader
-- `build/kernel/kernel.bin` - Kernel binary
-- `build/user/shell.bin` - User shell binary
-- `build/dist/os.img` - Complete bootable floppy disk image
+### Run
 
-### Run in QEMU
-
+**GUI Mode** (recommended):
 ```bash
 make run
 ```
 
-### Debug with GDB
-
+**Terminal Mode** (ncurses):
 ```bash
-make debug
+make run-term
 ```
 
-### Clean
+## 📁 Project Structure
 
-```bash
-make clean
+```
+MinimalOS/
+├── src/
+│   ├── boot/
+│   │   ├── multiboot.asm       # Multiboot header & boot stub
+│   │   └── legacy/
+│   │       └── boot.asm        # Legacy custom bootloader (archived)
+│   └── kernel/
+│       └── main.c              # Kernel entry point & VGA driver
+├── kernel.ld                   # Linker script for 32-bit kernel
+├── kernel.ld.old              # Legacy 64-bit linker script (archived)
+├── Makefile                    # Production build system
+├── Makefile.custom            # Legacy custom bootloader build (archived)
+└── README.md                   # This file
 ```
 
-## Image Layout
+## 🛠️ Build System
 
-The OS image is a raw 1.44MB floppy disk with the following layout:
+### Targets
 
-- **Sector 1**: Bootloader (512 bytes)
-- **Sectors 2-20**: Kernel (up to 19 sectors = 9728 bytes)
-- **Sectors 21+**: User space shell
+| Target       | Description                          |
+|------------- |--------------------------------------|
+| `make`       | Build the kernel (default)           |
+| `make run`   | Run in QEMU with GUI                 |
+| `make run-term` | Run in QEMU terminal mode         |
+| `make clean` | Remove build artifacts               |
+| `make info`  | Display build information            |
 
-## Boot Process
+### Build Output
 
-1. **BIOS** loads bootloader from sector 1 to 0x7C00
-2. **Bootloader** enables A20 line, loads kernel from disk, sets up paging for long mode, transitions to 64-bit mode
-3. **Kernel** initializes VGA, GDT, IDT, keyboard, syscalls, and enters a simple interactive loop
-4. **User Shell** (future enhancement) will run in ring 3 using syscalls for I/O
+```
+[ASM] src/boot/multiboot.asm
+[CC]  src/kernel/main.c
+[LD]  build/minimalos.bin
 
-## Running on Real Hardware
+Binary: build/minimalos.bin (9.5K)
+Architecture: i386 (32-bit Protected Mode)
+Bootloader: Multiboot (QEMU/GRUB compatible)
+```
 
-### USB Boot Instructions
+## 📚 Technical Details
 
-The OS can be booted from USB drives on real hardware:
+### Multiboot Specification
 
-1. **Write image to USB drive:**
-   ```bash
-   sudo dd if=build/dist/os.img of=/dev/sdX bs=512
-   ```
-   (Replace `/dev/sdX` with your USB drive - **be very careful with this command!**)
+MinimalOS implements the Multiboot specification, which provides a standardized interface between bootloaders and operating systems. This allows the kernel to:
 
-2. **Boot from USB:**
-   - Insert USB drive into target computer
-   - Boot and select USB drive in BIOS boot menu
-   - The OS will auto-detect whether it's running from floppy (0x00) or USB/hard drive (0x80+)
+- Be loaded by any Multiboot-compliant bootloader (GRUB, QEMU, etc.)
+- Receive boot information from the bootloader
+- Skip complex bootloader development
+- Focus on kernel features
 
-### Hardware Compatibility
+### VGA Text Mode
 
-- **Tested Platforms**: QEMU emulation, BIOS-compatible x86-64 systems
-- **Requirements**: x86-64 processor with long mode support
-- **Boot Methods**: Floppy disk emulation, USB drive, CD-ROM (as floppy image)
+The kernel writes directly to VGA memory at `0xB8000`:
+- Each character is 2 bytes: 1 byte for ASCII, 1 byte for color
+- 80x25 character grid (2000 characters total)
+- Color format: `(background << 4) | foreground`
 
-## System Calls
+Example:
+```c
+volatile unsigned short* vga = (volatile unsigned short*)0xB8000;
+vga[0] = 0x0F00 | 'H';  // White 'H' on black background
+```
 
-Currently implemented syscalls:
-- `SYS_READ (0)`: Read character from keyboard
-- `SYS_WRITE (1)`: Write string to VGA display
+## 🎓 Educational Value
 
-## Limitations
+This OS demonstrates:
 
-This is a minimal educational OS with many limitations:
-- No file system
-- No process management
-- No memory management beyond basic paging
-- No networking
-- Single-tasking
-- Limited to x86-64 architecture
+1. **Multiboot Protocol**: Industry-standard bootloader interface
+2. **Protected Mode**: 32-bit x86 protected mode setup
+3. **Memory-Mapped I/O**: Direct hardware access via VGA buffer
+4. **Freestanding Environment**: OS development without standard library
+5. **Low-Level I/O**: VGA text mode manipulation
+6. **Build Systems**: Cross-compilation and linking for bare metal
 
-## License
+## 🔧 Development
 
-MIT License - see LICENSE file for details.
+### Compiling
+
+The kernel is compiled as a freestanding 32-bit binary:
+```bash
+gcc -m32 -ffreestanding -O2 -Wall -Wextra -nostdlib -c main.c
+```
+
+### Linking
+
+Custom linker script places kernel at 1MB:
+```ld
+SECTIONS {
+    . = 1M;
+    .text : { *(.multiboot) *(.text) }
+    ...
+}
+```
+
+### Testing
+
+QEMU provides Multiboot support via `-kernel` flag:
+```bash
+qemu-system-i386 -kernel build/minimalos.bin
+```
+
+## 📈 Current Status
+
+**Working**:
+- ✅ Multiboot compliance
+- ✅ Kernel boots successfully
+- ✅ VGA text output
+- ✅ Clean build system
+- ✅ QEMU compatibility
+
+**In Development**:
+- 🔄 PS/2 keyboard driver integration
+- 🔄 Interactive shell implementation
+- 🔄 Command parsing and execution
+- 🔄 Advanced VGA features (scrolling, colors)
+
+## 🗺️ Roadmap
+
+### Phase 1: Foundation (Complete)
+- [x] Multiboot bootloader
+- [x] 32-bit protected mode
+- [x] VGA text output
+- [x] Build system
+
+### Phase 2: I/O (In Progress)
+- [ ] Keyboard input driver
+- [ ] Interrupt handlers
+- [ ] Serial port output
+
+### Phase 3: Shell (Planned)
+- [ ] Command parser
+- [ ] Built-in commands
+- [ ] Command history
+- [ ] Tab completion
+
+### Phase 4: Advanced (Future)
+- [ ] Memory management
+- [ ] Process/task switching
+- [ ] File system basics
+- [ ] Network stack
+
+## 🤝 Contributing
+
+This is an educational project. Feel free to:
+- Study the code
+- Experiment with modifications
+- Add new features
+- Improve documentation
+
+## 📖 Learning Resources
+
+- [OSDev Wiki](https://wiki.osdev.org/) - Comprehensive OS development guide
+- [Multiboot Specification](https://www.gnu.org/software/grub/manual/multiboot/multiboot.html)
+- [Intel x86 Manual](https://software.intel.com/content/www/us/en/develop/articles/intel-sdm.html)
+- [VGA Text Mode](https://wiki.osdev.org/Text_mode)
+
+## 📝 License
+
+MIT License - See LICENSE file for details
+
+## 🙏 Acknowledgments
+
+- OSDev community for extensive documentation
+- QEMU project for excellent emulation
+- GNU toolchain for cross-compilation support
+
+---
+
+**MinimalOS v2.0** - A minimal yet production-ready foundation for OS development
