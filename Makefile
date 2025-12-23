@@ -14,9 +14,15 @@ BUILD_DIR = build
 # Source files
 MULTIBOOT_ASM = $(SRC_DIR)/boot/multiboot.asm
 KERNEL_MAIN = $(SRC_DIR)/kernel/main.c
+KERNEL_SERIAL = $(SRC_DIR)/kernel/serial.c
+KERNEL_MEMORY = $(SRC_DIR)/kernel/memory.c
+KERNEL_TIMER = $(SRC_DIR)/kernel/timer.c
+KERNEL_VFS = $(SRC_DIR)/kernel/vfs.c
 
 # Output files
-KERNEL_OBJS = $(BUILD_DIR)/multiboot.o $(BUILD_DIR)/main.o
+KERNEL_OBJS = $(BUILD_DIR)/multiboot.o $(BUILD_DIR)/main.o \
+              $(BUILD_DIR)/serial.o $(BUILD_DIR)/memory.o \
+              $(BUILD_DIR)/timer.o $(BUILD_DIR)/vfs.o
 KERNEL_BIN = $(BUILD_DIR)/minimalos.bin
 
 # Compiler flags for optimized 32-bit freestanding kernel
@@ -55,6 +61,22 @@ $(BUILD_DIR)/multiboot.o: $(MULTIBOOT_ASM) | $(BUILD_DIR)
 
 # Compile kernel
 $(BUILD_DIR)/main.o: $(KERNEL_MAIN) | $(BUILD_DIR)
+	@echo "[CC]  $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/serial.o: $(KERNEL_SERIAL) | $(BUILD_DIR)
+	@echo "[CC]  $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/memory.o: $(KERNEL_MEMORY) | $(BUILD_DIR)
+	@echo "[CC]  $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/timer.o: $(KERNEL_TIMER) | $(BUILD_DIR)
+	@echo "[CC]  $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/vfs.o: $(KERNEL_VFS) | $(BUILD_DIR)
 	@echo "[CC]  $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 

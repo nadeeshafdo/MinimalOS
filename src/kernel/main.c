@@ -3,6 +3,10 @@
 
 #include "stdint.h"
 #include "stddef.h"
+#include "serial.h"
+#include "memory.h"
+#include "timer.h"
+#include "vfs.h"
 
 // VGA text mode
 #define VGA_WIDTH 80
@@ -65,19 +69,6 @@ static inline uint8_t inb(uint16_t port) {
 }
 
 // String functions
-static size_t strlen(const char* str) {
-    size_t len = 0;
-    while (str[len]) len++;
-    return len;
-}
-
-static int strcmp(const char* s1, const char* s2) {
-    while (*s1 && (*s1 == *s2)) {
-        s1++;
-        s2++;
-    }
-    return *(unsigned char*)s1 - *(unsigned char*)s2;
-}
 
 static int strncmp(const char* s1, const char* s2, size_t n) {
     while (n && *s1 && (*s1 == *s2)) {
@@ -160,11 +151,30 @@ static void vga_print_hex(uint32_t value) {
     }
 }
 
+static void vga_print_dec(uint32_t value) {
+    if (value == 0) {
+        vga_putchar('0');
+        return;
+    }
+    
+    char buffer[16];
+    int i = 0;
+    
+    while (value > 0) {
+        buffer[i++] = '0' + (value % 10);
+        value /= 10;
+    }
+    
+    while (i > 0) {
+        vga_putchar(buffer[--i]);
+    }
+}
+
 // Keyboard scancode to ASCII mapping (US layout)
 static const char scancode_to_ascii[] = {
     0, 0, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
     '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
-    0, 'a', 's', 'd', 'f', 'g', 'h', '  j', 'k', 'l', ';', '\'', '`', 0,
+    0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0,
     '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
 };
 
@@ -239,6 +249,10 @@ static void init_idt() {
     
     memset(&idt, 0, sizeof(idt));
     
+    // Set timer interrupt (IRQ0 = INT 0x20)
+    extern void timer_interrupt_stub(void);
+    idt_set_gate(0x20, (uint32_t)timer_interrupt_stub);
+    
     // Set keyboard interrupt (IRQ1 = INT 0x21)
     idt_set_gate(0x21, (uint32_t)keyboard_interrupt_stub);
     
@@ -254,7 +268,7 @@ static void init_idt() {
     outb(PIC2_DATA, 0x02);
     outb(PIC1_DATA, 0x01);
     outb(PIC2_DATA, 0x01);
-    outb(PIC1_DATA, 0xFD); // Enable only keyboard (IRQ1)
+    outb(PIC1_DATA, 0xFC); // Enable timer (IRQ0) and keyboard (IRQ1)
     outb(PIC2_DATA, 0xFF);
     
     // Enable interrupts
@@ -272,6 +286,13 @@ static void cmd_help() {
     vga_print("  version   - Show OS version\n");
     vga_print("  info      - Display system information\n");
     vga_print("  mem       - Show memory information\n");
+    vga_print("  meminfo   - Show heap statistics\n");
+    vga_print("  uptime    - Show system uptime\n");
+    vga_print("  ls        - List files\n");
+    vga_print("  cat       - Display file contents\n");
+    vga_print("  touch     - Create empty file\n");
+    vga_print("  rm        - Remove file\n");
+    vga_print("  write     - Write to file (write filename text)\n");
     vga_print("  reboot    - Reboot the system\n");
     vga_print("  shutdown  - Halt the system\n");
 }
@@ -331,6 +352,162 @@ static void cmd_shutdown() {
     while (1) asm volatile("cli; hlt");
 }
 
+static void cmd_uptime() {
+    vga_set_color(COLOR_LIGHT_CYAN, COLOR_BLACK);
+    char uptime_str[16];
+    get_uptime_string(uptime_str);
+    vga_print("Uptime: ");
+    vga_set_color(COLOR_WHITE, COLOR_BLACK);
+    vga_print(uptime_str);
+    vga_print("\n");
+}
+
+static void cmd_meminfo() {
+    vga_set_color(COLOR_LIGHT_CYAN, COLOR_BLACK);
+    vga_print("Heap Memory Statistics:\n");
+    vga_set_color(COLOR_WHITE, COLOR_BLACK);
+    vga_print("  Total:     ");
+    vga_print_dec(mem_total());
+    vga_print(" bytes\n");
+    vga_print("  Used:      ");
+    vga_print_dec(mem_used());
+    vga_print(" bytes\n");
+    vga_print("  Available: ");
+    vga_print_dec(mem_available());
+    vga_print(" bytes\n");
+}
+
+static void cmd_ls() {
+    int count;
+    file_t* file_list = vfs_list(&count);
+    
+    vga_set_color(COLOR_LIGHT_CYAN, COLOR_BLACK);
+    vga_print("Files (");
+    vga_print_dec(count);
+    vga_print("/");
+    vga_print_dec(MAX_FILES);
+    vga_print("):\n");
+    vga_set_color(COLOR_WHITE, COLOR_BLACK);
+    
+    if (count == 0) {
+        vga_print("  (no files)\n");
+        return;
+    }
+    
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (file_list[i].is_used) {
+            vga_print("  ");
+            vga_print(file_list[i].name);
+            vga_print(" (");
+            vga_print_dec(file_list[i].size);
+            vga_print(" bytes)\n");
+        }
+    }
+}
+
+static void cmd_cat(const char* filename) {
+    char buffer[MAX_FILESIZE + 1];
+    int size = vfs_read(filename, buffer, MAX_FILESIZE);
+    
+    if (size < 0) {
+        vga_set_color(COLOR_LIGHT_RED, COLOR_BLACK);
+        vga_print("Error: File not found\n");
+        vga_set_color(COLOR_WHITE, COLOR_BLACK);
+    } else if (size == 0) {
+        vga_print("(empty file)\n");
+    } else {
+        buffer[size] = '\0';
+        vga_print(buffer);
+        vga_print("\n");
+    }
+}
+
+static void cmd_touch(const char* filename) {
+    int result = vfs_create(filename);
+    
+    if (result == 0) {
+        vga_set_color(COLOR_LIGHT_GREEN, COLOR_BLACK);
+        vga_print("Created file: ");
+        vga_print(filename);
+        vga_print("\n");
+        vga_set_color(COLOR_WHITE, COLOR_BLACK);
+    } else if (result == -1) {
+        vga_set_color(COLOR_LIGHT_RED, COLOR_BLACK);
+        vga_print("Error: File already exists\n");
+        vga_set_color(COLOR_WHITE, COLOR_BLACK);
+    } else {
+        vga_set_color(COLOR_LIGHT_RED, COLOR_BLACK);
+        vga_print("Error: Maximum file limit reached\n");
+        vga_set_color(COLOR_WHITE, COLOR_BLACK);
+    }
+}
+
+static void cmd_rm(const char* filename) {
+    int result = vfs_delete(filename);
+    
+    if (result == 0) {
+        vga_set_color(COLOR_LIGHT_GREEN, COLOR_BLACK);
+        vga_print("Deleted file: ");
+        vga_print(filename);
+        vga_print("\n");
+        vga_set_color(COLOR_WHITE, COLOR_BLACK);
+    } else {
+        vga_set_color(COLOR_LIGHT_RED, COLOR_BLACK);
+        vga_print("Error: File not found\n");
+        vga_set_color(COLOR_WHITE, COLOR_BLACK);
+    }
+}
+
+static void cmd_write(const char* args) {
+    // Parse: filename text
+    const char* filename = args;
+    const char* text = args;
+    
+    // Find space
+    while (*text && *text != ' ') text++;
+    if (*text == '\0') {
+        vga_set_color(COLOR_LIGHT_RED, COLOR_BLACK);
+        vga_print("Usage: write filename text\n");
+        vga_set_color(COLOR_WHITE, COLOR_BLACK);
+        return;
+    }
+    
+    // Extract filename
+    int name_len = text - filename;
+    char fname[MAX_FILENAME];
+    int i;
+    for (i = 0; i < name_len && i < MAX_FILENAME - 1; i++) {
+        fname[i] = filename[i];
+    }
+    fname[i] = '\0';
+    
+    // Skip space
+    while (*text == ' ') text++;
+    
+    // Write file
+    int result = vfs_write(fname, text, strncmp(text, "", 1) == 0 ? 0 : 9999);
+    
+    // Calculate actual length
+    size_t len = 0;
+    while (text[len]) len++;
+    
+    result = vfs_write(fname, text, len);
+    
+    if (result == 0) {
+        vga_set_color(COLOR_LIGHT_GREEN, COLOR_BLACK);
+        vga_print("Wrote ");
+        vga_print_dec(len);
+        vga_print(" bytes to ");
+        vga_print(fname);
+        vga_print("\n");
+        vga_set_color(COLOR_WHITE, COLOR_BLACK);
+    } else {
+        vga_set_color(COLOR_LIGHT_RED, COLOR_BLACK);
+        vga_print("Error: Failed to write file\n");
+        vga_set_color(COLOR_WHITE, COLOR_BLACK);
+    }
+}
+
 // Command parser and executor
 static void execute_command(const char* cmd) {
     // Skip leading spaces
@@ -355,6 +532,20 @@ static void execute_command(const char* cmd) {
         cmd_info();
     } else if (strncmp(cmd, "mem", cmd_len) == 0 && cmd_len == 3) {
         cmd_mem();
+    } else if (strncmp(cmd, "meminfo", cmd_len) == 0 && cmd_len == 7) {
+        cmd_meminfo();
+    } else if (strncmp(cmd, "uptime", cmd_len) == 0 && cmd_len == 6) {
+        cmd_uptime();
+    } else if (strncmp(cmd, "ls", cmd_len) == 0 && cmd_len == 2) {
+        cmd_ls();
+    } else if (strncmp(cmd, "cat", cmd_len) == 0 && cmd_len == 3) {
+        cmd_cat(args);
+    } else if (strncmp(cmd, "touch", cmd_len) == 0 && cmd_len == 5) {
+        cmd_touch(args);
+    } else if (strncmp(cmd, "rm", cmd_len) == 0 && cmd_len == 2) {
+        cmd_rm(args);
+    } else if (strncmp(cmd, "write", cmd_len) == 0 && cmd_len == 5) {
+        cmd_write(args);
     } else if (strncmp(cmd, "reboot", cmd_len) == 0 && cmd_len == 6) {
         cmd_reboot();
     } else if (strncmp(cmd, "shutdown", cmd_len) == 0 && cmd_len == 8) {
@@ -416,8 +607,27 @@ static void shell_main() {
 
 // Kernel entry point
 void kernel_main(void) {
+    // Initialize serial port for debugging
+    serial_init();
+    serial_print("MinimalOS v2.0 booting...\r\n");
+    
+    // Initialize heap allocator (1MB heap at 0x200000)
+    heap_init((void*)0x200000, 1024 * 1024);
+    serial_print("Heap initialized\r\n");
+    
+    // Initialize virtual file system
+    vfs_init();
+    serial_print("VFS initialized\r\n");
+    
+    // Initialize timer
+    timer_init();
+    serial_print("Timer initialized\r\n");
+    
     // Initialize IDT and keyboard
     init_idt();
+    serial_print("IDT and interrupts initialized\r\n");
+    
+    serial_print("Starting shell...\r\n");
     
     // Start shell
     shell_main();
