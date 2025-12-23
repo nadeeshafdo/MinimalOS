@@ -33,7 +33,7 @@ A functional x86 operating system built from scratch following OSDev wiki best p
 ### Compilation
 
 ```bash
-cd /media/nadeeshafdo/shared/repos/MinimalOS
+cd ./MinimalOS
 make
 ```
 
