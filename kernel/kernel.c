@@ -11,6 +11,8 @@
 #include "process.h"
 #include "scheduler.h"
 #include "syscall.h"
+#include "vfs.h"
+#include "initrd.h"
 
 /* VGA text mode */
 #define VGA_BUFFER ((volatile uint16_t*)0xB8000)
@@ -135,6 +137,8 @@ void shell_execute(void) {
         puts("  uptime   - Show system uptime\n");
         puts("  mem      - Show memory info\n");
         puts("  ps       - List processes\n");
+        puts("  ls       - List files\n");
+        puts("  cat FILE - Display file contents\n");
         puts("  syscall  - Test syscall interface\n");
         puts("  reboot   - Reboot system\n");
         puts("  halt     - Halt CPU\n");
@@ -227,6 +231,63 @@ void shell_execute(void) {
         puts("Syscall interface working!\n");
         set_color(VGA_COLOR(15, 0));
     }
+    else if (strcmp(cmd_buffer, "ls") == 0) {
+        puts("\n");
+        set_color(VGA_COLOR(11, 0)); puts("Files:\n");
+        set_color(VGA_COLOR(15, 0));
+        
+        vfs_node_t *root = vfs_get_root();
+        if (!root) {
+            puts("  (no filesystem mounted)\n");
+        } else {
+            uint32_t i = 0;
+            vfs_node_t *entry;
+            while ((entry = vfs_readdir(root, i++)) != (void*)0) {
+                puts("  ");
+                if (entry->type == VFS_DIRECTORY) {
+                    set_color(VGA_COLOR(11, 0));
+                    puts(entry->name);
+                    puts("/");
+                } else {
+                    set_color(VGA_COLOR(15, 0));
+                    puts(entry->name);
+                    puts("  (");
+                    print_dec(entry->size);
+                    puts(" bytes)");
+                }
+                set_color(VGA_COLOR(15, 0));
+                puts("\n");
+            }
+        }
+    }
+    else if (cmd_buffer[0] == 'c' && cmd_buffer[1] == 'a' && cmd_buffer[2] == 't' && cmd_buffer[3] == ' ') {
+        const char *filename = cmd_buffer + 4;
+        vfs_node_t *file = vfs_lookup(filename);
+        
+        if (!file) {
+            set_color(VGA_COLOR(12, 0));
+            puts("\nFile not found: ");
+            set_color(VGA_COLOR(15, 0));
+            puts(filename);
+            puts("\n");
+        } else if (file->type == VFS_DIRECTORY) {
+            set_color(VGA_COLOR(12, 0));
+            puts("\nCannot cat directory: ");
+            set_color(VGA_COLOR(15, 0));
+            puts(filename);
+            puts("\n");
+        } else {
+            puts("\n");
+            uint8_t buffer[256];
+            size_t offset = 0;
+            size_t read;
+            while ((read = vfs_read(file, offset, sizeof(buffer) - 1, buffer)) > 0) {
+                buffer[read] = '\0';
+                puts((char *)buffer);
+                offset += read;
+            }
+        }
+    }
     else if (strcmp(cmd_buffer, "reboot") == 0) {
         puts("\nRebooting...\n");
         __asm__ volatile ("lidt 0\nint $0x03");
@@ -299,6 +360,24 @@ void kernel_main(uint64_t multiboot_info, uint64_t magic) {
     puts("Initializing syscalls... ");
     syscall_init();
     set_color(VGA_COLOR(10, 0)); puts("[OK]\n"); set_color(VGA_COLOR(15, 0));
+    
+    /* Initialize VFS and mount demo initrd */
+    puts("Initializing VFS... ");
+    vfs_init();
+    extern uint64_t demo_initrd_build(void);
+    uint64_t initrd_loc = demo_initrd_build();
+    vfs_node_t *initrd_root = initrd_init(initrd_loc);
+    if (initrd_root) {
+        vfs_mount_root(initrd_root);
+        set_color(VGA_COLOR(10, 0)); puts("[OK] ");
+        set_color(VGA_COLOR(7, 0));
+        extern uint32_t initrd_get_file_count(void);
+        print_dec(initrd_get_file_count());
+        puts(" files\n");
+    } else {
+        set_color(VGA_COLOR(12, 0)); puts("[FAIL]\n");
+    }
+    set_color(VGA_COLOR(15, 0));
     
     /* Create test tasks */
     process_create("task_a", task_a);

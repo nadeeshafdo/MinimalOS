@@ -47,6 +47,9 @@ C_SOURCES := \
 	$(KERNELDIR)/mm/kheap.c \
 	$(KERNELDIR)/process/process.c \
 	$(KERNELDIR)/process/scheduler.c \
+	$(KERNELDIR)/fs/vfs.c \
+	$(KERNELDIR)/fs/initrd.c \
+	$(KERNELDIR)/fs/demo_initrd.c \
 	drivers/timer.c \
 	drivers/keyboard.c
 
@@ -66,6 +69,7 @@ dirs:
 	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/arch/x86_64
 	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/mm
 	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/process
+	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/fs
 	@mkdir -p $(BUILDDIR)/drivers
 
 $(KERNEL): $(ALL_OBJS)
