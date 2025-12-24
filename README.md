@@ -35,15 +35,18 @@ Built for educational purposes to learn OS development concepts.
 - **PIT Timer** - Programmable Interval Timer (100Hz)
 - **PS/2 Keyboard** - Full scancode translation with modifiers
 - **Serial Port** - COM1 debug output at 115200 baud
-- **VGA Text Mode** - 80x25 text display with colors
+- **VGA Text Mode** - 80x25 text with colors and hardware cursor
 
 ### Shell Commands
 | Command | Description |
 |---------|-------------|
 | `help` | Show available commands |
 | `clear` | Clear the screen |
+| `echo TEXT` | Print text to screen |
 | `uptime` | Show system uptime |
-| `mem` | Display memory information |
+| `date` | Show formatted time |
+| `info` | System information |
+| `mem` | Memory information |
 | `ps` | List all processes |
 | `ls` | List files in initrd |
 | `cat FILE` | Display file contents |
@@ -122,7 +125,7 @@ MinimalOS/
 - [x] Phase 6: System Calls
 - [x] Phase 7: File System (VFS, Initrd)
 - [x] Phase 8: Userspace Infrastructure
-- [ ] Phase 9: Userspace Shell
+- [x] Phase 9: Shell (echo, date, info)
 
 ## License
 
