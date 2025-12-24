@@ -41,6 +41,7 @@ static void execute_command(void) {
     else if (strcmp(cmd_buffer, "echo") == 0) cmd_echo("");
     else if (strcmp(cmd_buffer, "reboot") == 0) cmd_reboot();
     else if (strcmp(cmd_buffer, "halt") == 0) cmd_halt();
+    else if (strcmp(cmd_buffer, "poweroff") == 0) cmd_poweroff();
     else if (strcmp(cmd_buffer, "ps") == 0) cmd_ps();
     else if (strcmp(cmd_buffer, "cpuid") == 0) cmd_cpuid();
     else if (strncmp(cmd_buffer, "peek ", 5) == 0) cmd_peek(cmd_buffer + 5);
@@ -52,6 +53,7 @@ static void execute_command(void) {
     else if (strcmp(cmd_buffer, "banner") == 0) cmd_banner();
     else if (strcmp(cmd_buffer, "test") == 0) cmd_test();
     else if (strcmp(cmd_buffer, "panic") == 0) cmd_panic();
+    else if (strcmp(cmd_buffer, "cpufreq") == 0) cmd_cpufreq();
     else {
         terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
         terminal_writestring("\nUnknown: ");

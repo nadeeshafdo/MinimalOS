@@ -208,16 +208,27 @@ const uint8_t *font_get_glyph(char c) {
     return font_data[c - 32];
 }
 
-/* Draw a character on framebuffer */
+/* Optimized: Draw a character directly to framebuffer (no per-pixel function calls) */
 void fb_putchar(int x, int y, char c, uint32_t fg, uint32_t bg) {
+    framebuffer_info_t *fb = fb_get_info();
+    if (!fb_available()) return;
+    
     const uint8_t *glyph = font_get_glyph(c);
+    uint32_t base_addr = fb->address + y * fb->pitch + x * 4;
     
     for (int row = 0; row < FONT_HEIGHT; row++) {
+        uint32_t *pixel = (uint32_t *)(base_addr + row * fb->pitch);
         uint8_t bits = glyph[row];
-        for (int col = 0; col < FONT_WIDTH; col++) {
-            uint32_t color = (bits & (0x80 >> col)) ? fg : bg;
-            fb_putpixel(x + col, y + row, color);
-        }
+        
+        /* Unrolled loop for 8 pixels */
+        pixel[0] = (bits & 0x80) ? fg : bg;
+        pixel[1] = (bits & 0x40) ? fg : bg;
+        pixel[2] = (bits & 0x20) ? fg : bg;
+        pixel[3] = (bits & 0x10) ? fg : bg;
+        pixel[4] = (bits & 0x08) ? fg : bg;
+        pixel[5] = (bits & 0x04) ? fg : bg;
+        pixel[6] = (bits & 0x02) ? fg : bg;
+        pixel[7] = (bits & 0x01) ? fg : bg;
     }
 }
 

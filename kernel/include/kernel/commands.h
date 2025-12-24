@@ -16,6 +16,7 @@ void cmd_clear(void);
 void cmd_echo(const char *args);
 void cmd_reboot(void);
 void cmd_halt(void);
+void cmd_poweroff(void);
 
 /* System info commands */
 void cmd_info(void);
@@ -37,5 +38,6 @@ void cmd_banner(void);
 /* Test commands */
 void cmd_test(void);
 void cmd_panic(void);
+void cmd_cpufreq(void);
 
 #endif /* _KERNEL_COMMANDS_H */
