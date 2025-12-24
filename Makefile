@@ -37,8 +37,13 @@ ASM_SOURCES := \
 # Source files - C
 C_SOURCES := \
 	$(KERNELDIR)/kernel.c \
+	$(KERNELDIR)/multiboot2.c \
 	$(KERNELDIR)/arch/x86_64/idt.c \
-	$(KERNELDIR)/arch/x86_64/pic.c
+	$(KERNELDIR)/arch/x86_64/pic.c \
+	$(KERNELDIR)/mm/pmm.c \
+	$(KERNELDIR)/mm/kheap.c \
+	drivers/timer.c \
+	drivers/keyboard.c
 
 # Object files
 ASM_OBJS := $(patsubst %.asm,$(BUILDDIR)/%.o,$(ASM_SOURCES))
@@ -54,6 +59,8 @@ dirs:
 	@mkdir -p $(DISTDIR)
 	@mkdir -p $(BUILDDIR)/$(ARCHDIR)
 	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/arch/x86_64
+	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/mm
+	@mkdir -p $(BUILDDIR)/drivers
 
 $(KERNEL): $(ALL_OBJS)
 	@echo "Linking kernel..."
