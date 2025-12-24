@@ -8,6 +8,8 @@
 #include "multiboot2.h"
 #include "pmm.h"
 #include "kheap.h"
+#include "process.h"
+#include "scheduler.h"
 
 /* VGA text mode */
 #define VGA_BUFFER ((volatile uint16_t*)0xB8000)
@@ -19,38 +21,25 @@
 static int cursor_x = 0;
 static int cursor_y = 0;
 static uint8_t color = VGA_COLOR(15, 0);
-
-/* Multiboot info (saved for later use) */
 static uint64_t saved_mb_info = 0;
 
 void clear_screen(void) {
-    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
-        VGA_BUFFER[i] = VGA_ENTRY(' ', color);
-    }
-    cursor_x = 0;
-    cursor_y = 0;
+    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) VGA_BUFFER[i] = VGA_ENTRY(' ', color);
+    cursor_x = cursor_y = 0;
 }
 
 static void scroll(void) {
-    for (int i = 0; i < VGA_WIDTH * (VGA_HEIGHT - 1); i++) {
-        VGA_BUFFER[i] = VGA_BUFFER[i + VGA_WIDTH];
-    }
-    for (int i = 0; i < VGA_WIDTH; i++) {
-        VGA_BUFFER[(VGA_HEIGHT - 1) * VGA_WIDTH + i] = VGA_ENTRY(' ', color);
-    }
+    for (int i = 0; i < VGA_WIDTH * (VGA_HEIGHT - 1); i++) VGA_BUFFER[i] = VGA_BUFFER[i + VGA_WIDTH];
+    for (int i = 0; i < VGA_WIDTH; i++) VGA_BUFFER[(VGA_HEIGHT - 1) * VGA_WIDTH + i] = VGA_ENTRY(' ', color);
     cursor_y = VGA_HEIGHT - 1;
 }
 
 void putchar(char c) {
     if (c == '\n') { cursor_x = 0; cursor_y++; }
-    else if (c == '\r') { cursor_x = 0; }
-    else if (c == '\t') { cursor_x = (cursor_x + 8) & ~7; }
-    else if (c == '\b') {
-        if (cursor_x > 0) { cursor_x--; VGA_BUFFER[cursor_y * VGA_WIDTH + cursor_x] = VGA_ENTRY(' ', color); }
-    } else {
-        VGA_BUFFER[cursor_y * VGA_WIDTH + cursor_x] = VGA_ENTRY(c, color);
-        cursor_x++;
-    }
+    else if (c == '\r') cursor_x = 0;
+    else if (c == '\t') cursor_x = (cursor_x + 8) & ~7;
+    else if (c == '\b') { if (cursor_x > 0) { cursor_x--; VGA_BUFFER[cursor_y * VGA_WIDTH + cursor_x] = VGA_ENTRY(' ', color); } }
+    else { VGA_BUFFER[cursor_y * VGA_WIDTH + cursor_x] = VGA_ENTRY(c, color); cursor_x++; }
     if (cursor_x >= VGA_WIDTH) { cursor_x = 0; cursor_y++; }
     if (cursor_y >= VGA_HEIGHT) scroll();
 }
@@ -76,7 +65,6 @@ void print_hex(uint64_t n) {
 
 void set_color(uint8_t c) { color = c; }
 
-/* String comparison */
 static int strcmp(const char *s1, const char *s2) {
     while (*s1 && *s1 == *s2) { s1++; s2++; }
     return *s1 - *s2;
@@ -103,7 +91,27 @@ void exception_handler(uint64_t num, uint64_t err) {
     while (1) __asm__ volatile ("hlt");
 }
 
-/* Simple shell */
+/* Test tasks - these are created but not scheduled preemptively */
+/* To avoid blocking the shell, we count only when explicitly triggered */
+static volatile uint64_t task_a_count = 0;
+static volatile uint64_t task_b_count = 0;
+
+/* Demo: tasks just increment and yield immediately */
+void task_a(void) {
+    while (1) {
+        task_a_count++;
+        __asm__ volatile ("hlt");  /* Wait for interrupt instead of busy loop */
+    }
+}
+
+void task_b(void) {
+    while (1) {
+        task_b_count++;
+        __asm__ volatile ("hlt");  /* Wait for interrupt instead of busy loop */
+    }
+}
+
+/* Shell */
 #define CMD_BUFFER_SIZE 256
 static char cmd_buffer[CMD_BUFFER_SIZE];
 static int cmd_pos = 0;
@@ -125,7 +133,8 @@ void shell_execute(void) {
         puts("  clear    - Clear screen\n");
         puts("  uptime   - Show system uptime\n");
         puts("  mem      - Show memory info\n");
-        puts("  alloc    - Test memory allocation\n");
+        puts("  ps       - List processes\n");
+        puts("  tasks    - Show task counters\n");
         puts("  reboot   - Reboot system\n");
         puts("  halt     - Halt CPU\n");
     }
@@ -143,51 +152,51 @@ void shell_execute(void) {
         puts("\n");
         set_color(VGA_COLOR(11, 0)); puts("Memory Information:\n");
         set_color(VGA_COLOR(15, 0));
-        
-        puts("  Physical Memory:\n");
-        puts("    Total:  ");
-        print_dec(pmm_get_total_memory() / 1024 / 1024);
-        puts(" MB\n");
-        puts("    Used:   ");
-        print_dec(pmm_get_used_memory() / 1024 / 1024);
-        puts(" MB\n");
-        puts("    Free:   ");
+        puts("  Physical: ");
         print_dec(pmm_get_free_memory() / 1024 / 1024);
-        puts(" MB\n\n");
-        
-        puts("  Kernel Heap:\n");
-        puts("    Used:   ");
-        print_dec(kheap_get_used() / 1024);
-        puts(" KB\n");
-        puts("    Free:   ");
+        puts("/");
+        print_dec(pmm_get_total_memory() / 1024 / 1024);
+        puts(" MB free\n");
+        puts("  Heap: ");
         print_dec(kheap_get_free() / 1024);
-        puts(" KB\n");
+        puts(" KB free\n");
     }
-    else if (strcmp(cmd_buffer, "alloc") == 0) {
-        puts("\nTesting memory allocation...\n");
-        
-        void *p1 = kmalloc(64);
-        puts("  kmalloc(64) = "); print_hex((uint64_t)p1); puts("\n");
-        
-        void *p2 = kmalloc(128);
-        puts("  kmalloc(128) = "); print_hex((uint64_t)p2); puts("\n");
-        
-        void *p3 = kmalloc(256);
-        puts("  kmalloc(256) = "); print_hex((uint64_t)p3); puts("\n");
-        
-        puts("  Heap used: "); print_dec(kheap_get_used()); puts(" bytes\n");
-        
-        kfree(p2);
-        puts("  kfree(p2)\n");
-        
-        void *p4 = kmalloc(100);
-        puts("  kmalloc(100) = "); print_hex((uint64_t)p4); puts("\n");
-        
-        kfree(p1); kfree(p3); kfree(p4);
-        puts("  Freed all. Heap used: "); print_dec(kheap_get_used()); puts(" bytes\n");
-        
-        set_color(VGA_COLOR(10, 0)); puts("Memory allocation test passed!\n");
+    else if (strcmp(cmd_buffer, "ps") == 0) {
+        puts("\n");
+        set_color(VGA_COLOR(11, 0)); puts("Processes:\n");
         set_color(VGA_COLOR(15, 0));
+        puts("  PID  STATE    NAME\n");
+        
+        for (uint64_t i = 0; i < 10; i++) {
+            process_t *p = process_get(i);
+            if (!p) continue;
+            
+            puts("  ");
+            print_dec(p->pid);
+            puts("    ");
+            
+            switch (p->state) {
+                case PROCESS_RUNNING: set_color(VGA_COLOR(10, 0)); puts("RUN  "); break;
+                case PROCESS_READY: set_color(VGA_COLOR(14, 0)); puts("READY"); break;
+                case PROCESS_BLOCKED: set_color(VGA_COLOR(12, 0)); puts("BLOCK"); break;
+                case PROCESS_TERMINATED: set_color(VGA_COLOR(8, 0)); puts("TERM "); break;
+            }
+            set_color(VGA_COLOR(15, 0));
+            puts("    ");
+            puts(p->name);
+            puts("\n");
+        }
+        puts("\nTotal: ");
+        print_dec(process_count());
+        puts(" processes\n");
+    }
+    else if (strcmp(cmd_buffer, "tasks") == 0) {
+        puts("\nTask counters (running in background):\n");
+        puts("  Task A: ");
+        print_dec(task_a_count);
+        puts("\n  Task B: ");
+        print_dec(task_b_count);
+        puts("\n");
     }
     else if (strcmp(cmd_buffer, "reboot") == 0) {
         puts("\nRebooting...\n");
@@ -200,7 +209,6 @@ void shell_execute(void) {
     else {
         set_color(VGA_COLOR(12, 0)); puts("\nUnknown: ");
         set_color(VGA_COLOR(15, 0)); puts(cmd_buffer);
-        puts("\nType 'help' for commands.");
     }
     
     cmd_pos = 0;
@@ -211,6 +219,12 @@ void shell_input(char c) {
     if (c == '\n') shell_execute();
     else if (c == '\b') { if (cmd_pos > 0) { cmd_pos--; putchar('\b'); } }
     else if (cmd_pos < CMD_BUFFER_SIZE - 1) { cmd_buffer[cmd_pos++] = c; putchar(c); }
+}
+
+/* Timer handler with scheduler */
+void timer_tick_handler(uint64_t int_num, uint64_t error_code) {
+    (void)int_num; (void)error_code;
+    scheduler_tick();
 }
 
 /* Kernel main */
@@ -226,51 +240,53 @@ void kernel_main(uint64_t multiboot_info, uint64_t magic) {
     puts("========================================\n\n");
     set_color(VGA_COLOR(15, 0));
     
-    /* Initialize PIC */
     puts("Initializing PIC... ");
     pic_init();
     set_color(VGA_COLOR(10, 0)); puts("[OK]\n"); set_color(VGA_COLOR(15, 0));
     
-    /* Initialize IDT */
     puts("Initializing IDT... ");
     idt_init();
     for (int i = 0; i < 32; i++) register_interrupt_handler(i, exception_handler);
     set_color(VGA_COLOR(10, 0)); puts("[OK]\n"); set_color(VGA_COLOR(15, 0));
     
-    /* Initialize PMM */
     puts("Initializing PMM... ");
     pmm_init(multiboot_info);
     set_color(VGA_COLOR(10, 0)); puts("[OK] ");
-    set_color(VGA_COLOR(7, 0));
-    print_dec(pmm_get_total_memory() / 1024 / 1024);
-    puts(" MB detected\n");
+    set_color(VGA_COLOR(7, 0)); print_dec(pmm_get_total_memory() / 1024 / 1024); puts(" MB\n");
     set_color(VGA_COLOR(15, 0));
     
-    /* Initialize kernel heap */
     puts("Initializing heap... ");
     kheap_init();
     set_color(VGA_COLOR(10, 0)); puts("[OK] ");
-    set_color(VGA_COLOR(7, 0));
-    print_dec(kheap_get_free() / 1024);
-    puts(" KB available\n");
+    set_color(VGA_COLOR(7, 0)); print_dec(kheap_get_free() / 1024); puts(" KB\n");
     set_color(VGA_COLOR(15, 0));
     
-    /* Initialize timer */
+    puts("Initializing processes... ");
+    process_init();
+    scheduler_init();
+    set_color(VGA_COLOR(10, 0)); puts("[OK]\n"); set_color(VGA_COLOR(15, 0));
+    
+    /* Create test tasks */
+    process_create("task_a", task_a);
+    process_create("task_b", task_b);
+    
     puts("Initializing timer... ");
     timer_init(100);
+    register_interrupt_handler(32, timer_tick_handler);
     pic_enable_irq(0);
     set_color(VGA_COLOR(10, 0)); puts("[OK]\n"); set_color(VGA_COLOR(15, 0));
     
-    /* Initialize keyboard */
     puts("Initializing keyboard... ");
     keyboard_init();
     pic_enable_irq(1);
     set_color(VGA_COLOR(10, 0)); puts("[OK]\n"); set_color(VGA_COLOR(15, 0));
     
-    /* Enable interrupts */
     puts("Enabling interrupts... ");
     __asm__ volatile ("sti");
     set_color(VGA_COLOR(10, 0)); puts("[OK]\n\n"); set_color(VGA_COLOR(15, 0));
+    
+    /* Start scheduler */
+    scheduler_start();
     
     set_color(VGA_COLOR(14, 0));
     puts("Welcome to MinimalOS! Type 'help' for commands.\n");

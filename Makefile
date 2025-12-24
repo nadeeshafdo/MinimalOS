@@ -32,7 +32,8 @@ LDFLAGS := -n -nostdlib -T $(ARCHDIR)/linker.ld
 # Source files - ASM
 ASM_SOURCES := \
 	$(ARCHDIR)/boot.asm \
-	$(KERNELDIR)/arch/x86_64/isr_stubs.asm
+	$(KERNELDIR)/arch/x86_64/isr_stubs.asm \
+	$(KERNELDIR)/arch/x86_64/switch.asm
 
 # Source files - C
 C_SOURCES := \
@@ -42,6 +43,8 @@ C_SOURCES := \
 	$(KERNELDIR)/arch/x86_64/pic.c \
 	$(KERNELDIR)/mm/pmm.c \
 	$(KERNELDIR)/mm/kheap.c \
+	$(KERNELDIR)/process/process.c \
+	$(KERNELDIR)/process/scheduler.c \
 	drivers/timer.c \
 	drivers/keyboard.c
 
@@ -60,6 +63,7 @@ dirs:
 	@mkdir -p $(BUILDDIR)/$(ARCHDIR)
 	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/arch/x86_64
 	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/mm
+	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/process
 	@mkdir -p $(BUILDDIR)/drivers
 
 $(KERNEL): $(ALL_OBJS)
