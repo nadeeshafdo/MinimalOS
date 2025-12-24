@@ -378,7 +378,13 @@ void shell_execute(void) {
     }
     else if (strcmp(cmd_buffer, "reboot") == 0) {
         puts("\nRebooting...\n");
-        __asm__ volatile ("lidt 0\nint $0x03");
+        /* Use 8042 keyboard controller to pulse CPU reset line */
+        uint8_t status;
+        do {
+            status = ({uint8_t r; __asm__ volatile ("inb %1, %0" : "=a"(r) : "Nd"((uint16_t)0x64)); r;});
+        } while (status & 0x02);  /* Wait for input buffer empty */
+        outb(0x64, 0xFE);  /* Send reset command */
+        __asm__ volatile ("cli; hlt");  /* Fallback halt */
     }
     else if (strcmp(cmd_buffer, "halt") == 0) {
         puts("\nSystem halted.\n");
