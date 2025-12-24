@@ -45,7 +45,13 @@ KERNEL_SOURCES := \
 	$(KERNELDIR)/process/process.c \
 	$(KERNELDIR)/process/scheduler.c \
 	$(KERNELDIR)/process/syscall.c \
-	$(KERNELDIR)/shell.c
+	$(KERNELDIR)/shell.c \
+	$(KERNELDIR)/commands/utils.c \
+	$(KERNELDIR)/commands/basic.c \
+	$(KERNELDIR)/commands/sysinfo.c \
+	$(KERNELDIR)/commands/memory.c \
+	$(KERNELDIR)/commands/display.c \
+	$(KERNELDIR)/commands/tests.c
 
 DRIVER_SOURCES := \
 	$(DRIVERDIR)/timer.c \
@@ -80,6 +86,7 @@ dirs:
 	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/arch/i386
 	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/mm
 	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/process
+	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/commands
 	@mkdir -p $(BUILDDIR)/$(DRIVERDIR)
 
 # Link kernel
