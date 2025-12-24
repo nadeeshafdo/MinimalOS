@@ -13,6 +13,7 @@
 #include "syscall.h"
 #include "vfs.h"
 #include "initrd.h"
+#include "serial.h"
 
 /* VGA text mode */
 #define VGA_BUFFER ((volatile uint16_t*)0xB8000)
@@ -331,8 +332,13 @@ void kernel_main(uint64_t multiboot_info, uint64_t magic) {
     puts("========================================\n\n");
     set_color(VGA_COLOR(15, 0));
     
+    /* Initialize serial first for debug output */
+    serial_init();
+    serial_debug("Kernel starting...");
+    
     puts("Initializing PIC... ");
     pic_init();
+    serial_debug("PIC initialized");
     set_color(VGA_COLOR(10, 0)); puts("[OK]\n"); set_color(VGA_COLOR(15, 0));
     
     puts("Initializing IDT... ");

@@ -51,7 +51,8 @@ C_SOURCES := \
 	$(KERNELDIR)/fs/initrd.c \
 	$(KERNELDIR)/fs/demo_initrd.c \
 	drivers/timer.c \
-	drivers/keyboard.c
+	drivers/keyboard.c \
+	drivers/serial.c
 
 # Object files
 ASM_OBJS := $(patsubst %.asm,$(BUILDDIR)/%.o,$(ASM_SOURCES))
@@ -59,9 +60,19 @@ C_OBJS := $(patsubst %.c,$(BUILDDIR)/%.o,$(C_SOURCES))
 
 ALL_OBJS := $(ASM_OBJS) $(C_OBJS)
 
-.PHONY: all clean run iso dirs debug
+.PHONY: all clean run run-serial iso dirs debug help
 
-all: dirs $(KERNEL)
+# Default target
+all: dirs $(KERNEL) ## Build the kernel
+
+# Show help
+help: ## Show available make targets
+	@echo 'MinimalOS Build System'
+	@echo ''
+	@echo 'Usage: make [target]'
+	@echo ''
+	@echo 'Targets:'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
 dirs:
 	@mkdir -p $(DISTDIR)
@@ -85,7 +96,7 @@ $(BUILDDIR)/%.o: %.c
 	@echo "Compiling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
-iso: $(KERNEL)
+iso: $(KERNEL) ## Create bootable ISO image
 	@echo "Creating ISO..."
 	@mkdir -p $(BUILDDIR)/iso/boot/grub
 	@cp $(KERNEL) $(BUILDDIR)/iso/boot/
@@ -98,12 +109,15 @@ iso: $(KERNEL)
 	grub-mkrescue -o $(ISO) $(BUILDDIR)/iso 2>/dev/null
 	@echo "ISO created: $(ISO)"
 
-run: iso
+run: iso ## Run in QEMU
 	qemu-system-x86_64 -cdrom $(ISO) -m 256M
 
-debug: iso
-	qemu-system-x86_64 -cdrom $(ISO) -m 256M -d int -no-reboot
+run-serial: iso ## Run in QEMU with serial output to terminal
+	qemu-system-x86_64 -cdrom $(ISO) -m 256M -serial stdio
 
-clean:
+debug: iso ## Run in QEMU with debug output and GDB server
+	qemu-system-x86_64 -cdrom $(ISO) -m 256M -serial stdio -s -S
+
+clean: ## Remove build artifacts
 	@rm -rf $(BUILDDIR)
 	@echo "Clean complete"
