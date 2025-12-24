@@ -178,9 +178,9 @@ void shell_execute(void) {
     else if (strcmp(cmd_buffer, "info") == 0) {
         puts("\n");
         set_color(VGA_COLOR(14, 0));
-        puts("╔══════════════════════════════════════╗\n");
-        puts("║      MinimalOS System Information    ║\n");
-        puts("╚══════════════════════════════════════╝\n");
+        puts("+======================================+\n");
+        puts("|    MinimalOS System Information      |\n");
+        puts("+======================================+\n");
         set_color(VGA_COLOR(11, 0)); puts("  Version: ");
         set_color(VGA_COLOR(15, 0)); puts("0.1.0\n");
         set_color(VGA_COLOR(11, 0)); puts("  Arch:    ");
