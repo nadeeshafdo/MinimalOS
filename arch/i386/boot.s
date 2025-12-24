@@ -1,7 +1,13 @@
-/* Multiboot header for GRUB bootloader */
+/* Multiboot header for GRUB bootloader with framebuffer support */
 .set MAGIC,    0x1BADB002          /* Multiboot magic number */
-.set FLAGS,    (1<<0 | 1<<1)       /* Align modules and memory info */
+.set FLAGS,    (1<<0 | 1<<1 | 1<<2) /* Align, meminfo, video mode */
 .set CHECKSUM, -(MAGIC + FLAGS)    /* Checksum required by multiboot */
+
+/* Video mode settings */
+.set MODE_TYPE, 0                  /* 0 = linear framebuffer */
+.set WIDTH,     1024               /* Requested width */
+.set HEIGHT,    768                /* Requested height */
+.set DEPTH,     32                 /* Bits per pixel */
 
 /* Multiboot header must be in first 8KB and aligned on 4-byte boundary */
 .section .multiboot
@@ -9,6 +15,11 @@
 .long MAGIC
 .long FLAGS
 .long CHECKSUM
+.long 0, 0, 0, 0, 0                /* Unused address fields */
+.long MODE_TYPE                    /* Video mode type */
+.long WIDTH                        /* Width */
+.long HEIGHT                       /* Height */
+.long DEPTH                        /* Depth */
 
 /* Allocate initial kernel stack (16KB) */
 .section .bss

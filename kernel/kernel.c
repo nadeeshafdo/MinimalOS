@@ -67,7 +67,15 @@ static void print_hex(uint32_t value) {
 
 /* Kernel main function - entry point after boot.s */
 void kernel_main(uint32_t multiboot_magic, struct multiboot_info* multiboot_info) {
-    /* Initialize terminal */
+    /* First: Try to initialize framebuffer (before terminal!) */
+    int have_framebuffer = fb_init(multiboot_info);
+    
+    /* Tell terminal to use framebuffer if available */
+    if (have_framebuffer) {
+        terminal_set_framebuffer(1);
+    }
+    
+    /* Now initialize terminal (will use framebuffer if enabled) */
     terminal_initialize();
     
     /* Display welcome banner */
@@ -88,8 +96,8 @@ void kernel_main(uint32_t multiboot_magic, struct multiboot_info* multiboot_info
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
     terminal_writestring(" Multiboot compliant bootloader detected\n");
     
-    /* Initialize framebuffer if available */
-    if (fb_init(multiboot_info)) {
+    /* Show framebuffer status */
+    if (have_framebuffer) {
         framebuffer_info_t *fb = fb_get_info();
         terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
         terminal_writestring("[OK]");
@@ -102,7 +110,7 @@ void kernel_main(uint32_t multiboot_magic, struct multiboot_info* multiboot_info
         print_hex(fb->bpp);
         terminal_writestring("\n");
     } else {
-        terminal_writestring("     Using VGA text mode (no framebuffer)\n");
+        terminal_writestring("     Using VGA text mode (80x25)\n");
     }
     
     /* Display memory information */
