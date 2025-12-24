@@ -29,9 +29,23 @@ static int cursor_y = 0;
 static uint8_t color = VGA_COLOR(15, 0);
 static uint64_t saved_mb_info = 0;
 
+/* Update VGA hardware cursor position */
+static inline void outb(uint16_t port, uint8_t val) {
+    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static void update_cursor(void) {
+    uint16_t pos = cursor_y * VGA_WIDTH + cursor_x;
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, (uint8_t)(pos & 0xFF));
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+}
+
 void clear_screen(void) {
     for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) VGA_BUFFER[i] = VGA_ENTRY(' ', color);
     cursor_x = cursor_y = 0;
+    update_cursor();
 }
 
 static void scroll(void) {
@@ -48,6 +62,7 @@ void putchar(char c) {
     else { VGA_BUFFER[cursor_y * VGA_WIDTH + cursor_x] = VGA_ENTRY(c, color); cursor_x++; }
     if (cursor_x >= VGA_WIDTH) { cursor_x = 0; cursor_y++; }
     if (cursor_y >= VGA_HEIGHT) scroll();
+    update_cursor();
 }
 
 void puts(const char *s) { while (*s) putchar(*s++); }
