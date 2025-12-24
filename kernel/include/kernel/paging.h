@@ -30,6 +30,9 @@ typedef struct {
 /* Initialize paging */
 void paging_init(void);
 
+/* Map a large region (for framebuffer etc) - call BEFORE paging_init */
+void paging_map_region(uint32_t phys_addr, uint32_t size);
+
 /* Map virtual address to physical address */
 void paging_map(uint32_t virtual_addr, uint32_t physical_addr, uint32_t flags);
 

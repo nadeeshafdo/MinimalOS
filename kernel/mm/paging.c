@@ -12,8 +12,16 @@ extern uint32_t __kernel_end;
 static page_directory_t *current_directory = 0;
 static page_directory_t *kernel_directory = 0;
 
-/* Page tables for kernel space (first 4MB identity mapped) */
+/* Page tables for kernel space (first 16MB identity mapped) */
 static page_table_t kernel_page_tables[4] __attribute__((aligned(4096)));
+
+/* Extra page tables for framebuffer (up to 16 more = 64MB more) */
+static page_table_t extra_page_tables[16] __attribute__((aligned(4096)));
+static int extra_tables_used = 0;
+
+/* Framebuffer mapping info (set before paging_init) */
+static uint32_t fb_phys_addr = 0;
+static uint32_t fb_size = 0;
 
 /* Load page directory into CR3 */
 static inline void load_page_directory(page_directory_t *dir) {
@@ -45,9 +53,10 @@ void page_fault_handler(struct registers *regs) {
     /* Print hex address */
     char hex[9];
     const char *digits = "0123456789ABCDEF";
+    uint32_t addr_copy = faulting_address;
     for (int i = 7; i >= 0; i--) {
-        hex[i] = digits[faulting_address & 0xF];
-        faulting_address >>= 4;
+        hex[i] = digits[addr_copy & 0xF];
+        addr_copy >>= 4;
     }
     hex[8] = '\0';
     terminal_writestring(hex);
@@ -60,6 +69,12 @@ void page_fault_handler(struct registers *regs) {
     
     terminal_writestring("System halted.\n");
     while(1) { __asm__ volatile("cli; hlt"); }
+}
+
+/* Set framebuffer region to map (call BEFORE paging_init) */
+void paging_map_region(uint32_t phys_addr, uint32_t size) {
+    fb_phys_addr = phys_addr;
+    fb_size = size;
 }
 
 void paging_init(void) {
@@ -76,17 +91,31 @@ void paging_init(void) {
     }
     
     /* Identity map first 16MB (kernel space) */
-    /* Note: WE ARE MAPPING EVERYTHING AS USER ACCESSIBLE FOR NOW TO SIMPLIFY TESTING */
-    /* In a real OS, we would separate kernel and user space strictly. */
     for (int i = 0; i < 4; i++) {
-        /* Set up page table */
         for (int j = 0; j < 1024; j++) {
             uint32_t addr = (i * 1024 + j) * PAGE_SIZE;
             kernel_page_tables[i].entries[j] = addr | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
         }
-        
-        /* Add page table to directory */
         kernel_directory->entries[i] = (uint32_t)&kernel_page_tables[i] | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+    }
+    
+    /* Map framebuffer region if requested */
+    if (fb_phys_addr != 0 && fb_size != 0) {
+        uint32_t fb_start = fb_phys_addr & 0xFFC00000;  /* Align to 4MB boundary */
+        uint32_t fb_end = (fb_phys_addr + fb_size + 0x3FFFFF) & 0xFFC00000;
+        
+        for (uint32_t addr = fb_start; addr < fb_end && extra_tables_used < 16; addr += 0x400000) {
+            uint32_t pd_index = addr >> 22;
+            
+            /* Clear and set up page table */
+            for (int j = 0; j < 1024; j++) {
+                uint32_t page_addr = addr + j * PAGE_SIZE;
+                extra_page_tables[extra_tables_used].entries[j] = page_addr | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+            }
+            
+            kernel_directory->entries[pd_index] = (uint32_t)&extra_page_tables[extra_tables_used] | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+            extra_tables_used++;
+        }
     }
     
     /* Register page fault handler */

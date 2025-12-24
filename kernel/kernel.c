@@ -191,6 +191,13 @@ void kernel_main(uint32_t multiboot_magic, struct multiboot_info* multiboot_info
     
     /* Initialize paging */
     terminal_writestring("Initializing paging... ");
+    /* Map framebuffer region before enabling paging */
+    if (have_framebuffer) {
+        framebuffer_info_t *fb = fb_get_info();
+        /* Map framebuffer memory (width * height * 4 bytes per pixel) */
+        uint32_t fb_size = fb->pitch * fb->height;
+        paging_map_region(fb->address, fb_size);
+    }
     paging_init();
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
     terminal_writestring("[OK]\n");
