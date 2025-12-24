@@ -10,6 +10,7 @@
 #include "kheap.h"
 #include "process.h"
 #include "scheduler.h"
+#include "syscall.h"
 
 /* VGA text mode */
 #define VGA_BUFFER ((volatile uint16_t*)0xB8000)
@@ -134,7 +135,7 @@ void shell_execute(void) {
         puts("  uptime   - Show system uptime\n");
         puts("  mem      - Show memory info\n");
         puts("  ps       - List processes\n");
-        puts("  tasks    - Show task counters\n");
+        puts("  syscall  - Test syscall interface\n");
         puts("  reboot   - Reboot system\n");
         puts("  halt     - Halt CPU\n");
     }
@@ -190,13 +191,41 @@ void shell_execute(void) {
         print_dec(process_count());
         puts(" processes\n");
     }
-    else if (strcmp(cmd_buffer, "tasks") == 0) {
-        puts("\nTask counters (running in background):\n");
-        puts("  Task A: ");
-        print_dec(task_a_count);
-        puts("\n  Task B: ");
-        print_dec(task_b_count);
+    else if (strcmp(cmd_buffer, "syscall") == 0) {
+        puts("\nTesting syscall interface...\n");
+        
+        /* Test getpid syscall */
+        uint64_t pid;
+        __asm__ volatile (
+            "mov $3, %%rax\n"   /* SYS_GETPID */
+            "syscall\n"
+            : "=a"(pid)
+            :
+            : "rcx", "r11", "memory"
+        );
+        puts("  getpid() = ");
+        print_dec(pid);
         puts("\n");
+        
+        /* Test write syscall */
+        const char *msg = "  Hello from syscall!\n";
+        uint64_t len = 0;
+        while (msg[len]) len++;
+        
+        __asm__ volatile (
+            "mov $1, %%rax\n"   /* SYS_WRITE */
+            "mov $1, %%rdi\n"   /* fd = stdout */
+            "mov %0, %%rsi\n"   /* buf */
+            "mov %1, %%rdx\n"   /* count */
+            "syscall\n"
+            :
+            : "r"(msg), "r"(len)
+            : "rax", "rdi", "rsi", "rdx", "rcx", "r11", "memory"
+        );
+        
+        set_color(VGA_COLOR(10, 0));
+        puts("Syscall interface working!\n");
+        set_color(VGA_COLOR(15, 0));
     }
     else if (strcmp(cmd_buffer, "reboot") == 0) {
         puts("\nRebooting...\n");
@@ -224,7 +253,8 @@ void shell_input(char c) {
 /* Timer handler with scheduler */
 void timer_tick_handler(uint64_t int_num, uint64_t error_code) {
     (void)int_num; (void)error_code;
-    scheduler_tick();
+    timer_tick();      /* Increment timer counter */
+    scheduler_tick();  /* Run scheduler */
 }
 
 /* Kernel main */
@@ -264,6 +294,10 @@ void kernel_main(uint64_t multiboot_info, uint64_t magic) {
     puts("Initializing processes... ");
     process_init();
     scheduler_init();
+    set_color(VGA_COLOR(10, 0)); puts("[OK]\n"); set_color(VGA_COLOR(15, 0));
+    
+    puts("Initializing syscalls... ");
+    syscall_init();
     set_color(VGA_COLOR(10, 0)); puts("[OK]\n"); set_color(VGA_COLOR(15, 0));
     
     /* Create test tasks */

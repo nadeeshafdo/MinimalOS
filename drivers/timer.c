@@ -20,10 +20,8 @@ static inline void outb(uint16_t port, uint8_t val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
 }
 
-/* Timer IRQ handler */
-static void timer_callback(uint64_t int_num, uint64_t error_code) {
-    (void)int_num;
-    (void)error_code;
+/* Called by external timer handler */
+void timer_tick(void) {
     timer_ticks++;
 }
 
@@ -40,8 +38,7 @@ void timer_init(uint32_t frequency) {
     outb(PIT_CHANNEL0, divisor & 0xFF);         /* Low byte */
     outb(PIT_CHANNEL0, (divisor >> 8) & 0xFF);  /* High byte */
     
-    /* Register timer handler (IRQ0 = INT 32) */
-    register_interrupt_handler(32, timer_callback);
+    /* Don't register handler here - kernel will do it */
 }
 
 uint64_t timer_get_ticks(void) {

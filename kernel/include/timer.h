@@ -6,6 +6,9 @@
 /* Initialize PIT timer with given frequency (Hz) */
 void timer_init(uint32_t frequency);
 
+/* Called by timer IRQ handler to increment tick count */
+void timer_tick(void);
+
 /* Get current tick count */
 uint64_t timer_get_ticks(void);
 

@@ -33,12 +33,14 @@ LDFLAGS := -n -nostdlib -T $(ARCHDIR)/linker.ld
 ASM_SOURCES := \
 	$(ARCHDIR)/boot.asm \
 	$(KERNELDIR)/arch/x86_64/isr_stubs.asm \
-	$(KERNELDIR)/arch/x86_64/switch.asm
+	$(KERNELDIR)/arch/x86_64/switch.asm \
+	$(KERNELDIR)/arch/x86_64/syscall.asm
 
 # Source files - C
 C_SOURCES := \
 	$(KERNELDIR)/kernel.c \
 	$(KERNELDIR)/multiboot2.c \
+	$(KERNELDIR)/syscall.c \
 	$(KERNELDIR)/arch/x86_64/idt.c \
 	$(KERNELDIR)/arch/x86_64/pic.c \
 	$(KERNELDIR)/mm/pmm.c \
