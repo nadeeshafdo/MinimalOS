@@ -1,54 +1,83 @@
 # MinimalOS
 
-A functional x86 operating system built from scratch following OSDev wiki best practices.
+A functional 32-bit x86 operating system built from scratch following OSDev wiki best practices.
 
-## Features
+## Current Features
 
-✅ **Core System**
+### ✅ Core System
 - Multiboot-compliant bootloader (GRUB compatible)
 - GDT (Global Descriptor Table) with kernel and user segments
 - IDT (Interrupt Descriptor Table) with 256 entries
+- TSS (Task State Segment) for user mode support
 - 32 CPU exception handlers (ISRs)
 - 16 hardware interrupt handlers (IRQs) with PIC remapping
 
-✅ **Drivers**
-- VGA text mode terminal (80x25) with scrolling, colors, newlines
-- PS/2 keyboard driver with live input and shift key support
-- Programmable Interval Timer (PIT) running at 100Hz
+### ✅ Memory Management
+- Physical Memory Manager (PMM) with bitmap allocator
+- Virtual Memory / Paging (32-bit, 4KB pages)
+- Kernel Heap (kmalloc/kfree)
+- Dynamic framebuffer region mapping
 
-✅ **Build System**
-- Makefile with auto-detection of cross-compiler
-- QEMU testing targets
-- ISO generation support
+### ✅ Process Management
+- Process creation and management
+- Round-robin scheduler
+- Context switching
+- System calls (int 0x80)
+
+### ✅ Drivers
+- **VGA Text Mode** (80×25) with scrolling and colors
+- **VESA Framebuffer** (1024×768×32) with 8×16 bitmap font
+- **PS/2 Keyboard** with shift key support
+- **PIT Timer** at 100Hz
+
+### ✅ Interactive Shell
+18 built-in commands:
+
+| Command | Description |
+|---------|-------------|
+| `help` | Show available commands |
+| `clear` | Clear screen |
+| `echo <text>` | Print text |
+| `reboot` | Restart system |
+| `halt` | Halt CPU |
+| `poweroff` | Power off (QEMU/VMs) |
+| `info` | System information |
+| `mem` | Memory usage |
+| `uptime` | System uptime |
+| `ps` | List processes |
+| `cpuid` | CPU information |
+| `cpufreq` | Estimate CPU speed |
+| `peek <addr>` | Read memory |
+| `poke <addr> <val>` | Write memory |
+| `hexdump <addr>` | Dump 64 bytes |
+| `alloc <size>` | Allocate memory |
+| `color <fg> <bg>` | Set terminal colors |
+| `banner` | ASCII art logo |
+| `test` | Run diagnostics |
 
 ## Building
 
 ### Prerequisites
-- GCC (with 32-bit support or cross-compiler)
+- GCC (with 32-bit support)
 - GNU Make
-- GNU Assembler (as)
+- GNU Assembler
 - QEMU (for testing)
 - GRUB tools (for ISO creation)
 
-### Compilation
-
+### Compile
 ```bash
-cd ./MinimalOS
+cd MinimalOS
 make
 ```
 
-This will produce `minimalos.bin`, the kernel binary.
+Output: `build/dist/minimalos.bin`
 
-## Running
-
-### In QEMU (Recommended)
+### Run in QEMU
 ```bash
-make qemu
+make run
 ```
 
-This boots the kernel directly in QEMU.
-
-### Creating Bootable ISO
+### Create Bootable ISO
 ```bash
 make iso
 make qemu-iso
@@ -58,90 +87,69 @@ make qemu-iso
 
 ```
 MinimalOS/
-├── arch/i386/          # Architecture-specific code
-│   ├── boot.s          # Multiboot header and bootstrap
-│   └── linker.ld       # Linker script
+├── arch/i386/              # Bootloader and linker script
+│   ├── boot.s              # Multiboot header (1024×768 framebuffer)
+│   └── linker.ld
 ├── kernel/
-│   ├── kernel.c        # Kernel entry point
-│   ├── tty.c           # VGA terminal driver
-│   ├── arch/i386/      # i386-specific kernel code
-│   │   ├── gdt.c       # Global Descriptor Table
-│   │   ├── gdt_flush.s # GDT loading routine
-│   │   ├── idt.c       # Interrupt Descriptor Table
-│   │   ├── idt_flush.s # IDT loading routine
-│   │   ├── isr.c       # Interrupt Service Routines
-│   │   ├── isr_stub.s  # ISR assembly stubs
-│   │   ├── irq.c       # Hardware interrupt handlers
-│   │   └── irq_stub.s  # IRQ assembly stubs
-│   └── include/kernel/ # Kernel headers
+│   ├── kernel.c            # Main entry point
+│   ├── tty.c               # Dual VGA/framebuffer terminal
+│   ├── shell.c             # Command dispatcher
+│   ├── arch/i386/          # GDT, IDT, ISR, IRQ, context switch
+│   ├── mm/                 # PMM, paging, kernel heap
+│   ├── process/            # Process, scheduler, syscalls
+│   ├── commands/           # Shell command implementations
+│   │   ├── basic.c         # help, clear, echo, reboot, halt, poweroff
+│   │   ├── sysinfo.c       # info, mem, uptime, ps, cpuid
+│   │   ├── memory.c        # peek, poke, hexdump, alloc
+│   │   ├── display.c       # color, banner
+│   │   └── tests.c         # test, cpufreq
+│   └── include/kernel/     # All kernel headers
 ├── drivers/
-│   ├── keyboard.c      # PS/2 keyboard driver
-│   └── timer.c         # PIT timer driver
-├── Makefile            # Build system
-└── README.md           # This file
+│   ├── keyboard.c          # PS/2 keyboard
+│   ├── timer.c             # PIT timer
+│   ├── framebuffer.c       # VESA graphics
+│   └── font.c              # 8×16 bitmap font
+├── build/                  # Build output directory
+│   └── dist/               # Final binaries
+└── Makefile
 ```
-
-## Features in Detail
-
-### VGA Terminal
-- 16 foreground colors, 8 background colors
-- Automatic scrolling when screen fills
-- Support for newline (`\n`), carriage return (`\r`), backspace (`\b`), and tab (`\t`)
-- Screen clearing capability
-
-### Interrupts
-- Proper PIC remapping to avoid conflicts with CPU exceptions
-- ISRs for all 32 CPU exceptions with descriptive error messages
-- IRQs for all 16 hardware interrupts
-- EOI (End of Interrupt) handling for master and slave PICs
-
-### Keyboard
-- US QWERTY layout
-- Scancode to ASCII translation
-- Shift key support for uppercase and symbols
-- Ring buffer for input storage
-- Live echo to terminal
-
-### Timer
-- Configurable frequency (currently 100Hz)
-- Tick counting for system uptime
-- Usesinterrupt IRQ0
 
 ## Development Status
 
-**Completed:**
-- ✅ Bootloader and kernel setup
-- ✅ VGA text mode driver
-- ✅ GDT implementation
-- ✅ IDT and interrupt handling
-- ✅ PIC configuration
-- ✅ Timer driver (PIT)
-- ✅ Keyboard driver (PS/2)
+| Phase | Status | Description |
+|-------|--------|-------------|
+| 1. Environment Setup | ✅ Complete | Toolchain, QEMU, Makefile |
+| 2. Bare Bones Kernel | ✅ Complete | Boot, VGA terminal |
+| 3. Core Initialization | ✅ Complete | GDT, IDT, ISR, IRQ, PIC |
+| 4. Drivers | ✅ Complete | Timer, keyboard, framebuffer |
+| 5. Memory Management | ✅ Complete | PMM, paging, heap |
+| 6. Process Management | ✅ Complete | Processes, scheduler, TSS |
+| 7. System Calls | ✅ Complete | int 0x80 interface |
+| 8. File System | 🔲 Planned | VFS, initrd, FAT32 |
+| 9. Shell | ✅ Complete | 18 built-in commands |
+| 10. Testing | ✅ Working | QEMU + real hardware tested |
 
-**In Progress:**
-- 🔄 Memory management (physical/virtual)
-- 🔄 Process management and scheduling
-- 🔄 File system support
-- 🔄 User mode and system calls
-- 🔄 Shell/command interface
+## Known Limitations
 
-## Testing
+- **32-bit only** - 4GB address space limit
+- **No disk I/O** - File system not yet implemented  
+- **No ACPI** - Poweroff works on VMs only, halts on real hardware
+- **Legacy BIOS only** - No UEFI support
 
-The OS boots in QEMU and displays:
-1. Welcome banner
-2. Memory information from multiboot
-3. Initialization of each component
-4. Feature list
-5. Interactive prompt where you can type
+## Future Plans
 
-Try typing on the keyboard - all input is echoed to the screen in real-time!
+- [ ] ATA/AHCI disk driver
+- [ ] File system (FAT32 or custom)
+- [ ] ACPI for real hardware power management
+- [ ] Consider 64-bit long mode migration
+- [ ] User-space program execution
 
 ## License
 
-This is an educational project. Feel free to use and modify as needed.
+Educational project. Free to use and modify.
 
 ## References
 
 - [OSDev Wiki](https://wiki.osdev.org/)
-- [OSDev Bare Bones Tutorial](https://wiki.osdev.org/Bare_Bones)
+- [OSDev Bare Bones](https://wiki.osdev.org/Bare_Bones)
 - [OSDev Meaty Skeleton](https://wiki.osdev.org/Meaty_Skeleton)
