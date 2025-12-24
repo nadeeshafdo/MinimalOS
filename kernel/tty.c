@@ -8,6 +8,10 @@
 #define VGA_HEIGHT 25
 #define VGA_MEMORY 0xB8000
 
+/* VGA CRTC ports for cursor control */
+#define VGA_CRTC_INDEX 0x3D4
+#define VGA_CRTC_DATA  0x3D5
+
 static uint16_t* const VGA_BUFFER = (uint16_t*) VGA_MEMORY;
 static size_t terminal_row;
 static size_t terminal_column;
@@ -26,6 +30,11 @@ static inline void terminal_release(void) {
     __sync_lock_release(&terminal_lock);
 }
 
+/* I/O port operations */
+static inline void outb(uint16_t port, uint8_t value) {
+    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
+}
+
 /* Helper to create VGA entry (character + color) */
 static inline uint16_t vga_entry(unsigned char uc, uint8_t color) {
     return (uint16_t) uc | (uint16_t) color << 8;
@@ -37,6 +46,24 @@ static size_t strlen(const char* str) {
     while (str[len])
         len++;
     return len;
+}
+
+/* Update hardware cursor position */
+static void update_cursor(void) {
+    uint16_t pos = terminal_row * VGA_WIDTH + terminal_column;
+    
+    outb(VGA_CRTC_INDEX, 0x0F);  /* Cursor location low register */
+    outb(VGA_CRTC_DATA, (uint8_t)(pos & 0xFF));
+    outb(VGA_CRTC_INDEX, 0x0E);  /* Cursor location high register */
+    outb(VGA_CRTC_DATA, (uint8_t)((pos >> 8) & 0xFF));
+}
+
+/* Enable the hardware cursor */
+static void enable_cursor(uint8_t cursor_start, uint8_t cursor_end) {
+    outb(VGA_CRTC_INDEX, 0x0A);  /* Cursor start register */
+    outb(VGA_CRTC_DATA, cursor_start);
+    outb(VGA_CRTC_INDEX, 0x0B);  /* Cursor end register */
+    outb(VGA_CRTC_DATA, cursor_end);
 }
 
 void terminal_initialize(void) {
@@ -51,6 +78,10 @@ void terminal_initialize(void) {
             VGA_BUFFER[index] = vga_entry(' ', terminal_color);
         }
     }
+    
+    /* Enable and position cursor (underline style: scanlines 13-14) */
+    enable_cursor(13, 14);
+    update_cursor();
 }
 
 void terminal_setcolor(uint8_t color) {
@@ -92,6 +123,7 @@ void terminal_putchar(char c) {
         if (++terminal_row == VGA_HEIGHT) {
             terminal_scroll();
         }
+        update_cursor();
         terminal_release();
         return;
     }
@@ -99,6 +131,7 @@ void terminal_putchar(char c) {
     /* Handle carriage return */
     if (c == '\r') {
         terminal_column = 0;
+        update_cursor();
         terminal_release();
         return;
     }
@@ -108,6 +141,7 @@ void terminal_putchar(char c) {
         if (terminal_column > 0) {
             terminal_column--;
             terminal_putentryat(' ', terminal_color, terminal_column, terminal_row);
+            update_cursor();
         }
         terminal_release();
         return;
@@ -122,6 +156,7 @@ void terminal_putchar(char c) {
                 terminal_scroll();
             }
         }
+        update_cursor();
         terminal_release();
         return;
     }
@@ -136,6 +171,7 @@ void terminal_putchar(char c) {
         }
     }
     
+    update_cursor();
     terminal_release();
 }
 
@@ -158,4 +194,6 @@ void terminal_clear(void) {
             VGA_BUFFER[index] = vga_entry(' ', terminal_color);
         }
     }
+    
+    update_cursor();
 }

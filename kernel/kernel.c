@@ -15,6 +15,7 @@
 #include <kernel/scheduler.h>
 #include <kernel/syscall.h>
 #include <kernel/shell.h>
+#include <kernel/framebuffer.h>
 
 /* Verify target architecture */
 #if !defined(__i386__) && !defined(__x86_64__)
@@ -86,6 +87,23 @@ void kernel_main(uint32_t multiboot_magic, struct multiboot_info* multiboot_info
     terminal_writestring("[OK]");
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
     terminal_writestring(" Multiboot compliant bootloader detected\n");
+    
+    /* Initialize framebuffer if available */
+    if (fb_init(multiboot_info)) {
+        framebuffer_info_t *fb = fb_get_info();
+        terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+        terminal_writestring("[OK]");
+        terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
+        terminal_writestring(" Framebuffer: ");
+        print_hex(fb->width);
+        terminal_writestring("x");
+        print_hex(fb->height);
+        terminal_writestring("x");
+        print_hex(fb->bpp);
+        terminal_writestring("\n");
+    } else {
+        terminal_writestring("     Using VGA text mode (no framebuffer)\n");
+    }
     
     /* Display memory information */
     if (multiboot_info->flags & 0x01) {

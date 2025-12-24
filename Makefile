@@ -55,7 +55,9 @@ KERNEL_SOURCES := \
 
 DRIVER_SOURCES := \
 	$(DRIVERDIR)/timer.c \
-	$(DRIVERDIR)/keyboard.c
+	$(DRIVERDIR)/keyboard.c \
+	$(DRIVERDIR)/framebuffer.c \
+	$(DRIVERDIR)/font.c
 
 ARCH_ASM_SOURCES := \
 	$(ARCHDIR)/boot.s \
