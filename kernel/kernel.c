@@ -135,20 +135,68 @@ void shell_execute(void) {
         puts("\n");
         set_color(VGA_COLOR(11, 0)); puts("Available commands:\n");
         set_color(VGA_COLOR(15, 0));
-        puts("  help     - Show this help\n");
-        puts("  clear    - Clear screen\n");
-        puts("  uptime   - Show system uptime\n");
-        puts("  mem      - Show memory info\n");
-        puts("  ps       - List processes\n");
-        puts("  ls       - List files\n");
-        puts("  cat FILE - Display file contents\n");
-        puts("  syscall  - Test syscall interface\n");
-        puts("  usermode - Run user mode demo\n");
-        puts("  reboot   - Reboot system\n");
-        puts("  halt     - Halt CPU\n");
+        puts("  help      - Show this help\n");
+        puts("  clear     - Clear screen\n");
+        puts("  echo TEXT - Print text\n");
+        puts("  uptime    - Show system uptime\n");
+        puts("  date      - Show date/time\n");
+        puts("  info      - System information\n");
+        puts("  mem       - Memory info\n");
+        puts("  ps        - List processes\n");
+        puts("  ls        - List files\n");
+        puts("  cat FILE  - Display file\n");
+        puts("  syscall   - Test syscalls\n");
+        puts("  usermode  - Userspace status\n");
+        puts("  reboot    - Reboot system\n");
+        puts("  halt      - Halt CPU\n");
     }
     else if (strcmp(cmd_buffer, "clear") == 0) {
         clear_screen();
+    }
+    else if (cmd_buffer[0] == 'e' && cmd_buffer[1] == 'c' && cmd_buffer[2] == 'h' && 
+             cmd_buffer[3] == 'o' && cmd_buffer[4] == ' ') {
+        puts("\n");
+        puts(cmd_buffer + 5);
+        puts("\n");
+    }
+    else if (strcmp(cmd_buffer, "date") == 0) {
+        puts("\n");
+        set_color(VGA_COLOR(11, 0));
+        puts("System Time:\n");
+        set_color(VGA_COLOR(15, 0));
+        puts("  Uptime: ");
+        uint64_t secs = timer_get_uptime();
+        uint64_t mins = secs / 60;
+        uint64_t hours = mins / 60;
+        print_dec(hours); puts("h ");
+        print_dec(mins % 60); puts("m ");
+        print_dec(secs % 60); puts("s\n");
+        set_color(VGA_COLOR(7, 0));
+        puts("  (No RTC driver - showing uptime)\n");
+        set_color(VGA_COLOR(15, 0));
+    }
+    else if (strcmp(cmd_buffer, "info") == 0) {
+        puts("\n");
+        set_color(VGA_COLOR(14, 0));
+        puts("╔══════════════════════════════════════╗\n");
+        puts("║      MinimalOS System Information    ║\n");
+        puts("╚══════════════════════════════════════╝\n");
+        set_color(VGA_COLOR(11, 0)); puts("  Version: ");
+        set_color(VGA_COLOR(15, 0)); puts("0.1.0\n");
+        set_color(VGA_COLOR(11, 0)); puts("  Arch:    ");
+        set_color(VGA_COLOR(15, 0)); puts("x86_64 (Long Mode)\n");
+        set_color(VGA_COLOR(11, 0)); puts("  Memory:  ");
+        set_color(VGA_COLOR(15, 0)); print_dec(pmm_get_total_memory() / 1024 / 1024); puts(" MB\n");
+        set_color(VGA_COLOR(11, 0)); puts("  Heap:    ");
+        set_color(VGA_COLOR(15, 0)); print_dec(kheap_get_free() / 1024); puts(" KB free\n");
+        set_color(VGA_COLOR(11, 0)); puts("  Procs:   ");
+        set_color(VGA_COLOR(15, 0)); print_dec(process_count()); puts("\n");
+        set_color(VGA_COLOR(11, 0)); puts("  Files:   ");
+        set_color(VGA_COLOR(15, 0));
+        extern uint32_t initrd_get_file_count(void);
+        print_dec(initrd_get_file_count()); puts(" in initrd\n");
+        set_color(VGA_COLOR(11, 0)); puts("  Timer:   ");
+        set_color(VGA_COLOR(15, 0)); puts("100 Hz\n");
     }
     else if (strcmp(cmd_buffer, "uptime") == 0) {
         puts("\nUptime: ");
