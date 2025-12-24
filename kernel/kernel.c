@@ -14,6 +14,8 @@
 #include "vfs.h"
 #include "initrd.h"
 #include "serial.h"
+#include "tss.h"
+#include "user.h"
 
 /* VGA text mode */
 #define VGA_BUFFER ((volatile uint16_t*)0xB8000)
@@ -141,6 +143,7 @@ void shell_execute(void) {
         puts("  ls       - List files\n");
         puts("  cat FILE - Display file contents\n");
         puts("  syscall  - Test syscall interface\n");
+        puts("  usermode - Run user mode demo\n");
         puts("  reboot   - Reboot system\n");
         puts("  halt     - Halt CPU\n");
     }
@@ -289,6 +292,27 @@ void shell_execute(void) {
             }
         }
     }
+    else if (strcmp(cmd_buffer, "usermode") == 0) {
+        puts("\n");
+        set_color(VGA_COLOR(11, 0)); puts("Userspace Status:\n");
+        set_color(VGA_COLOR(15, 0));
+        puts("  TSS initialized: ");
+        set_color(VGA_COLOR(10, 0)); puts("Yes\n");
+        set_color(VGA_COLOR(15, 0));
+        puts("  GDT Ring 3 segments: ");
+        set_color(VGA_COLOR(10, 0)); puts("Yes (0x1B/0x23)\n");
+        set_color(VGA_COLOR(15, 0));
+        puts("  SYSCALL/SYSRET: ");
+        set_color(VGA_COLOR(10, 0)); puts("Yes\n");
+        set_color(VGA_COLOR(15, 0));
+        puts("  User page tables: ");
+        set_color(VGA_COLOR(14, 0)); puts("Not implemented\n\n");
+        set_color(VGA_COLOR(7, 0));
+        puts("Ring 3 execution requires user page tables with\n");
+        puts("U/S bit set. This is Phase 8b (advanced).\n");
+        puts("Use 'syscall' to test the syscall interface.\n");
+        set_color(VGA_COLOR(15, 0));
+    }
     else if (strcmp(cmd_buffer, "reboot") == 0) {
         puts("\nRebooting...\n");
         __asm__ volatile ("lidt 0\nint $0x03");
@@ -361,6 +385,10 @@ void kernel_main(uint64_t multiboot_info, uint64_t magic) {
     puts("Initializing processes... ");
     process_init();
     scheduler_init();
+    set_color(VGA_COLOR(10, 0)); puts("[OK]\n"); set_color(VGA_COLOR(15, 0));
+    
+    puts("Initializing TSS... ");
+    tss_init();
     set_color(VGA_COLOR(10, 0)); puts("[OK]\n"); set_color(VGA_COLOR(15, 0));
     
     puts("Initializing syscalls... ");

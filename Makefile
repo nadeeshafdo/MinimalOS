@@ -34,7 +34,9 @@ ASM_SOURCES := \
 	$(ARCHDIR)/boot.asm \
 	$(KERNELDIR)/arch/x86_64/isr_stubs.asm \
 	$(KERNELDIR)/arch/x86_64/switch.asm \
-	$(KERNELDIR)/arch/x86_64/syscall.asm
+	$(KERNELDIR)/arch/x86_64/syscall.asm \
+	$(KERNELDIR)/arch/x86_64/tss.asm \
+	$(KERNELDIR)/arch/x86_64/user.asm
 
 # Source files - C
 C_SOURCES := \
@@ -43,6 +45,7 @@ C_SOURCES := \
 	$(KERNELDIR)/syscall.c \
 	$(KERNELDIR)/arch/x86_64/idt.c \
 	$(KERNELDIR)/arch/x86_64/pic.c \
+	$(KERNELDIR)/arch/x86_64/tss_setup.c \
 	$(KERNELDIR)/mm/pmm.c \
 	$(KERNELDIR)/mm/kheap.c \
 	$(KERNELDIR)/process/process.c \
@@ -50,6 +53,7 @@ C_SOURCES := \
 	$(KERNELDIR)/fs/vfs.c \
 	$(KERNELDIR)/fs/initrd.c \
 	$(KERNELDIR)/fs/demo_initrd.c \
+	$(KERNELDIR)/user/user.c \
 	drivers/timer.c \
 	drivers/keyboard.c \
 	drivers/serial.c
@@ -81,6 +85,7 @@ dirs:
 	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/mm
 	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/process
 	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/fs
+	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/user
 	@mkdir -p $(BUILDDIR)/drivers
 
 $(KERNEL): $(ALL_OBJS)
