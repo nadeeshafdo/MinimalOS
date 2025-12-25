@@ -90,7 +90,7 @@ $(ISO): $(KERNEL)
 # Run in QEMU
 run: $(ISO)
 	@echo "Starting QEMU..."
-	qemu-system-x86_64 -cdrom $(ISO) -serial stdio -no-reboot -no-shutdown
+	qemu-system-x86_64 -cdrom $(ISO) -serial stdio
 
 # Clean build artifacts
 clean:
