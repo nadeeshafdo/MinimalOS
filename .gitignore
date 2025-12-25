@@ -1,2 +1,10 @@
-build
-dist
+build/
+dist/
+iso/
+*.o
+*.elf
+*.iso
+*.bin
+*.img
+.vscode/
+.idea/
