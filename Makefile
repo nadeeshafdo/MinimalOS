@@ -37,10 +37,10 @@ BOOT_OBJ := $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(BOOT_ASM))
 KERNEL_ASM_OBJ := $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(KERNEL_ASM))
 KERNEL_C_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(KERNEL_C))
 
-# Embedded test ELF
-TEST_ELF_OBJ := userspace/test_elf_data.o
+# Embedded shell ELF
+SHELL_ELF_OBJ := userspace/shell_elf_data.o
 
-ALL_OBJ := $(BOOT_OBJ) $(KERNEL_ASM_OBJ) $(KERNEL_C_OBJ) $(TEST_ELF_OBJ)
+ALL_OBJ := $(BOOT_OBJ) $(KERNEL_ASM_OBJ) $(KERNEL_C_OBJ) $(SHELL_ELF_OBJ)
 
 # Kernel binary
 KERNEL := $(BUILD_DIR)/kernel.elf
@@ -78,15 +78,15 @@ $(BUILD_DIR)/kernel/%.o: $(SRC_DIR)/kernel/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Build test ELF binary
-userspace/test.elf: userspace/test.c
-	@echo "Building test ELF binary..."
+# Build shell ELF binary
+userspace/shell.elf: userspace/shell/shell.c
+	@echo "Building shell ELF binary..."
 	@mkdir -p userspace
-	gcc -nostdlib -static -fno-pie -m64 -o $@ $< -Wl,--entry=_start -Wl,-Ttext=0x400000
+	gcc -nostdlib -static -fno-pie -m64 -o $@ $< -Wl,--entry=_start -Wl,-Ttext=0x400000 -Wl,--build-id=none
 
-# Embed test ELF as object
-userspace/test_elf_data.o: userspace/test.elf
-	@echo "Embedding test ELF..."
+# Embed shell ELF as object
+userspace/shell_elf_data.o: userspace/shell.elf
+	@echo "Embedding shell ELF..."
 	objcopy -I binary -O elf64-x86-64 -B i386 \
 		--rename-section .data=.rodata,alloc,load,readonly,data,contents \
 		$< $@

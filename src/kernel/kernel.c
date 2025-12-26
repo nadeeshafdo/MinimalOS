@@ -257,6 +257,7 @@ void kernel_main(struct multiboot_info* mbi) {
     // Initialize system calls
     syscall_init();
     
+    /* Disable demo kernel threads for clean shell experience
     // Create and start test kernel threads
     printk("========================================\n");
     printk("Starting Kernel Threads (Multitasking Demo)\n");
@@ -273,43 +274,44 @@ void kernel_main(struct multiboot_info* mbi) {
         process_setup_kernel_thread(thread2, kernel_thread_2);
         scheduler_add_process(thread2);
     }
+    */
     
     printk("\nEnabling scheduler...\n");
     scheduler_enable();
     
-    printk("[Kernel] Scheduler started! Threads should run...\n\n");
+    printk("[Kernel] Scheduler started!\n\n");
     
-    // Test ELF loader with embedded binary
+    // Test ELF loader with embedded shell binary
     printk("========================================\n");
-    printk("Testing ELF Loader\n");
+    printk("Loading Shell\n");
     printk("========================================\n\n");
     
     // Symbols created by objcopy for embedded binary
-    extern u8 _binary_userspace_test_elf_start[];
-    extern u8 _binary_userspace_test_elf_end[];
+    extern u8 _binary_userspace_shell_elf_start[];
+    extern u8 _binary_userspace_shell_elf_end[];
     
-    size_t elf_size = _binary_userspace_test_elf_end - _binary_userspace_test_elf_start;
-    printk("[Kernel] Embedded test ELF: %p, size: %lu bytes\n", 
-           _binary_userspace_test_elf_start, elf_size);
+    size_t elf_size = _binary_userspace_shell_elf_end - _binary_userspace_shell_elf_start;
+    printk("[Kernel] Embedded shell ELF: %p, size: %lu bytes\n", 
+           _binary_userspace_shell_elf_start, elf_size);
     
-    // Validate the ELF
-    if (elf_validate(_binary_userspace_test_elf_start)) {
+    // Validate the shell ELF
+    if (elf_validate(_binary_userspace_shell_elf_start)) {
         printk("[Kernel] ELF validation passed!\n");
         
         // Get entry point
-        u64 entry = elf_get_entry(_binary_userspace_test_elf_start);
+        u64 entry = elf_get_entry(_binary_userspace_shell_elf_start);
         printk("[Kernel] Entry point: 0x%lx\n", entry);
         
-        // Create user process
-        process_t* user_proc = process_create("user_test");
-        if (user_proc) {
-            // Load ELF
-            if (elf_load(user_proc, _binary_userspace_test_elf_start, elf_size) == 0) {
-                printk("[Kernel] ELF loaded into process '%s' (PID %u)\n", 
-                       user_proc->name, user_proc->pid);
-                scheduler_add_process(user_proc);
+        // Create shell process
+        process_t* shell_proc = process_create("shell");
+        if (shell_proc) {
+            // Load shell ELF
+            if (elf_load(shell_proc, _binary_userspace_shell_elf_start, elf_size) == 0) {
+                printk("[Kernel] Shell loaded into process '%s' (PID %u)\n", 
+                       shell_proc->name, shell_proc->pid);
+                scheduler_add_process(shell_proc);
             } else {
-                printk("[Kernel] Failed to load ELF!\n");
+                printk("[Kernel] Failed to load shell!\n");
             }
         }
     } else {
