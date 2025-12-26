@@ -29,7 +29,8 @@ KERNEL_C := $(wildcard $(SRC_DIR)/kernel/*.c) \
             $(wildcard $(SRC_DIR)/kernel/mm/*.c) \
             $(wildcard $(SRC_DIR)/kernel/process/*.c) \
             $(wildcard $(SRC_DIR)/kernel/ipc/*.c) \
-            $(wildcard $(SRC_DIR)/kernel/loader/*.c)
+            $(wildcard $(SRC_DIR)/kernel/loader/*.c) \
+            $(wildcard $(SRC_DIR)/kernel/fs/*.c)
 
 # Object files
 BOOT_OBJ := $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(BOOT_ASM))
