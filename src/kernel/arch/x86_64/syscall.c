@@ -4,6 +4,7 @@
 #include "../../lib/printk.h"
 #include "../../lib/string.h"
 #include "../../process/process.h"
+#include "../../ipc/ipc.h"
 
 extern void syscall_entry(void);
 
@@ -75,24 +76,11 @@ void syscall_init(void) {
     printk("[SYSCALL] Initialized\n");
 }
 
-void syscall_handler_c(u64 syscall_num, u64 arg1, u64 arg2, u64 arg3) {
+u64 syscall_handler_c(u64 syscall_num, u64 arg1, u64 arg2, u64 arg3) {
     (void)arg3; // Unused for now
     
     // Current process
     process_t* current = process_get_current();
-    
-    // Mapping: arg1=UserRDI(fd), arg2=UserRSI(msg), arg3=UserRDX(len)
-    // Wait, syscall_entry passes:
-    // Handler Arg1(RDI) = RAX (Num)
-    // Handler Arg2(RSI) = User RDI (fd)
-    // Handler Arg3(RDX) = User RSI (msg)
-    // Handler Arg4(RCX) = User RDX (len)
-    
-    // So arguments to this function are:
-    // syscall_num
-    // arg1 = User RDI (fd)
-    // arg2 = User RSI (msg)
-    // arg3 = User RDX (len)
     
     if (syscall_num == 1) { // SYS_WRITE
          // fd is arg1, buf is arg2, len is arg3
@@ -101,12 +89,30 @@ void syscall_handler_c(u64 syscall_num, u64 arg1, u64 arg2, u64 arg3) {
              const char* msg = (const char*)arg2;
              printk("[USER %u] %s", current->pid, msg);
          }
+         return 0; // Success
     } else if (syscall_num == 60) { // SYS_EXIT
         printk("[USER %u] Exiting with code %lu\n", current->pid, arg1);
-        // process_exit(arg1);
+        process_exit(arg1); // Actually exit!
         while(1);
+        return 0;
+    } else if (syscall_num == 8) { // SYS_IPC_SEND
+        // arg1 = dest_pid, arg2 = msg_ptr
+        u32 dest = (u32)arg1;
+        ipc_message_t* msg = (ipc_message_t*)arg2;
+        
+        // TODO: Validate pointer
+        return (u64)ipc_send_message(dest, msg);
+        
+    } else if (syscall_num == 9) { // SYS_IPC_RECV
+        // arg1 = from_pid_ptr (u32*), arg2 = buffer_ptr
+        u32* from_pid = (u32*)arg1;
+        ipc_message_t* buffer = (ipc_message_t*)arg2;
+        
+        return (u64)ipc_receive_message(from_pid, buffer);
+        
     } else {
         printk("[SYSCALL] Unknown syscall %lu from PID %u\n", syscall_num, current->pid);
+        return -1; // Error
     }
 }
 

@@ -1,32 +1,46 @@
-// Minimal user-space test program with syscalls
+#define SYS_WRITE 1
+#define SYS_EXIT 60
+#define SYS_IPC_SEND 8
+#define SYS_IPC_RECV 9
+
+typedef unsigned long u64;
+typedef unsigned int u32;
+typedef unsigned char u8;
+
+typedef struct {
+    u32 sender_pid;
+    u32 receiver_pid;
+    u32 type;
+    u32 length;
+    u8 data[1024];
+} ipc_message_t;
+
+void syscall(u64 num, u64 arg1, u64 arg2, u64 arg3) {
+    __asm__ volatile (
+        "mov %0, %%rax\n"
+        "mov %1, %%rdi\n"
+        "mov %2, %%rsi\n"
+        "mov %3, %%rdx\n"
+        "syscall"
+        : 
+        : "r"(num), "r"(arg1), "r"(arg2), "r"(arg3)
+        : "rax", "rdi", "rsi", "rdx", "rcx", "r11"
+    );
+}
 
 void _start(void) {
-    // Test write syscall (Num 1)
-    const char* msg = "Hello from User Space via Syscall!\n";
+    syscall(SYS_WRITE, 1, (u64)"Waiting for IPC message...\n", 27);
     
-    // syscall(1, 0, msg, 0)
-    // RAX=1, RDI=0, RSI=msg
-    __asm__ volatile(
-        "mov $1, %%rax\n"
-        "mov $0, %%rdi\n"
-        "mov %0, %%rsi\n"
-        "syscall\n"
-        : 
-        : "r"(msg) 
-        : "rax", "rdi", "rsi", "rcx", "r11"
-    );
+    ipc_message_t msg;
+    u32 from_pid = 0;
     
-    // Test exit syscall (Num 60)
-    // syscall(60, 0, 0, 0)
-    // RAX=60, RDI=0 (exit code)
-    __asm__ volatile(
-        "mov $60, %%rax\n"
-        "mov $0, %%rdi\n"
-        "syscall\n"
-        : 
-        : 
-        : "rax", "rdi", "rcx", "r11"
-    );
+    // This should block until kernel thread sends message
+    syscall(SYS_IPC_RECV, (u64)&from_pid, (u64)&msg, 0);
     
+    syscall(SYS_WRITE, 1, (u64)"Received Message: ", 18);
+    syscall(SYS_WRITE, 1, (u64)msg.data, msg.length);
+    syscall(SYS_WRITE, 1, (u64)"\n", 1);
+    
+    syscall(SYS_EXIT, 0, 0, 0);
     while(1);
 }

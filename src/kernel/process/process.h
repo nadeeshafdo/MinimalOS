@@ -3,6 +3,7 @@
 
 #include "../include/types.h"
 #include "../mm/vmm.h"
+#include "../ipc/ipc.h"
 
 #define MAX_PROCESSES 256
 #define KERNEL_STACK_SIZE 16384   // 16KB
@@ -37,6 +38,13 @@ typedef struct process {
     
     cpu_context_t* context;           // Saved CPU context
     page_directory_t* page_directory; // Virtual memory space
+    
+    // IPC Mailbox (Ring Buffer)
+    ipc_message_t mailbox[MAX_MAILBOX_SIZE];
+    u32 mailbox_head;
+    u32 mailbox_tail;
+    u32 mailbox_count;
+    u8 blocked_on_receive;            // True if waiting for a message
     
     uintptr kernel_stack;             // Kernel mode stack (16KB)
     uintptr user_stack;               // User mode stack top (for ELF processes)

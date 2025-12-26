@@ -3,6 +3,7 @@
 #include "drivers/vga.h"
 #include "drivers/timer.h"
 #include "lib/printk.h"
+#include "lib/string.h"
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
 #include "mm/pmm.h"
@@ -12,6 +13,8 @@
 #include "process/scheduler.h"
 #include "loader/elf.h"
 #include "arch/x86_64/syscall.h"
+#include "ipc/ipc.h"
+#include "ipc/ipc.h"
 
 // Multiboot2 structures
 struct multiboot_tag {
@@ -32,6 +35,23 @@ void kernel_thread_1(void) {
         printk("[Thread 1] Iteration %d\n", i);
         yield();  // Give other threads a chance
     }
+    
+    // Send IPC Message to User Process (PID 3)
+    printk("[Thread 1] Sending IPC message to PID 3...\n");
+    ipc_message_t msg;
+    msg.type = 1;
+    msg.length = 18;
+    // msg.data should be set safely
+    const char* txt = "Hello from Kernel";
+    memcpy(msg.data, txt, 18); // Includes null terminator
+    
+    int result = ipc_send_message(3, &msg);
+    if (result == 0) {
+        printk("[Thread 1] IPC Send Success! Waking up PID 3.\n");
+    } else {
+        printk("[Thread 1] IPC Send Failed: %d\n", result);
+    }
+
     printk("[Thread 1] Exiting.\n");
     process_exit(0);
 }

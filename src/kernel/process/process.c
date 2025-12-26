@@ -3,6 +3,7 @@
 #include "../mm/heap.h"
 #include "../lib/string.h"
 #include "../lib/printk.h"
+#include "scheduler.h"
 
 static process_t* process_table[MAX_PROCESSES];
 static u32 next_pid = 1;
@@ -54,9 +55,17 @@ process_t* process_create(const char* name) {
     proc->pid = (pid == 0) ? 0 : next_pid++;
     strncpy(proc->name, name, sizeof(proc->name) - 1);
     proc->state = PROCESS_STATE_CREATED;
-    proc->parent = current_process;
+    proc->parent = NULL;
     proc->next = NULL;
     proc->exit_code = 0;
+    
+    // Initialize IPC mailbox
+    proc->mailbox_head = 0;
+    proc->mailbox_tail = 0;
+    proc->mailbox_count = 0;
+    proc->blocked_on_receive = 0;
+    
+    // Initialize file descriptors as NULL0;
     proc->priority = 0;
     proc->time_slice = 0;
     
@@ -129,6 +138,9 @@ void process_setup_kernel_thread(process_t* proc, void (*entry_point)(void)) {
     
     // Set callee-saved registers to known state
     proc->context->rbp = 0;  // Frame pointer (null for initial frame)
+    proc->context->rflags = 0x202; // IF=1, Reserved=1
+    proc->context->cs = 0x08;      // Kernel Code
+    proc->context->ss = 0x10;      // Kernel Data
     
     // Set RFLAGS with interrupts enabled (bit 9 = IF)
     proc->context->rflags = 0x202;
@@ -176,6 +188,8 @@ process_t* process_get_current(void) {
     return current_process;
 }
 
+
+
 void process_set_current(process_t* proc) {
     current_process = proc;
 }
@@ -185,15 +199,20 @@ void process_exit(int code) {
         return;
     }
     
-    printk("[PROCESS] Process '%s' (PID %u) exiting with code %d\n", 
-           current_process->name, current_process->pid, code);
+    printk("[PROCESS] PID %u exiting with code %d\n", current_process->pid, code);
     
     current_process->state = PROCESS_STATE_ZOMBIE;
     current_process->exit_code = code;
     
-    // TODO: Wake up parent if waiting
-    // TODO: Trigger scheduler to switch to another process
+    // We should notify parent here, but for now just yield forever
+    // The idle process or a reaper would free it.
+    // For now we leak memory to be safe.
+    
+    while(1) {
+        yield();
+    }
 }
+
 
 process_t* process_get_by_pid(u32 pid) {
     if (pid >= MAX_PROCESSES) {
