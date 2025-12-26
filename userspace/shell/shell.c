@@ -1,4 +1,4 @@
-// Simple shell for MinimalOS
+// Interactive shell for MinimalOS
 #define SYS_READ  0
 #define SYS_WRITE 1
 #define SYS_OPEN  2
@@ -43,16 +43,6 @@ static int strcmp(const char* s1, const char* s2) {
     return *(unsigned char*)s1 - *(unsigned char*)s2;
 }
 
-static int strncmp(const char* s1, const char* s2, int n) {
-    while (n && *s1 && (*s1 == *s2)) {
-        s1++;
-        s2++;
-        n--;
-    }
-    if (n == 0) return 0;
-    return *(unsigned char*)s1 - *(unsigned char*)s2;
-}
-
 static void strcpy(char* dest, const char* src) {
     while (*src) {
         *dest++ = *src++;
@@ -60,21 +50,16 @@ static void strcpy(char* dest, const char* src) {
     *dest = '\0';
 }
 
+static void* memset(void* dest, int val, unsigned long len) {
+    unsigned char* ptr = dest;
+    while (len-- > 0)
+        *ptr++ = val;
+    return dest;
+}
+
 // Output functions
 static void print(const char* str) {
     syscall3(SYS_WRITE, 1, (u64)str, strlen(str));
-}
-
-static void print_hex(u64 value) {
-    const char* hex = "0123456789abcdef";
-    char buffer[19] = "0x";
-    int i;
-    
-    for (i = 0; i < 16; i++) {
-        buffer[2 + i] = hex[(value >> (60 - i*4)) & 0xF];
-    }
-    buffer[18] = '\0';
-    print(buffer);
 }
 
 // Command buffer
@@ -162,7 +147,7 @@ static void execute_command(void) {
         cmd_pwd();
     } else if (strcmp(cmd, "help") == 0) {
         cmd_help();
-    } else {
+    } else if (cmdlen > 0) {  // Only show error if command not empty
         print("Unknown command: ");
         print(cmd);
         print("\nType 'help' for available commands\n");
@@ -181,36 +166,39 @@ void _start(void) {
         // Print prompt
         print("$ ");
         
-        // Read command (character by character for now, since we don't have stdin yet)
-        // For now, just demonstrate with hardcoded commands
+        // Read command line from stdin
         cmdlen = 0;
+        memset(cmdbuf, 0, sizeof(cmdbuf));
         
-        // Simulate typing "help"
-        print("help\n");
-        strcpy(cmdbuf, "help");
-        cmdlen = 4;
+        while (1) {
+            char c;
+            ssize_t n = syscall3(SYS_READ, 0, (u64)&c, 1);
+            
+            if (n <= 0) {
+                break;  // Error or EOF
+            }
+            
+            if (c == '\n') {
+                // Echo newline
+                syscall3(SYS_WRITE, 1, (u64)"\n", 1);
+                break;  // End of line
+            } else if (c == '\b' || c == 127) {  // Backspace or DEL
+                if (cmdlen > 0) {
+                    cmdlen--;
+                    // Erase character: backspace, space, backspace
+                    syscall3(SYS_WRITE, 1, (u64)"\b \b", 3);
+                }
+            } else if (c >= 32 && c < 127) {  // Printable ASCII
+                if (cmdlen < sizeof(cmdbuf) - 1) {
+                    cmdbuf[cmdlen++] = c;
+                    // Echo character
+                    syscall3(SYS_WRITE, 1, (u64)&c, 1);
+                }
+            }
+        }
+        
+        // Execute the command
         execute_command();
-        
-        print("\n$ ");
-        print("pwd\n");
-        strcpy(cmdbuf, "pwd");
-        cmdlen = 3;
-        execute_command();
-        
-        print("\n$ ");
-        print("ls\n");
-        strcpy(cmdbuf, "ls");
-        cmdlen = 2;
-        execute_command();
-        
-        print("\n$ ");
-        print("exit\n");
-        strcpy(cmdbuf, "exit");
-        cmdlen = 4;
-        execute_command();
-        
-        // Exit after demo
-        break;
     }
     
     while(1);  // Hang

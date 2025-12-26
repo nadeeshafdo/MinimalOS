@@ -2,6 +2,7 @@
 #include "drivers/serial.h"
 #include "drivers/vga.h"
 #include "drivers/timer.h"
+#include "drivers/keyboard.h"
 #include "lib/printk.h"
 #include "lib/string.h"
 #include "arch/x86_64/gdt.h"
@@ -228,6 +229,10 @@ void kernel_main(struct multiboot_info* mbi) {
     
     // Initialize timer
     timer_init();
+    printk("\n");
+    
+    // Initialize keyboard
+    keyboard_init();
     printk("\n");
     
     // Initialize processes

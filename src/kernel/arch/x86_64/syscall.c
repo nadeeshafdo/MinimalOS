@@ -7,6 +7,7 @@
 #include "../../process/fd_table.h"
 #include "../../ipc/ipc.h"
 #include "../../fs/vfs.h"
+#include "../../drivers/keyboard.h"
 
 extern void syscall_entry(void);
 
@@ -92,6 +93,22 @@ u64 syscall_handler_c(u64 syscall_num, u64 arg1, u64 arg2, u64 arg3) {
             return (u64)-1;
         }
         
+        // Special case: stdin (fd=0) reads from keyboard
+        if (fd == STDIN) {
+            size_t bytes_read = 0;
+            while (bytes_read < count) {
+                char c = keyboard_getchar();  // Blocking read
+                buffer[bytes_read++] = c;
+                
+                // Return on newline (line-buffered input)
+                if (c == '\n') {
+                    break;
+                }
+            }
+            return (u64)bytes_read;
+        }
+        
+        // For other file descriptors, read from VFS
         file_descriptor_t* file_desc = fd_get(&current->fd_table, fd);
         if (!file_desc || !file_desc->node) {
             return (u64)-1;
