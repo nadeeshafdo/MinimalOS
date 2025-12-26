@@ -39,7 +39,7 @@ context_switch:
     
     # Save RAX last (we've been using it)
     mov %rax, %r11
-    mov %r11, 112(%r11)
+    mov %r11, 112(%rax)
     
     # Save RIP (return address)  
     mov (%rsp), %r11

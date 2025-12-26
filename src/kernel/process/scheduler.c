@@ -85,7 +85,11 @@ void scheduler_remove_process(process_t* proc) {
 }
 
 void schedule(void) {
+    // Disable interrupts to prevent re-entrance during scheduling
+    __asm__ volatile("cli");
+    
     if (ready_queue_head == NULL) {
+        __asm__ volatile("sti");
         return;  // No processes to schedule
     }
     
@@ -135,19 +139,22 @@ void schedule(void) {
     }
     
     // Perform context switch
-    // For idle process (PID 0), we don't save context - just jump to new thread
-    if (old_proc != NULL && old_proc->pid == 0) {
-        // Directly jump to new thread by loading its context
-        // We'll never return here
+    // Re-enable interrupts before switching (will be restored by context)
+    __asm__ volatile("sti");
+    
+    if (old_proc != NULL) {
+        context_switch(&old_proc->context, next->context);
+    } else {
+        // First time switch (no old process) - just load new context
+        // This should only happen on initial scheduler start
+        // Load the new context manually
         __asm__ volatile(
-            "mov %0, %%rsp\n"      // Load new stack
-            "jmp *%1\n"            // Jump to entry point
+            "mov %0, %%rsp\n"
+            "jmp *%1\n"
             :
             : "r"(next->context->rsp), "r"(next->context->rip)
             : "memory"
         );
-    } else if (old_proc != NULL) {
-        context_switch(&old_proc->context, next->context);
     }
 }
 
