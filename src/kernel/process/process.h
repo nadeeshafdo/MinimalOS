@@ -4,6 +4,7 @@
 #include "../include/types.h"
 #include "../mm/vmm.h"
 #include "../ipc/ipc.h"
+#include "fd_table.h"
 
 #define MAX_PROCESSES 256
 #define KERNEL_STACK_SIZE 16384   // 16KB
@@ -45,6 +46,9 @@ typedef struct process {
     u32 mailbox_tail;
     u32 mailbox_count;
     u8 blocked_on_receive;            // True if waiting for a message
+    
+    // File descriptor table
+    fd_table_t fd_table;              // File descriptors
     
     uintptr kernel_stack;             // Kernel mode stack (16KB)
     uintptr user_stack;               // User mode stack top (for ELF processes)
