@@ -38,15 +38,15 @@ typedef struct process {
     cpu_context_t* context;           // Saved CPU context
     page_directory_t* page_directory; // Virtual memory space
     
-    uintptr kernel_stack;             // Kernel stack address
-    uintptr user_stack;               // User stack address
+    uintptr kernel_stack;             // Kernel mode stack (16KB)
+    uintptr user_stack;               // User mode stack top (for ELF processes)
     
     struct process* parent;           // Parent process
-    struct process* next;             // Next in ready queue
     
     int exit_code;                    // Exit status
     u32 priority;                     // Priority (for future use)
     u64 time_slice;                   // Remaining time slice
+    struct process* next;             // Next in ready queue
 } process_t;
 
 /**

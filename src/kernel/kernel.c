@@ -10,6 +10,7 @@
 #include "mm/heap.h"
 #include "process/process.h"
 #include "process/scheduler.h"
+#include "loader/elf.h"
 
 // Multiboot2 structures
 struct multiboot_tag {
@@ -198,6 +199,32 @@ void kernel_main(struct multiboot_info* mbi) {
     scheduler_enable();
     
     printk("[Kernel] Scheduler started! Threads should run...\n\n");
+    
+    // Test ELF loader with embedded binary
+    printk("========================================\n");
+    printk("Testing ELF Loader\n");
+    printk("========================================\n\n");
+    
+    // Symbols created by objcopy for embedded binary
+    extern u8 _binary_userspace_test_elf_start[];
+    extern u8 _binary_userspace_test_elf_end[];
+    
+    size_t elf_size = _binary_userspace_test_elf_end - _binary_userspace_test_elf_start;
+    printk("[Kernel] Embedded test ELF: %p, size: %lu bytes\n", 
+           _binary_userspace_test_elf_start, elf_size);
+    
+    // Validate the ELF
+    if (elf_validate(_binary_userspace_test_elf_start)) {
+        printk("[Kernel] ELF validation passed!\n");
+        
+        // Get entry point
+        u64 entry = elf_get_entry(_binary_userspace_test_elf_start);
+        printk("[Kernel] Entry point: 0x%lx\n", entry);
+    } else {
+        printk("[Kernel] ELF validation failed!\n");
+    }
+    
+    printk("\n");
     
     // Enable interrupts
     __asm__ volatile("sti");
