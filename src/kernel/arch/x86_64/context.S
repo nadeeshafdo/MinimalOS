@@ -88,11 +88,22 @@ load_new_context:
     push %r11
     popfq
     
-    # Restore RSP
-    mov 144(%rsi), %rsp
+    # Load saved RIP and RSP into temporary registers
+    # We need to do this BEFORE restoring RSI since we're still using it
+    mov 120(%rsi), %r11     # Get saved RIP into r11
+    mov 144(%rsi), %rax     # Get saved RSP into rax
     
-    # Restore RSI last
+    # Restore RSI (we're done using it now)
     mov 80(%rsi), %rsi
     
+    # Restore RSP
+    mov %rax, %rsp
+    
+    # Jump directly to saved RIP
+    # Using jmp instead of ret avoids touching the stack
+    jmp *%r11
+    
 done_context_switch:
+    # This label is only reached when old_ctx is NULL
+    # In that case we just return normally
     ret

@@ -165,16 +165,18 @@ int elf_load(process_t* proc, const void* elf_data, size_t size) {
     // Setup user mode context
     memset(proc->context, 0, sizeof(cpu_context_t));
     
-    // We need to setup the KERNEL stack such that when context_switch returns,
-    // it returns to 'enter_userspace' with the correct arguments initialized.
+    // Set RIP to enter_userspace - context_switch will jump to this
+    proc->context->rip = (u64)enter_userspace;
     
-    // Setup kernel stack frame for return
+    // We need to setup the KERNEL stack for the user process
+    // When context_switch loads this context, it will jump to enter_userspace
+    // with RDI and RSI as arguments
+    
+    // Setup kernel stack pointer
     // Stack grows down from kernel_stack + KERNEL_STACK_SIZE
-    // Note: proc->kernel_stack is the bottom (lowest address), so we add size
-    u64* kstack_top = (u64*)(proc->kernel_stack + KERNEL_STACK_SIZE - 8);
-    *kstack_top = (u64)enter_userspace;  // Return address for context_switch
+    u64* kstack_top = (u64*)(proc->kernel_stack + KERNEL_STACK_SIZE);
     
-    // Set RSP to point to the return address we just pushed
+    // Set RSP to top of kernel stack
     proc->context->rsp = (u64)kstack_top;
     
     // Set arguments for enter_userspace(entry, stack)
