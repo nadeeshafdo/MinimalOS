@@ -18,14 +18,16 @@ long_mode_start:
     mov %ax, %gs
     mov %ax, %ss
     
-    # Setup kernel stack (higher-half address)
+    # Setup kernel stack
     mov $kernel_stack_top, %rsp
     
     # Clear frame pointer for stack traces
     xor %rbp, %rbp
     
-    # Save multiboot info pointer (still in RDI from 32-bit code)
-    # RDI is the first argument in x86_64 calling convention
+    # Multiboot info pointer is in EDI (from 32-bit code)
+    # Zero-extend EDI to RDI for 64-bit (clear upper 32 bits)
+    mov %edi, %edi
+    # Now RDI contains the multiboot info pointer as first argument
     
     # Call kernel main (multiboot info pointer is in RDI)
     call kernel_main
@@ -36,7 +38,7 @@ halt_loop:
     hlt
     jmp halt_loop
 
-# Kernel stack (64KB) in higher-half
+# Kernel stack (64KB)
 .section .bss
 .align 16
 kernel_stack_bottom:

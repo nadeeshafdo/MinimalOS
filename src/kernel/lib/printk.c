@@ -95,6 +95,9 @@ void printk(const char* fmt, ...) {
                     } else if (*fmt == 'd') {
                         i64 val = va_arg(args, i64);
                         print_int(val, 10);
+                    } else if (*fmt == 'u') {
+                        u64 val = va_arg(args, u64);
+                        print_uint(val, 10);
                     }
                     break;
                 }

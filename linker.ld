@@ -7,34 +7,32 @@ SECTIONS
     /* Kernel loaded at 1MB by GRUB */
     . = 1M;
     
-    /* Multiboot header must be in first 32KB */
-    .multiboot ALIGN(4K) : {
-        *(.multiboot)
-    }
+    _kernel_start = .;
     
-    /* Boot code (32-bit and 64-bit) */
-    .text.boot ALIGN(4K) : {
+    /* Boot code with multiboot header FIRST */
+    .text.boot : {
+        *(.multiboot)
         *(.text.boot)
         *(.text.boot64)
     }
     
     /* Main code section */
-    .text ALIGN(4K) : {
+    .text : {
         *(.text)
     }
     
     /* Read-only data */
-    .rodata ALIGN(4K) : {
+    .rodata : {
         *(.rodata*)
     }
     
     /* Initialized data */
-    .data ALIGN(4K) : {
+    .data : {
         *(.data)
     }
     
     /* Uninitialized data */
-    .bss ALIGN(4K) : {
+    .bss : {
         *(COMMON)
         *(.bss)
     }

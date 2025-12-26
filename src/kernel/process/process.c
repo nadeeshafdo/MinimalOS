@@ -1,0 +1,157 @@
+#include "process.h"
+#include "../mm/pmm.h"
+#include "../mm/heap.h"
+#include "../lib/string.h"
+#include "../lib/printk.h"
+
+static process_t* process_table[MAX_PROCESSES];
+static u32 next_pid = 1;
+static process_t* current_process = NULL;
+
+void process_init(void) {
+    printk("[PROCESS] Initializing process management...\n");
+    
+    // Clear process table
+    for (u32 i = 0; i < MAX_PROCESSES; i++) {
+        process_table[i] = NULL;
+    }
+    
+    // Create kernel idle process (PID 0)
+    process_t* idle = process_create("idle");
+    if (idle) {
+        idle->pid = 0;
+        idle->state = PROCESS_STATE_RUNNING;
+        current_process = idle;
+        printk("[PROCESS] Created idle process (PID 0)\n");
+    }
+    
+    printk("[PROCESS] Initialization complete!\n");
+}
+
+process_t* process_create(const char* name) {
+    // Find free PID
+    u32 pid = 0;
+    for (u32 i = 0; i < MAX_PROCESSES; i++) {
+        if (process_table[i] == NULL) {
+            pid = i;
+            break;
+        }
+    }
+    
+    if (pid == 0 && process_table[0] != NULL) {
+        printk("[PROCESS] ERROR: No free PID slots!\n");
+        return NULL;
+    }
+    
+    // Allocate PCB
+    process_t* proc = (process_t*)kzalloc(sizeof(process_t));
+    if (proc == NULL) {
+        printk("[PROCESS] ERROR: Failed to allocate PCB!\n");
+        return NULL;
+    }
+    
+    // Initialize PCB
+    proc->pid = (pid == 0) ? 0 : next_pid++;
+    strncpy(proc->name, name, sizeof(proc->name) - 1);
+    proc->state = PROCESS_STATE_CREATED;
+    proc->parent = current_process;
+    proc->next = NULL;
+    proc->exit_code = 0;
+    proc->priority = 0;
+    proc->time_slice = 0;
+    
+    // Allocate kernel stack
+    proc->kernel_stack = (uintptr)kmalloc(KERNEL_STACK_SIZE);
+    if (proc->kernel_stack == 0) {
+        printk("[PROCESS] ERROR: Failed to allocate kernel stack!\n");
+        kfree(proc);
+        return NULL;
+    }
+    
+    // Allocate user stack (will be mapped later)
+    proc->user_stack = 0;
+    
+    // Create address space
+    proc->page_directory = vmm_create_address_space();
+    if (proc->page_directory == NULL) {
+        printk("[PROCESS] ERROR: Failed to create address space!\n");
+        kfree((void*)proc->kernel_stack);
+        kfree(proc);
+        return NULL;
+    }
+    
+    // Allocate context structure
+    proc->context = (cpu_context_t*)kzalloc(sizeof(cpu_context_t));
+    if (proc->context == NULL) {
+        printk("[PROCESS] ERROR: Failed to allocate context!\n");
+        vmm_destroy_address_space(proc->page_directory);
+        kfree((void*)proc->kernel_stack);
+        kfree(proc);
+        return NULL;
+    }
+    
+    // Add to process table
+    process_table[proc->pid] = proc;
+    
+    printk("[PROCESS] Created process '%s' (PID %u)\n", proc->name, proc->pid);
+    
+    return proc;
+}
+
+void process_destroy(process_t* proc) {
+    if (proc == NULL) {
+        return;
+    }
+    
+    printk("[PROCESS] Destroying process '%s' (PID %u)\n", proc->name, proc->pid);
+    
+    // Remove from process table
+    if (proc->pid < MAX_PROCESSES) {
+        process_table[proc->pid] = NULL;
+    }
+    
+    // Free resources
+    if (proc->context) {
+        kfree(proc->context);
+    }
+    
+    if (proc->kernel_stack) {
+        kfree((void*)proc->kernel_stack);
+    }
+    
+    if (proc->page_directory) {
+        vmm_destroy_address_space(proc->page_directory);
+    }
+    
+    kfree(proc);
+}
+
+process_t* process_get_current(void) {
+    return current_process;
+}
+
+void process_set_current(process_t* proc) {
+    current_process = proc;
+}
+
+void process_exit(int code) {
+    if (current_process == NULL) {
+        return;
+    }
+    
+    printk("[PROCESS] Process '%s' (PID %u) exiting with code %d\n", 
+           current_process->name, current_process->pid, code);
+    
+    current_process->state = PROCESS_STATE_ZOMBIE;
+    current_process->exit_code = code;
+    
+    // TODO: Wake up parent if waiting
+    // TODO: Trigger scheduler to switch to another process
+}
+
+process_t* process_get_by_pid(u32 pid) {
+    if (pid >= MAX_PROCESSES) {
+        return NULL;
+    }
+    return process_table[pid];
+}

@@ -90,37 +90,33 @@ no_long_mode:
     hlt
 
 setup_paging:
-    # Clear page tables
+    # Clear page tables - need to clear in dwords, not bytes
     mov $pml4_table, %edi
-    mov $0x3000, %ecx                  # Clear 12KB (3 page tables)
     xor %eax, %eax
+    mov $1024, %ecx                    # 3 tables * 4096 bytes / 4 = 3072 dwords, round to 1024*3
+    cld
     rep stosl
     
-    # Setup PML4[0] -> PDPT (identity mapping)
+    # Setup PML4[0] -> PDPT (identity mapping only)
     mov $pdp_table, %eax
     or $0x03, %eax                     # Present + Writable
     mov %eax, pml4_table
-    
-    # Setup PML4[511] -> PDPT (higher-half mapping at 0xFFFFFFFF80000000)
-    mov %eax, pml4_table + 511 * 8
     
     # Setup PDPT[0] -> PD
     mov $pd_table, %eax
     or $0x03, %eax
     mov %eax, pdp_table
     
-    # Setup PDPT[510] -> PD (for higher-half)
-    mov %eax, pdp_table + 510 * 8
-    
-    # Map first 2MB using 2MB pages
+    # Identity map first 8MB using 2MB pages (4 entries) to cover multiboot data
     mov $pd_table, %edi
     mov $0x83, %eax                    # Present + Writable + Huge (2MB page)
-    mov $512, %ecx
-.map_pd:
+    mov $4, %ecx                       # 4 entries = 8MB
+    
+.map_loop:
     mov %eax, (%edi)
     add $0x200000, %eax                # Next 2MB
     add $8, %edi
-    loop .map_pd
+    loop .map_loop
     
     ret
 

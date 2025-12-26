@@ -85,7 +85,7 @@ void pmm_init(void* mbi_ptr) {
     
     // Find memory map tag
     tag = (struct multiboot_tag*)((u8*)mbi_ptr + 8);
-    while (tag->type != 0) {
+    while (tag->type != 0 && (u8*)tag < (u8*)mbi_ptr + total_size) {
         if (tag->type == 6) {  // Memory map tag
             mmap_tag = (struct multiboot_tag_mmap*)tag;
             break;
@@ -94,37 +94,46 @@ void pmm_init(void* mbi_ptr) {
     }
     
     if (mmap_tag == NULL) {
-        printk("[PMM] ERROR: No memory map found!\n");
-        return;
+        printk("[PMM] WARNING: No memory map found, using default 128MB\n");
+        total_memory = 128 * 1024 * 1024;
     }
     
     // Calculate total memory and maximum address
     u64 max_addr = 0;
-    size_t entry_count = (mmap_tag->size - sizeof(struct multiboot_tag_mmap)) / mmap_tag->entry_size;
     
-    printk("[PMM] Memory map entries: %u\n", (u32)entry_count);
-    
-    for (size_t i = 0; i < entry_count; i++) {
-        struct multiboot_mmap_entry* entry = &mmap_tag->entries[i];
+    if (mmap_tag != NULL) {
+        total_memory = 0; // Reset, will be calculated from memory map
+        size_t entry_count = (mmap_tag->size - sizeof(struct multiboot_tag_mmap)) / mmap_tag->entry_size;
         
-        if (entry->type == MULTIBOOT_MEMORY_AVAILABLE) {
-            total_memory += entry->len;
-            u64 end_addr = entry->addr + entry->len;
-            if (end_addr > max_addr) {
-                max_addr = end_addr;
-            }
+        printk("[PMM] Memory map entries: %u\n", (u32)entry_count);
+        
+        for (size_t i = 0; i < entry_count; i++) {
+            struct multiboot_mmap_entry* entry = &mmap_tag->entries[i];
             
-            printk("[PMM]   [%lx - %lx] Available (%lu KB)\n", 
-                   entry->addr, end_addr - 1, entry->len / 1024);
-        } else {
-            printk("[PMM]   [%lx - %lx] Reserved (type %u)\n", 
-                   entry->addr, entry->addr + entry->len - 1, entry->type);
+            if (entry->type == MULTIBOOT_MEMORY_AVAILABLE) {
+                total_memory += entry->len;
+                u64 end_addr = entry->addr + entry->len;
+                if (end_addr > max_addr) {
+                    max_addr = end_addr;
+                }
+                
+                printk("[PMM]   [%lx - %lx] Available (%lu KB)\n", 
+                       entry->addr, end_addr - 1, entry->len / 1024);
+            } else {
+                printk("[PMM]   [%lx - %lx] Reserved (type %u)\n", 
+                       entry->addr, entry->addr + entry->len - 1, entry->type);
+            }
         }
+    }
+    
+    // Use total_memory as max if we didn't find specific regions
+    if (max_addr == 0) {
+        max_addr = total_memory;
     }
     
     // Calculate number of frames
     total_frames = max_addr / PAGE_SIZE;
-    size_t bitmap_size = (total_frames + 7) / 8; // Round up to nearest byte
+    size_t bitmap_size = (total_frames + 7) / 8;
     
     printk("[PMM] Total memory: %lu MB\n", total_memory / (1024 * 1024));
     printk("[PMM] Maximum address: %lx\n", max_addr);
@@ -139,19 +148,26 @@ void pmm_init(void* mbi_ptr) {
     memset(frame_bitmap, 0xFF, bitmap_size);
     used_frames = total_frames;
     
-    // Mark available regions as free
-    for (size_t i = 0; i < entry_count; i++) {
-        struct multiboot_mmap_entry* entry = &mmap_tag->entries[i];
-        
-        if (entry->type == MULTIBOOT_MEMORY_AVAILABLE) {
-            u64 start_frame = entry->addr / PAGE_SIZE;
-            u64 end_frame = (entry->addr + entry->len) / PAGE_SIZE;
+    // Mark available regions as free (if we have memmap)
+    if (mmap_tag != NULL) {
+        size_t entry_count = (mmap_tag->size - sizeof(struct multiboot_tag_mmap)) / mmap_tag->entry_size;
+        for (size_t i = 0; i < entry_count; i++) {
+            struct multiboot_mmap_entry* entry = &mmap_tag->entries[i];
             
-            for (u64 frame = start_frame; frame < end_frame; frame++) {
-                bitmap_clear_frame(frame);
-                used_frames--;
+            if (entry->type == MULTIBOOT_MEMORY_AVAILABLE) {
+                u64 start_frame = entry->addr / PAGE_SIZE;
+                u64 end_frame = (entry->addr + entry->len) / PAGE_SIZE;
+                
+                for (u64 frame = start_frame; frame < end_frame; frame++) {
+                    bitmap_clear_frame(frame);
+                    used_frames--;
+                }
             }
         }
+    } else {
+        // No memory map, mark all as free except kernel
+        memset(frame_bitmap, 0x00, bitmap_size);
+        used_frames = 0;
     }
     
     // Reserve kernel area (0 to kernel_end + bitmap)

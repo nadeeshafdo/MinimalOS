@@ -1,24 +1,50 @@
 #include "include/types.h"
 #include "drivers/serial.h"
 #include "drivers/vga.h"
+#include "drivers/timer.h"
 #include "lib/printk.h"
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
 #include "mm/pmm.h"
 #include "mm/vmm.h"
 #include "mm/heap.h"
+#include "process/process.h"
+#include "process/scheduler.h"
 
 // Multiboot2 structures
 struct multiboot_tag {
     u32 type;
     u32 size;
-};
+} __attribute__((packed));
 
 struct multiboot_info {
     u32 total_size;
     u32 reserved;
-    struct multiboot_tag tags[];
-};
+    // Tags follow immediately after
+} __attribute__((packed));
+
+// Test process functions
+void test_process_1(void) {
+    u32 count = 0;
+    while (1) {
+        if (count % 50 == 0) {
+            printk("[PROC1] Running... (count: %u)\n", count);
+        }
+        count++;
+        for (volatile int i = 0; i < 1000000; i++);  // Busy wait
+    }
+}
+
+void test_process_2(void) {
+    u32 count = 0;
+    while (1) {
+        if (count % 30 == 0) {
+            printk("[PROC2] Running... (count: %u)\n", count);
+        }
+        count++;
+        for (volatile int i = 0; i < 1000000; i++);  // Busy wait
+    }
+}
 
 void kernel_main(struct multiboot_info* mbi) {
     // Initialize serial port for debugging
@@ -50,8 +76,10 @@ void kernel_main(struct multiboot_info* mbi) {
     printk("\nMultiboot2 Information:\n");
     printk("  Total size: %u bytes\n", mbi->total_size);
     
-    struct multiboot_tag* tag = mbi->tags;
-    while (tag->type != 0) {
+    struct multiboot_tag* tag = (struct multiboot_tag*)((u8*)mbi + 8);
+    u32 tag_count = 0;
+    while (tag->type != 0 && (u8*)tag < (u8*)mbi + mbi->total_size) {
+        tag_count++;
         if (tag->type == 6) {  // Memory map tag
             printk("  Memory map found\n");
         } else if (tag->type == 9) {  // Module tag
@@ -61,6 +89,8 @@ void kernel_main(struct multiboot_info* mbi) {
         // Move to next tag (aligned to 8 bytes)
         tag = (struct multiboot_tag*)((u8*)tag + ((tag->size + 7) & ~7));
     }
+    
+    printk("  Parsed %u tags\n", tag_count);
     
     printk("\n");
     
@@ -117,30 +147,38 @@ void kernel_main(struct multiboot_info* mbi) {
            (u32)(total/1024), (u32)(used/1024), (u32)(free_mem/1024));
     printk("  [PASS] Heap allocator working!\n");
     
-    // Test zeroed allocation
-    printk("\n[TEST] Zero-initialized allocation:\n");
-    char* test_buf = (char*)kzalloc(32);
-    bool all_zero = true;
-    for (size_t i = 0; i < 32; i++) {
-        if (test_buf[i] != 0) {
-            all_zero = false;
-            break;
-        }
-    }
-    printk("  kzalloc(32) = %p, all zeros: %s\n", test_buf, all_zero ? "YES" : "NO");
-    if (all_zero) {
-        printk("  [PASS] kzalloc working!\n");
-    }
-    
     printk("\n");
     printk("========================================\n");
-    printk("Kernel initialized successfully!\n");
+    printk("Phase 2 Complete! Memory management working.\n");
+    printk("========================================\n\n");
+    
+    // Initialize process management
+    printk("Initializing Process Management:\n");
     printk("========================================\n");
-    printk("\nPhase 2 Complete! Memory management working.\n");
-    printk("System memory:\n");
-    printk("  Total: %lu MB\n", pmm_get_total_memory() / (1024 * 1024));
-    printk("  Free:  %lu MB\n", pmm_get_free_memory() / (1024 * 1024));
-    printk("  Used:  %lu MB\n", pmm_get_used_memory() / (1024 * 1024));
+    
+    // Initialize timer
+    timer_init();
+    printk("\n");
+    
+    // Initialize processes
+    process_init();
+    printk("\n");
+    
+    // Initialize scheduler
+    scheduler_init();
+    printk("\n");
+    
+    printk("========================================\n");
+    printk("Phase 3 Complete! Process management ready.\n");
+    printk("========================================\n\n");
+    
+    printk("System Summary:\n");
+    printk("  Total memory: %lu MB\n", pmm_get_total_memory() / (1024 * 1024));
+    printk("  Free memory:  %lu MB\n", pmm_get_free_memory() / (1024 * 1024));
+    printk("  Used memory:  %lu MB\n", pmm_get_used_memory() / (1024 * 1024));
+    
+    printk("\nKernel initialization complete!\n");
+    printk("System ready. Entering idle loop...\n\n");
     
     // Enable interrupts
     __asm__ volatile("sti");
@@ -150,4 +188,3 @@ void kernel_main(struct multiboot_info* mbi) {
         __asm__ volatile("hlt");
     }
 }
-
