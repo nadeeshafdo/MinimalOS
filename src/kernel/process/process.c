@@ -113,20 +113,24 @@ void process_setup_kernel_thread(process_t* proc, void (*entry_point)(void)) {
     // Stack grows downward, so stack pointer starts at top
     uintptr stack_top = stack_base + PAGE_SIZE;
     
+    // Push entry point address onto stack (for context_switch to "return" to)
+    u64* stack_ptr = (u64*)(stack_top - 8);
+    *stack_ptr = (u64)entry_point;
+    
     // Initialize CPU context for kernel thread
     // Zero all registers for clean state
     memset(proc->context, 0, sizeof(cpu_context_t));
     
-    // Set instruction pointer to thread entry point
+    // Set instruction pointer to entry point (saved as "return address")
     proc->context->rip = (u64)entry_point;
     
-    // Set stack pointer to top of allocated stack
-    proc->context->rsp = stack_top;
+    // Set stack pointer (below the pushed entry address)
+    proc->context->rsp = (u64)stack_ptr;
     
     // Set callee-saved registers to known state
-    proc->context->rbp = stack_top;  // Frame pointer
+    proc->context->rbp = 0;  // Frame pointer (null for initial frame)
     
-    // Set RFLAGS with interrupts enabled (bit 9)
+    // Set RFLAGS with interrupts enabled (bit 9 = IF)
     proc->context->rflags = 0x202;
     
     // Kernel threads run in ring 0, use kernel segments
