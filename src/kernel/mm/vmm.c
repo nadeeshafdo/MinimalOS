@@ -29,6 +29,11 @@ static page_directory_t* current_directory = NULL;
 
 static page_table_t* get_or_create_table(u64* entry, u32 flags) {
     if (*entry & PAGE_PRESENT) {
+        // Update flags for existing table
+        // We only add flags (User/Write), never remove them
+        *entry |= (flags & PAGE_USER);
+        *entry |= (flags & PAGE_WRITE);
+        
         // Table exists, return it
         return (page_table_t*)ENTRY_ADDR(*entry);
     }
@@ -100,6 +105,13 @@ page_directory_t* vmm_create_address_space(void) {
     // Copy upper half (kernel space)
     for (size_t i = 256; i < 512; i++) {
         pd->pml4->entries[i] = kernel_directory.pml4->entries[i];
+    }
+    
+    // Identity map kernel low memory (0-16MB)
+    // This is required because our kernel is linked at 1MB
+    // Using PAGE_WRITE but NOT PAGE_USER ensures only Ring 0 can access
+    for (uintptr addr = 0; addr < 0x1000000; addr += PAGE_SIZE) {
+        vmm_map_page(pd, addr, addr, PAGE_PRESENT | PAGE_WRITE);
     }
     
     return pd;

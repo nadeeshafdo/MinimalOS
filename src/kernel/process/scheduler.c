@@ -1,6 +1,10 @@
 #include "scheduler.h"
+#include "process.h"
+#include "../mm/vmm.h"
 #include "../lib/printk.h"
+#include "../lib/string.h"
 #include "../drivers/timer.h"
+#include "../arch/x86_64/syscall.h"
 
 #define TIME_SLICE_TICKS 10  // 10 ticks = 100ms at 100Hz
 
@@ -121,12 +125,14 @@ void schedule(void) {
     process_t* old_proc = current;
     process_set_current(next);
     
-    // Switch page directory (skip for kernel threads for now)
-    // Kernel threads share the kernel's address space
-    // TODO: Only switch for user-space processes
-    // if (next->page_directory != NULL) {
-    //     vmm_switch_directory(next->page_directory);
-    // }
+    // Update syscall kernel stack
+    syscall_set_kernel_stack(next->kernel_stack + KERNEL_STACK_SIZE);
+    
+    // Switch page directory
+    // Only switch if different from current
+    if (next->page_directory != NULL) {
+        vmm_switch_directory(next->page_directory);
+    }
     
     // Perform context switch
     // For idle process (PID 0), we don't save context - just jump to new thread

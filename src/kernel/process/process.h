@@ -99,4 +99,11 @@ void process_exit(int code);
  */
 process_t* process_get_by_pid(u32 pid);
 
+/**
+ * Switch to user mode (Ring 3)
+ * @param entry User entry point
+ * @param stack User stack pointer
+ */
+void enter_userspace(u64 entry, u64 stack);
+
 #endif // PROCESS_H

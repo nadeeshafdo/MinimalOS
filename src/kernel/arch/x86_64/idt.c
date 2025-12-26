@@ -1,5 +1,6 @@
 #include "idt.h"
 #include "../../include/types.h"
+#include "../../lib/printk.h"
 
 #define IDT_ENTRIES 256
 
@@ -166,6 +167,22 @@ void interrupt_handler(struct registers* regs) {
     if (interrupt_handlers[regs->int_no] != NULL) {
         interrupt_handler_t handler = interrupt_handlers[regs->int_no];
         handler(regs);
+    } else if (regs->int_no < 32) {
+        // Unhandled exception!
+        printk("\n[CPU] EXCEPTION %lu taking place!\n", regs->int_no);
+        printk("      Error Code: %lu\n", regs->err_code);
+        printk("      RIP: %lx  CS: %lx  RFLAGS: %lx\n", regs->rip, regs->cs, regs->rflags);
+        printk("      RSP: %lx  SS: %lx\n", regs->rsp, regs->ss);
+        
+        if (regs->int_no == 14) {
+            u64 cr2;
+            __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+            printk("      CR2 (Fault Addr): %lx\n", cr2);
+        }
+        
+        // Halt
+        printk("[CPU] System Halted.\n");
+        while(1) { __asm__ volatile("hlt"); }
     }
     
     // Send EOI to PIC if IRQ

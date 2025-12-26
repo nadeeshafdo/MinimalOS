@@ -11,6 +11,7 @@
 #include "process/process.h"
 #include "process/scheduler.h"
 #include "loader/elf.h"
+#include "arch/x86_64/syscall.h"
 
 // Multiboot2 structures
 struct multiboot_tag {
@@ -178,6 +179,9 @@ void kernel_main(struct multiboot_info* mbi) {
     
     printk("\nKernel initialization complete!\n\n");
     
+    // Initialize system calls
+    syscall_init();
+    
     // Create and start test kernel threads
     printk("========================================\n");
     printk("Starting Kernel Threads (Multitasking Demo)\n");
@@ -220,6 +224,19 @@ void kernel_main(struct multiboot_info* mbi) {
         // Get entry point
         u64 entry = elf_get_entry(_binary_userspace_test_elf_start);
         printk("[Kernel] Entry point: 0x%lx\n", entry);
+        
+        // Create user process
+        process_t* user_proc = process_create("user_test");
+        if (user_proc) {
+            // Load ELF
+            if (elf_load(user_proc, _binary_userspace_test_elf_start, elf_size) == 0) {
+                printk("[Kernel] ELF loaded into process '%s' (PID %u)\n", 
+                       user_proc->name, user_proc->pid);
+                scheduler_add_process(user_proc);
+            } else {
+                printk("[Kernel] Failed to load ELF!\n");
+            }
+        }
     } else {
         printk("[Kernel] ELF validation failed!\n");
     }

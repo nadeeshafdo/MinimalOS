@@ -113,8 +113,18 @@ int elf_load(process_t* proc, const void* elf_data, size_t size) {
         }
         
         // Copy segment data from ELF to memory
-        // NOTE: This is simplified - in reality we'd need to handle
-        // the fact that we're writing to a different address space
+        // We must switch to the process's page directory to write to its virtual address space
+        // because 0x400000 (User Virt) maps to 'frame' in User PD, 
+        // but maps to Physical 0x400000 (Identity) in Kernel PD.
+        
+        page_directory_t* current_pd = vmm_get_current_directory();
+        vmm_switch_directory(proc->page_directory);
+        
+        // Disable Write Protection (CR0.WP) to allow writing to RO pages (like code segments)
+        u64 cr0;
+        __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+        __asm__ volatile("mov %0, %%cr0" : : "r"(cr0 & ~0x10000));
+        
         u8* dest = (u8*)phdr->vaddr;
         u8* src = (u8*)elf_data + phdr->offset;
         
@@ -126,6 +136,11 @@ int elf_load(process_t* proc, const void* elf_data, size_t size) {
         if (phdr->memsz > phdr->filesz) {
             memset(dest + phdr->filesz, 0, phdr->memsz - phdr->filesz);
         }
+        
+        // Restore CR0 (re-enable Write Protection)
+        __asm__ volatile("mov %0, %%cr0" : : "r"(cr0));
+        
+        vmm_switch_directory(current_pd);
     }
     
     // Setup user stack (1MB at high address)
@@ -147,22 +162,37 @@ int elf_load(process_t* proc, const void* elf_data, size_t size) {
                      PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
     }
     
-    // Initialize process context for user mode
+    // Setup user mode context
     memset(proc->context, 0, sizeof(cpu_context_t));
     
-    proc->context->rip = header->entry;
-    proc->context->rsp = user_stack_top;
-    proc->context->rbp = user_stack_top;
-    proc->context->rflags = 0x202;  // IF (interrupts enabled)
+    // We need to setup the KERNEL stack such that when context_switch returns,
+    // it returns to 'enter_userspace' with the correct arguments initialized.
     
-    // User mode segments (Ring 3)
-    proc->context->cs = 0x1B;  // User code segment: GDT entry 3, RPL=3
-    proc->context->ss = 0x23;  // User data segment: GDT entry 4, RPL=3
+    // Setup kernel stack frame for return
+    // Stack grows down from kernel_stack + KERNEL_STACK_SIZE
+    // Note: proc->kernel_stack is the bottom (lowest address), so we add size
+    u64* kstack_top = (u64*)(proc->kernel_stack + KERNEL_STACK_SIZE - 8);
+    *kstack_top = (u64)enter_userspace;  // Return address for context_switch
+    
+    // Set RSP to point to the return address we just pushed
+    proc->context->rsp = (u64)kstack_top;
+    
+    // Set arguments for enter_userspace(entry, stack)
+    // context_switch restores these registers
+    proc->context->rdi = header->entry;       // Arg 1: entry point
+    proc->context->rsi = user_stack_top;      // Arg 2: user stack
+    
+    // Set other registers
+    proc->context->rbp = 0;
+    proc->context->rflags = 0x202;  // Interrupts enabled
+    proc->context->cs = 0x08;       // Kernel code (we start in kernel wrapper)
+    proc->context->ss = 0x10;       // Kernel data
     
     proc->user_stack = user_stack_top;
     process_set_state(proc, PROCESS_STATE_READY);
     
     printk("[ELF] Binary loaded successfully, entry point: 0x%lx\n", header->entry);
+    printk("[ELF] Prepared transition to user mode via enter_userspace\n");
     
     return 0;
 }
