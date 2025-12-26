@@ -14,12 +14,21 @@
 #include "loader/elf.h"
 #include "arch/x86_64/syscall.h"
 #include "ipc/ipc.h"
-#include "ipc/ipc.h"
+#include "fs/vfs.h"
+#include "fs/initrd.h"
 
 // Multiboot2 structures
 struct multiboot_tag {
     u32 type;
     u32 size;
+} __attribute__((packed));
+
+struct multiboot_tag_module {
+    u32 type;
+    u32 size;
+    u32 mod_start;
+    u32 mod_end;
+    char cmdline[];
 } __attribute__((packed));
 
 struct multiboot_info {
@@ -170,6 +179,47 @@ void kernel_main(struct multiboot_info* mbi) {
     printk("\n");
     printk("========================================\n");
     printk("Phase 2 Complete! Memory management working.\n");
+    printk("========================================\n\n");
+    
+    // Initialize VFS and mount initrd
+    printk("Initializing Filesystem:\n");
+    printk("========================================\n");
+    
+    vfs_init();
+    printk("\n");
+    
+    // Find and parse multiboot module (initrd)
+    uintptr initrd_addr = 0;
+    size_t initrd_size = 0;
+    
+    tag = (struct multiboot_tag*)((u8*)mbi + 8);
+    while (tag->type != 0 && (u8*)tag < (u8*)mbi + mbi->total_size) {
+        if (tag->type == 3) {  // Module tag
+            struct multiboot_tag_module* mod = (struct multiboot_tag_module*)tag;
+            initrd_addr = mod->mod_start;
+            initrd_size = mod->mod_end - mod->mod_start;
+            printk("[VFS] Found initrd module at 0x%lx (size: %lu bytes)\n", 
+                   initrd_addr, initrd_size);
+            break;
+        }
+        tag = (struct multiboot_tag*)((u8*)tag + ((tag->size + 7) & ~7));
+    }
+    
+    if (initrd_addr && initrd_size > 0) {
+        vfs_node_t* initrd_root = initrd_init(initrd_addr, initrd_size);
+        if (initrd_root) {
+            vfs_mount("/", initrd_root);
+            printk("[VFS] Initrd mounted successfully\n");
+        } else {
+            printk("[VFS] Failed to initialize initrd\n");
+        }
+    } else {
+        printk("[VFS] No initrd module found\n");
+    }
+    
+    printk("\n");
+    printk("========================================\n");
+    printk("Phase 5 Complete! Filesystem ready.\n");
     printk("========================================\n\n");
     
     // Initialize process management

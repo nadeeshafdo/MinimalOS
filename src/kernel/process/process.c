@@ -65,7 +65,10 @@ process_t* process_create(const char* name) {
     proc->mailbox_count = 0;
     proc->blocked_on_receive = 0;
     
-    // Initialize file descriptors as NULL0;
+    // Initialize file descriptor table
+    fd_table_init(&proc->fd_table);
+    
+    // Initialize file descriptors as NULL
     proc->priority = 0;
     proc->time_slice = 0;
     

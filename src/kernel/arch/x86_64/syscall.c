@@ -4,7 +4,9 @@
 #include "../../lib/printk.h"
 #include "../../lib/string.h"
 #include "../../process/process.h"
+#include "../../process/fd_table.h"
 #include "../../ipc/ipc.h"
+#include "../../fs/vfs.h"
 
 extern void syscall_entry(void);
 
@@ -77,24 +79,102 @@ void syscall_init(void) {
 }
 
 u64 syscall_handler_c(u64 syscall_num, u64 arg1, u64 arg2, u64 arg3) {
-    (void)arg3; // Unused for now
-    
     // Current process
     process_t* current = process_get_current();
     
-    if (syscall_num == 1) { // SYS_WRITE
+    if (syscall_num == 0) { // SYS_READ
+        // fd is arg1, buf is arg2, count is arg3
+        int fd = (int)arg1;
+        u8* buffer = (u8*)arg2;
+        size_t count = (size_t)arg3;
+        
+        if (!buffer || !current) {
+            return (u64)-1;
+        }
+        
+        file_descriptor_t* file_desc = fd_get(&current->fd_table, fd);
+        if (!file_desc || !file_desc->node) {
+            return (u64)-1;
+        }
+        
+        int bytes_read = vfs_read(file_desc->node, file_desc->position, count, buffer);
+        if (bytes_read > 0) {
+            file_desc->position += bytes_read;
+        }
+        
+        return (u64)bytes_read;
+        
+    } else if (syscall_num == 1) { // SYS_WRITE
          // fd is arg1, buf is arg2, len is arg3
-         // Check buffer pointer
-         if (arg2) {
-             const char* msg = (const char*)arg2;
-             printk("[USER %u] %s", current->pid, msg);
+         int fd = (int)arg1;
+         const char* msg = (const char*)arg2;
+         size_t len = (size_t)arg3;
+         
+         // For stdout/stderr, print to console
+         if (fd == STDOUT || fd == STDERR) {
+             if (msg) {
+                 printk("[USER %u] ", current->pid);
+                 for (size_t i = 0; i < len; i++) {
+                     printk("%c", msg[i]);
+                 }
+             }
+             return len;
          }
-         return 0; // Success
+         
+         // For file descriptors, write to file
+         file_descriptor_t* file_desc = fd_get(&current->fd_table, fd);
+         if (!file_desc || !file_desc->node) {
+             return (u64)-1;
+         }
+         
+         int bytes_written = vfs_write(file_desc->node, file_desc->position, len, (const u8*)msg);
+         if (bytes_written > 0) {
+             file_desc->position += bytes_written;
+         }
+         
+         return (u64)bytes_written;
+         
+    } else if (syscall_num == 2) { // SYS_OPEN
+        // path is arg1, flags is arg2
+        const char* path = (const char*)arg1;
+        u32 flags = (u32)arg2;
+        
+        if (!path || !current) {
+            return (u64)-1;
+        }
+        
+        // Open the file via VFS
+        vfs_node_t* node = vfs_open(path);
+        if (!node) {
+            return (u64)-1;
+        }
+        
+        // Allocate file descriptor
+        int fd = fd_alloc(&current->fd_table, node, flags);
+        if (fd < 0) {
+            vfs_close(node);
+            return (u64)-1;
+        }
+        
+        return (u64)fd;
+        
+    } else if (syscall_num == 3) { // SYS_CLOSE
+        // fd is arg1
+        int fd = (int)arg1;
+        
+        if (!current) {
+            return (u64)-1;
+        }
+        
+        fd_free(&current->fd_table, fd);
+        return 0;
+        
     } else if (syscall_num == 60) { // SYS_EXIT
         printk("[USER %u] Exiting with code %lu\n", current->pid, arg1);
         process_exit(arg1); // Actually exit!
         while(1);
         return 0;
+        
     } else if (syscall_num == 8) { // SYS_IPC_SEND
         // arg1 = dest_pid, arg2 = msg_ptr
         u32 dest = (u32)arg1;
@@ -112,7 +192,7 @@ u64 syscall_handler_c(u64 syscall_num, u64 arg1, u64 arg2, u64 arg3) {
         
     } else {
         printk("[SYSCALL] Unknown syscall %lu from PID %u\n", syscall_num, current->pid);
-        return -1; // Error
+        return (u64)-1; // Error
     }
 }
 
