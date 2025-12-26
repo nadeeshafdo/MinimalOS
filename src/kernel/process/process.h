@@ -60,6 +60,11 @@ void process_init(void);
 process_t* process_create(const char* name);
 
 /**
+ * Setup a process to run as kernel thread
+ */
+void process_setup_kernel_thread(process_t* proc, void (*entry_point)(void));
+
+/**
  * Destroy a process
  */
 void process_destroy(process_t* proc);
@@ -73,6 +78,16 @@ process_t* process_get_current(void);
  * Set current running process
  */
 void process_set_current(process_t* proc);
+
+/**
+ * Set process state
+ */
+void process_set_state(process_t* proc, process_state_t state);
+
+/**
+ * Get process state
+ */
+process_state_t process_get_state(process_t* proc);
 
 /**
  * Exit current process

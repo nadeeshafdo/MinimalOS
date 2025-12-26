@@ -114,20 +114,33 @@ void schedule(void) {
         scheduler_add_process(current);
     }
     
-    // Switch to next process
+    // Switch to next process  
     next->state = PROCESS_STATE_RUNNING;
     next->time_slice = TIME_SLICE_TICKS;
     
     process_t* old_proc = current;
     process_set_current(next);
     
-    // Switch page directory
-    if (next->page_directory != NULL) {
-        vmm_switch_directory(next->page_directory);
-    }
+    // Switch page directory (skip for kernel threads for now)
+    // Kernel threads share the kernel's address space
+    // TODO: Only switch for user-space processes
+    // if (next->page_directory != NULL) {
+    //     vmm_switch_directory(next->page_directory);
+    // }
     
     // Perform context switch
-    if (old_proc != NULL) {
+    // For idle process (PID 0), we don't save context - just jump to new thread
+    if (old_proc != NULL && old_proc->pid == 0) {
+        // Directly jump to new thread by loading its context
+        // We'll never return here
+        __asm__ volatile(
+            "mov %0, %%rsp\n"      // Load new stack
+            "jmp *%1\n"            // Jump to entry point
+            :
+            : "r"(next->context->rsp), "r"(next->context->rip)
+            : "memory"
+        );
+    } else if (old_proc != NULL) {
         context_switch(&old_proc->context, next->context);
     }
 }

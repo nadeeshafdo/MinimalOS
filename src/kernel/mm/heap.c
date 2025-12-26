@@ -12,8 +12,8 @@ typedef struct block_header {
 } block_header_t;
 
 #define BLOCK_MAGIC 0xDEADBEEF
-#define HEAP_START 0x10000000  // 256MB
-#define HEAP_SIZE  0x01000000  // 16MB initial heap
+#define HEAP_START 0x00200000  // 2MB (after kernel, within 8MB identity map)
+#define HEAP_SIZE  0x00400000  // 4MB initial heap
 
 static block_header_t* heap_start = NULL;
 static size_t total_heap = 0;

@@ -23,27 +23,25 @@ struct multiboot_info {
     // Tags follow immediately after
 } __attribute__((packed));
 
-// Test process functions
-void test_process_1(void) {
-    u32 count = 0;
-    while (1) {
-        if (count % 50 == 0) {
-            printk("[PROC1] Running... (count: %u)\n", count);
-        }
-        count++;
-        for (volatile int i = 0; i < 1000000; i++);  // Busy wait
+// Test kernel thread functions  
+void kernel_thread_1(void) {
+    printk("[Thread 1] Starting...\n");
+    for (int i = 0; i < 5; i++) {
+        printk("[Thread 1] Iteration %d\n", i);
+        yield();  // Give other threads a chance
     }
+    printk("[Thread 1] Exiting.\n");
+    process_exit(0);
 }
 
-void test_process_2(void) {
-    u32 count = 0;
-    while (1) {
-        if (count % 30 == 0) {
-            printk("[PROC2] Running... (count: %u)\n", count);
-        }
-        count++;
-        for (volatile int i = 0; i < 1000000; i++);  // Busy wait
+void kernel_thread_2(void) {
+    printk("[Thread 2] Starting...\n");
+    for (int i = 0; i < 5; i++) {
+        printk("[Thread 2] Iteration %d\n", i);
+        yield();  // Give other threads a chance
     }
+    printk("[Thread 2] Exiting.\n");
+    process_exit(0);
 }
 
 void kernel_main(struct multiboot_info* mbi) {
@@ -177,14 +175,41 @@ void kernel_main(struct multiboot_info* mbi) {
     printk("  Free memory:  %lu MB\n", pmm_get_free_memory() / (1024 * 1024));
     printk("  Used memory:  %lu MB\n", pmm_get_used_memory() / (1024 * 1024));
     
-    printk("\nKernel initialization complete!\n");
-    printk("System ready. Entering idle loop...\n\n");
+    printk("\nKernel initialization complete!\n\n");
+    
+    // Create and start test kernel threads
+    printk("========================================\n");
+    printk("Starting Kernel Threads (Multitasking Demo)\n");
+    printk("========================================\n\n");
+    
+    process_t* thread1 = process_create("thread1");
+    if (thread1) {
+        process_setup_kernel_thread(thread1, kernel_thread_1);
+        scheduler_add_process(thread1);
+    }
+    
+    process_t* thread2 = process_create("thread2");
+    if (thread2) {
+        process_setup_kernel_thread(thread2, kernel_thread_2);
+        scheduler_add_process(thread2);
+    }
+    
+    printk("\nEnabling scheduler...\n");
+    scheduler_enable();
+    
+    printk("[Kernel] Scheduler started! Threads should run...\n\n");
     
     // Enable interrupts
     __asm__ volatile("sti");
     
-    // Halt
+    // Trigger first context switch manually
+    printk("[Kernel] Yielding to threads...\n");
+    yield();
+    
+    // Kernel idle loop - keep yielding to let other threads run
+    printk("[Kernel] Back in idle loop\n");
     while (1) {
-        __asm__ volatile("hlt");
+        yield();  // Give other threads CPU time
+        __asm__ volatile("hlt");  // Halt until next interrupt
     }
 }

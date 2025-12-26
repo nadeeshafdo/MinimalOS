@@ -98,6 +98,48 @@ process_t* process_create(const char* name) {
     return proc;
 }
 
+void process_setup_kernel_thread(process_t* proc, void (*entry_point)(void)) {
+    if (!proc || !entry_point) {
+        return;
+    }
+    
+    // Allocate kernel stack (1 page = 4KB)
+    uintptr stack_base = pmm_alloc_frame();
+    if (stack_base == 0) {
+        printk("[PROC] ERROR: Failed to allocate stack for process %u\n", proc->pid);
+        return;
+    }
+    
+    // Stack grows downward, so stack pointer starts at top
+    uintptr stack_top = stack_base + PAGE_SIZE;
+    
+    // Initialize CPU context for kernel thread
+    // Zero all registers for clean state
+    memset(proc->context, 0, sizeof(cpu_context_t));
+    
+    // Set instruction pointer to thread entry point
+    proc->context->rip = (u64)entry_point;
+    
+    // Set stack pointer to top of allocated stack
+    proc->context->rsp = stack_top;
+    
+    // Set callee-saved registers to known state
+    proc->context->rbp = stack_top;  // Frame pointer
+    
+    // Set RFLAGS with interrupts enabled (bit 9)
+    proc->context->rflags = 0x202;
+    
+    // Kernel threads run in ring 0, use kernel segments
+    proc->context->cs = 0x08;  // Kernel code segment
+    proc->context->ss = 0x10;  // Kernel data segment
+    
+    // Mark as ready to run
+    process_set_state(proc, PROCESS_STATE_READY);
+    
+    printk("[PROC] Setup kernel thread '%s' (PID %u) at entry %p, stack %p\n",
+           proc->name, proc->pid, entry_point, (void*)stack_top);
+}
+
 void process_destroy(process_t* proc) {
     if (proc == NULL) {
         return;
@@ -154,4 +196,14 @@ process_t* process_get_by_pid(u32 pid) {
         return NULL;
     }
     return process_table[pid];
+}
+
+void process_set_state(process_t* proc, process_state_t state) {
+    if (proc) {
+        proc->state = state;
+    }
+}
+
+process_state_t process_get_state(process_t* proc) {
+    return proc ? proc->state : PROCESS_STATE_DEAD;
 }
