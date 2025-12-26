@@ -38,7 +38,7 @@ KERNEL_ASM_OBJ := $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(KERNEL_ASM))
 KERNEL_C_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(KERNEL_C))
 
 # Embedded shell ELF
-SHELL_ELF_OBJ := userspace/shell_elf_data.o
+SHELL_ELF_OBJ := $(BUILD_DIR)/userspace/shell_elf_data.o
 
 ALL_OBJ := $(BOOT_OBJ) $(KERNEL_ASM_OBJ) $(KERNEL_C_OBJ) $(SHELL_ELF_OBJ)
 
@@ -79,13 +79,13 @@ $(BUILD_DIR)/kernel/%.o: $(SRC_DIR)/kernel/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Build shell ELF binary
-userspace/shell.elf: userspace/shell/shell.c
+$(BUILD_DIR)/userspace/shell.elf: $(SRC_DIR)/userspace/shell/shell.c
 	@echo "Building shell ELF binary..."
-	@mkdir -p userspace
+	@mkdir -p $(BUILD_DIR)/userspace
 	gcc -nostdlib -static -fno-pie -m64 -o $@ $< -Wl,--entry=_start -Wl,-Ttext=0x400000 -Wl,--build-id=none
 
 # Embed shell ELF as object
-userspace/shell_elf_data.o: userspace/shell.elf
+$(BUILD_DIR)/userspace/shell_elf_data.o: $(BUILD_DIR)/userspace/shell.elf
 	@echo "Embedding shell ELF..."
 	objcopy -I binary -O elf64-x86-64 -B i386 \
 		--rename-section .data=.rodata,alloc,load,readonly,data,contents \

@@ -287,26 +287,26 @@ void kernel_main(struct multiboot_info* mbi) {
     printk("========================================\n\n");
     
     // Symbols created by objcopy for embedded binary
-    extern u8 _binary_userspace_shell_elf_start[];
-    extern u8 _binary_userspace_shell_elf_end[];
+    extern u8 _binary_build_userspace_shell_elf_start[];
+    extern u8 _binary_build_userspace_shell_elf_end[];
     
-    size_t elf_size = _binary_userspace_shell_elf_end - _binary_userspace_shell_elf_start;
+    size_t elf_size = _binary_build_userspace_shell_elf_end - _binary_build_userspace_shell_elf_start;
     printk("[Kernel] Embedded shell ELF: %p, size: %lu bytes\n", 
-           _binary_userspace_shell_elf_start, elf_size);
+           _binary_build_userspace_shell_elf_start, elf_size);
     
     // Validate the shell ELF
-    if (elf_validate(_binary_userspace_shell_elf_start)) {
+    if (elf_validate(_binary_build_userspace_shell_elf_start)) {
         printk("[Kernel] ELF validation passed!\n");
         
         // Get entry point
-        u64 entry = elf_get_entry(_binary_userspace_shell_elf_start);
+        u64 entry = elf_get_entry(_binary_build_userspace_shell_elf_start);
         printk("[Kernel] Entry point: 0x%lx\n", entry);
         
         // Create shell process
         process_t* shell_proc = process_create("shell");
         if (shell_proc) {
             // Load shell ELF
-            if (elf_load(shell_proc, _binary_userspace_shell_elf_start, elf_size) == 0) {
+            if (elf_load(shell_proc, _binary_build_userspace_shell_elf_start, elf_size) == 0) {
                 printk("[Kernel] Shell loaded into process '%s' (PID %u)\n", 
                        shell_proc->name, shell_proc->pid);
                 scheduler_add_process(shell_proc);
