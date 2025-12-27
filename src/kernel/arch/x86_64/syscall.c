@@ -95,9 +95,13 @@ u64 syscall_handler_c(u64 syscall_num, u64 arg1, u64 arg2, u64 arg3) {
         
         // Special case: stdin (fd=0) reads from keyboard
         if (fd == STDIN) {
+            // Only read if there's input available, otherwise we'll block in keyboard_getchar
             size_t bytes_read = 0;
+            
+            // Read up to count bytes or until newline
             while (bytes_read < count) {
-                char c = keyboard_getchar();  // Blocking read
+                // This will block until a character is available
+                char c = keyboard_getchar();
                 buffer[bytes_read++] = c;
                 
                 // Return on newline (line-buffered input)
@@ -105,6 +109,7 @@ u64 syscall_handler_c(u64 syscall_num, u64 arg1, u64 arg2, u64 arg3) {
                     break;
                 }
             }
+            
             return (u64)bytes_read;
         }
         

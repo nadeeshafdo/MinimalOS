@@ -131,6 +131,16 @@ static void keyboard_interrupt_handler(struct registers* regs) {
 void keyboard_init(void) {
     printk("[KEYBOARD] Initializing PS/2 keyboard driver...\n");
     
+    // Initialize buffer state
+    kb_read_pos = 0;
+    kb_write_pos = 0;
+    kb_count = 0;
+    
+    // Clear buffer
+    for (int i = 0; i < KB_BUFFER_SIZE; i++) {
+        kb_buffer[i] = 0;
+    }
+    
     // Register IRQ1 interrupt handler (INT 33)
     register_interrupt_handler(33, keyboard_interrupt_handler);
     
@@ -147,10 +157,17 @@ bool keyboard_has_char(void) {
 }
 
 char keyboard_getchar(void) {
-    // Busy-wait until character available
+    // Block until character available by yielding to other processes
     while (!keyboard_has_char()) {
-        __asm__ volatile("hlt");  // Halt until next interrupt
+        // Yield to scheduler - let other processes run
+        // This is more efficient than busy-waiting
+        __asm__ volatile("hlt");
     }
     
-    return kb_buffer_get();
+    // Disable interrupts while accessing buffer
+    __asm__ volatile("cli");
+    char c = kb_buffer_get();
+    __asm__ volatile("sti");
+    
+    return c;
 }
