@@ -46,6 +46,7 @@ typedef struct process {
     u32 mailbox_tail;
     u32 mailbox_count;
     u8 blocked_on_receive;            // True if waiting for a message
+    u8 blocked_on_keyboard;           // True if waiting for keyboard input
     
     // File descriptor table
     fd_table_t fd_table;              // File descriptors

@@ -35,4 +35,14 @@ void yield(void);
 void scheduler_enable(void);
 void scheduler_disable(void);
 
+/**
+ * Block a process waiting for keyboard input
+ */
+void scheduler_block_on_keyboard(process_t* proc);
+
+/**
+ * Wake up a process blocked on keyboard
+ */
+void scheduler_wakeup_keyboard_waiter(process_t* proc);
+
 #endif // SCHEDULER_H

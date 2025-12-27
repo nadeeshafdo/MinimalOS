@@ -175,3 +175,31 @@ void scheduler_disable(void) {
     scheduler_enabled = false;
     printk("[SCHEDULER] Disabled\n");
 }
+
+
+// Block current process on keyboard input
+void scheduler_block_on_keyboard(process_t* proc) {
+    if (proc == NULL) {
+        return;
+    }
+    
+    // Mark as blocked on keyboard
+    proc->blocked_on_keyboard = 1;
+    proc->state = PROCESS_STATE_BLOCKED;
+    
+    // Remove from ready queue
+    scheduler_remove_process(proc);
+}
+
+// Wake up process blocked on keyboard
+void scheduler_wakeup_keyboard_waiter(process_t* proc) {
+    if (proc == NULL || !proc->blocked_on_keyboard) {
+        return;
+    }
+    
+    // Clear blocked flag
+    proc->blocked_on_keyboard = 0;
+    
+    // Add back to ready queue
+    scheduler_add_process(proc);
+}

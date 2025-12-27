@@ -1,6 +1,8 @@
 #include "keyboard.h"
 #include "../arch/x86_64/idt.h"
 #include "../lib/printk.h"
+#include "../process/scheduler.h"
+#include "../process/process.h"
 
 #define KB_DATA_PORT    0x60
 #define KB_STATUS_PORT  0x64
@@ -157,17 +159,33 @@ bool keyboard_has_char(void) {
 }
 
 char keyboard_getchar(void) {
-    // Block until character available by yielding to other processes
-    while (!keyboard_has_char()) {
-        // Yield to scheduler - let other processes run
-        // This is more efficient than busy-waiting
-        __asm__ volatile("hlt");
+    // Check if character already available (non-blocking fast path)
+    if (keyboard_has_char()) {
+        __asm__ volatile("cli");
+        char c = kb_buffer_get();
+        __asm__ volatile("sti");
+        return c;
     }
     
-    // Disable interrupts while accessing buffer
-    __asm__ volatile("cli");
-    char c = kb_buffer_get();
-    __asm__ volatile("sti");
+    // No input available - block the current process
+    process_t* current = process_get_current();
+    if (current != NULL) {
+        // Block this process - it will be woken by keyboard interrupt
+        scheduler_block_on_keyboard(current);
+        
+        // Trigger a reschedule to run another process
+        // The process will be resumed when keyboard input arrives
+        schedule();
+        
+        // When we get here, we've been woken up and there should be input
+        if (keyboard_has_char()) {
+            __asm__ volatile("cli");
+            char c = kb_buffer_get();
+            __asm__ volatile("sti");
+            return c;
+        }
+    }
     
-    return c;
+    // Fallback: just return 0 if no current process or no input
+    return 0;
 }
