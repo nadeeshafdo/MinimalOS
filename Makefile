@@ -90,7 +90,7 @@ disk: img
 	sudo dd if=$(ISO_IMAGE) of=$(DISK) bs=4M status=progress conv=fsync
 
 clean:
-	rm -rf $(BUILD_DIR) $(DIST_DIR)
+	rm -rf $(BUILD_DIR) $(DIST_DIR) serial.log
 
 run: img
 	qemu-system-x86_64 -cdrom $(ISO_IMAGE)
