@@ -90,3 +90,11 @@ disk: img
 
 clean:
 	rm -rf $(BUILD_DIR) $(DIST_DIR)
+help:
+	@echo "Available targets:"
+	@echo "  all       Build kernel and userspace"
+	@echo "  kernel    Build the kernel binary"
+	@echo "  userspace Build userspace components"
+	@echo "  img       Generate a bootable ISO image"
+	@echo "  disk      Generate a disk image"
+	@echo "  clean     Remove build and dist directories"
