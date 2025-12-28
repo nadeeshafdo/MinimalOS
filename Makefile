@@ -91,6 +91,17 @@ disk: img
 
 clean:
 	rm -rf $(BUILD_DIR) $(DIST_DIR)
+
+run: img
+	qemu-system-x86_64 -cdrom $(ISO_IMAGE)
+
+test: img
+	rm -f serial.log
+	timeout 10s qemu-system-x86_64 -cdrom $(ISO_IMAGE) -display none -serial file:serial.log || true
+	@echo "Checking serial log..."
+	@grep "Multiboot2 Magic verified" serial.log && echo "TEST PASSED: Magic verified" || (echo "TEST FAILED: Magic not found" && cat serial.log && exit 1)
+	@grep "Boot sequence complete" serial.log && echo "TEST PASSED: Boot complete" || (echo "TEST FAILED: Boot incomplete" && cat serial.log && exit 1)
+
 help:
 	@echo "Available targets:"
 	@echo "  all       Build kernel and userspace"
@@ -99,3 +110,5 @@ help:
 	@echo "  img       Generate a bootable ISO image"
 	@echo "  disk      Generate a disk image"
 	@echo "  clean     Remove build and dist directories"
+	@echo "  run       Run QEMU"
+	@echo "  test      Run QEMU and check for successful boot in serial log"

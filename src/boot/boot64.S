@@ -5,6 +5,7 @@ global long_mode_entry
 extern kernel_main
 extern stack_top
 extern multiboot_info_ptr
+extern multiboot_magic
 
 section .text
 bits 64
@@ -28,18 +29,11 @@ long_mode_entry:
 higher_half_start:
     ; Now running at higher-half address
 
-    ; Pass Multiboot2 info pointer to kernel_main
-    ; value is stored in multiboot_info_ptr
-    ; access it using RIP-relative addressing (default in NASM for 64-bit if simple symbol?)
-    ; Actually NASM 64-bit absolute addressing is default for simple symbols unless 'default rel' used?
-    ; 'mcmodel=kernel' in GCC assumes lower 2GB or negative 2GB.
-    ; We are in negative 2GB (0xFFFFFFFF...).
-    ; So absolute 32-bit signed displacement works?
-    ; Or RIP relative.
-    ; Let's force RIP relative or just use `mov edi, [multiboot_info_ptr]`
-    
+    ; Pass Multiboot2 info pointer to kernel_main (1st arg, RDI)
     mov edi, [multiboot_info_ptr]
-    ; RDI now holds the physical address of Multiboot Info
+    
+    ; Pass Multiboot2 magic number to kernel_main (2nd arg, RSI)
+    mov esi, [multiboot_magic]
 
     call kernel_main
 

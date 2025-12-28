@@ -18,11 +18,16 @@ bits 32
 
 _start:
     cli
+
     mov esp, (stack_top - KERNEL_VIRTUAL_BASE)
 
     ; Save Multiboot2 info pointer
     mov edi, (multiboot_info_ptr - KERNEL_VIRTUAL_BASE)
     mov [edi], ebx  ; Store ebx (pointer) into variable
+
+    ; Save Multiboot2 magic number
+    mov edi, (multiboot_magic - KERNEL_VIRTUAL_BASE)
+    mov [edi], eax  ; Store eax (magic) into variable
 
     ; 1. Map PD entries (Huge pages)
     ; PD[0] maps 0-2MB
@@ -93,9 +98,12 @@ section .data
 align 4096
 multiboot_info_ptr:
     dd 0
+multiboot_magic:
+    dd 0
 
 section .rodata
 align 8
+global multiboot_magic
 gdt64:
     dq 0 ; Null
 gdt64_code:
