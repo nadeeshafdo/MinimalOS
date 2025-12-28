@@ -11,6 +11,7 @@ GRUB_MKRESCUE := grub-mkrescue
 BUILD_DIR := build
 DIST_DIR := dist
 SRC_DIR := src
+DISK ?= /dev/sdc
 
 # Output
 KERNEL_BIN := $(BUILD_DIR)/kernel.elf
@@ -84,9 +85,9 @@ img: kernel
 	
 	$(GRUB_MKRESCUE) -o $(ISO_IMAGE) $(BUILD_DIR)/isodir
 
-# Disk Image (Placeholder)
+# Disk Image
 disk: img
-	@echo "ISO generated at $(ISO_IMAGE). Write this to USB to boot."
+	sudo dd if=$(ISO_IMAGE) of=$(DISK) bs=4M status=progress conv=fsync
 
 clean:
 	rm -rf $(BUILD_DIR) $(DIST_DIR)
