@@ -120,6 +120,12 @@ void kernel_main(uint64_t multiboot_info) {
   timer_init();
   printk("[OK] Timer initialized\n");
 
+  /* Initialize system call interface */
+  printk("[..] Initializing SYSCALL interface\n");
+  extern void syscall_init(void);
+  syscall_init();
+  printk("[OK] SYSCALL interface initialized\n");
+
   /* Initialize scheduler */
   printk("[..] Initializing scheduler\n");
   sched_init();

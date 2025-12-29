@@ -5,6 +5,7 @@
 
 #include "task.h"
 #include "../mm/heap.h"
+#include <arch/x86_64/cpu.h>
 
 extern void printk(const char *fmt, ...);
 
@@ -223,6 +224,12 @@ void schedule(void) {
   current_task = next;
   current_task->state = TASK_RUNNING;
   current_task->time_slice = DEFAULT_TIME_SLICE;
+
+  /* Update per-cpu data for syscalls */
+  extern struct per_cpu_data bsp_cpu_data;
+  bsp_cpu_data.current_task = next;
+  bsp_cpu_data.kernel_stack =
+      (uint64_t)((uint8_t *)next->stack_base + next->stack_size);
 
   /* Perform context switch */
   if (prev) {

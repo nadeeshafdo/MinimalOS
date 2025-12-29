@@ -13,7 +13,9 @@ CODE32_SEL              equ 0x08
 DATA32_SEL              equ 0x10
 CODE64_SEL              equ 0x18
 DATA64_SEL              equ 0x20
-TSS_SEL                 equ 0x28
+USER_DATA64_SEL         equ 0x28 | 3     ; Ring 3
+USER_CODE64_SEL         equ 0x30 | 3     ; Ring 3
+TSS_SEL                 equ 0x38
 
 ; Control register bits
 CR0_PE                  equ (1 << 0)     ; Protected mode enable

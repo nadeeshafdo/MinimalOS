@@ -56,8 +56,17 @@ struct cpu_info {
   bool tsc_deadline_supported;
 };
 
+/* Per-CPU data */
+struct per_cpu_data {
+  void *current_task;    /* Pointer to current task (struct task*) */
+  uint64_t scratch;      /* Scratch space helper */
+  uint64_t kernel_stack; /* Top of kernel stack for syscall */
+  uint64_t user_rsp;     /* Saved user RSP */
+};
+
 /* Global CPU info */
 extern struct cpu_info cpu_info;
+extern struct per_cpu_data bsp_cpu_data;
 
 /* Function prototypes */
 void cpu_init(void);

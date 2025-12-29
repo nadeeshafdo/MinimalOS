@@ -54,20 +54,20 @@ gdt_start:
     db 00000000b                    ; Flags: G=0, D=0, L=0
     db 0x00                         ; Base 24:31 (ignored)
 
-    ; 64-bit user code segment (0x28) - Ring 3
+    ; 64-bit user data segment (0x28) - Ring 3
     dw 0x0000
     dw 0x0000
     db 0x00
-    db 11111010b                    ; Access: P=1, DPL=3, S=1, Type=1010
-    db 00100000b                    ; Flags: L=1
+    db 11110010b                    ; Access: P=1, DPL=3, S=1, Type=0010 (read/write)
+    db 00000000b                    ; Flags: G=0, D=0, L=0
     db 0x00
 
-    ; 64-bit user data segment (0x30) - Ring 3
+    ; 64-bit user code segment (0x30) - Ring 3
     dw 0x0000
     dw 0x0000
     db 0x00
-    db 11110010b                    ; Access: P=1, DPL=3, S=1, Type=0010
-    db 00000000b
+    db 11111010b                    ; Access: P=1, DPL=3, S=1, Type=1010 (exec/read)
+    db 00100000b                    ; Flags: L=1
     db 0x00
 
     ; TSS descriptor placeholder (0x38) - 16 bytes in 64-bit mode
