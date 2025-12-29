@@ -147,13 +147,12 @@ void apic_init(void) {
     apic_initialized = true;
     printk("  x2APIC mode enabled\n");
   } else {
-    /* xAPIC mode requires memory mapping at physical 0xFEE00000 */
-    /* We don't have that mapped in our initial page tables */
-    printk("  xAPIC mode - skipping (LAPIC not mapped)\n");
-    printk("  NOTE: Full APIC support requires page table mapping\n");
+    /* xAPIC mode - use memory-mapped LAPIC at LAPIC_VIRT_BASE */
+    /* VMM must have mapped this before calling apic_init() */
+    lapic_base = (volatile uint32_t *)LAPIC_VIRT_BASE;
     x2apic_mode = false;
-    apic_initialized = false;
-    return;
+    apic_initialized = true;
+    printk("  xAPIC mode (base: 0x%lx)\n", (uint64_t)lapic_base);
   }
 
   /* Get APIC ID */

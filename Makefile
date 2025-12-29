@@ -43,9 +43,12 @@ C_SOURCES = $(SRC_DIR)/kernel/main.c \
             $(SRC_DIR)/arch/x86_64/idt.c \
             $(SRC_DIR)/arch/x86_64/isr.c \
             $(SRC_DIR)/arch/x86_64/apic.c \
+            $(SRC_DIR)/arch/x86_64/pic.c \
             $(SRC_DIR)/drivers/serial.c \
             $(SRC_DIR)/drivers/vga.c \
-            $(SRC_DIR)/mm/pmm.c
+            $(SRC_DIR)/mm/pmm.c \
+            $(SRC_DIR)/mm/vmm.c \
+            $(SRC_DIR)/mm/heap.c
 
 # Object files
 ASM_OBJECTS = $(patsubst $(SRC_DIR)/%.asm,$(BUILD_DIR)/%.o,$(ASM_SOURCES))

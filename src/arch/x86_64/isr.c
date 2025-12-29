@@ -128,7 +128,11 @@ void isr_handler(struct interrupt_frame *frame) {
 
     switch (irq) {
     case 0: /* Timer */
-      /* Timer tick - will be handled by scheduler later */
+      /* Call timer tick handler */
+      {
+        extern void timer_tick(void);
+        timer_tick();
+      }
       break;
 
     case 1: /* Keyboard */
@@ -145,8 +149,13 @@ void isr_handler(struct interrupt_frame *frame) {
       break;
     }
 
-    /* Send End of Interrupt to APIC */
-    apic_eoi();
+    /* Send End of Interrupt - use PIC for IRQs 0-15, APIC for others */
+    if (irq < 16) {
+      extern void pic_eoi(uint8_t irq);
+      pic_eoi((uint8_t)irq);
+    } else {
+      apic_eoi();
+    }
   }
 }
 
