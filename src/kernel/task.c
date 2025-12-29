@@ -120,7 +120,9 @@ struct task *task_create(void (*entry)(void), const char *name) {
   task->tid = next_tid++;
   task->state = TASK_READY;
   task->time_slice = DEFAULT_TIME_SLICE;
+  task->time_slice = DEFAULT_TIME_SLICE;
   task->total_ticks = 0;
+  task->fs_base = 0; /* Default user TLS base */
 
   /* Copy name */
   const char *src = name;
@@ -233,9 +235,13 @@ void schedule(void) {
 
   /* Perform context switch */
   if (prev) {
+    if (prev->fs_base != next->fs_base) {
+      wrmsr(MSR_IA32_FS_BASE, next->fs_base);
+    }
     context_switch(&prev->context, next->context);
   } else {
     /* First task - just load context */
+    wrmsr(MSR_IA32_FS_BASE, next->fs_base);
     context_switch(&idle_task->context, next->context);
   }
 }

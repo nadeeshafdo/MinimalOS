@@ -45,6 +45,7 @@ struct task {
   void *stack_base;  /* Base of allocated stack */
   size_t stack_size; /* Stack size */
   uint64_t user_rsp; /* Saved user RSP during syscall */
+  uint64_t fs_base;  /* User TLS base (FS_BASE) */
 
   /* Scheduling */
   uint64_t time_slice;  /* Remaining time slice */
