@@ -3,6 +3,7 @@
  * Outputs to both serial port and VGA console
  */
 
+#include "../drivers/framebuffer.h"
 #include <minimalos/types.h>
 
 /* External output functions */
@@ -21,6 +22,10 @@ static void putchar(char c) {
   serial_putchar(c);
   if (vga_ready) {
     vga_putchar(c);
+  }
+
+  if (framebuffer_is_ready()) {
+    framebuffer_putchar(c);
   }
 }
 

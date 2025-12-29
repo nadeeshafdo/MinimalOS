@@ -131,4 +131,11 @@ struct multiboot2_tag *multiboot2_find_tag(uint32_t type);
 struct multiboot2_tag_mmap *multiboot2_get_mmap(void);
 const char *multiboot2_get_cmdline(void);
 
+/* Function prototypes */
+void multiboot2_parse(uint64_t info_addr);
+struct multiboot2_tag *multiboot2_find_tag(uint32_t type);
+struct multiboot2_tag_mmap *multiboot2_get_mmap(void);
+const char *multiboot2_get_cmdline(void);
+uint64_t multiboot2_get_total_memory(void);
+
 #endif /* MINIMALOS_MULTIBOOT2_H */

@@ -51,6 +51,7 @@ C_SOURCES = $(SRC_DIR)/kernel/main.c \
             $(SRC_DIR)/arch/x86_64/timer.c \
             $(SRC_DIR)/drivers/serial.c \
             $(SRC_DIR)/drivers/vga.c \
+            $(SRC_DIR)/drivers/framebuffer.c \
             $(SRC_DIR)/mm/pmm.c \
             $(SRC_DIR)/mm/vmm.c \
             $(SRC_DIR)/mm/heap.c

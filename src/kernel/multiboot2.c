@@ -122,6 +122,15 @@ void multiboot2_parse(uint64_t info_addr) {
     case MULTIBOOT2_TAG_ACPI_NEW:
       printk("  ACPI RSDP v2.0+ found\n");
       break;
+
+    case MULTIBOOT2_TAG_FRAMEBUFFER: {
+      struct multiboot2_tag_framebuffer *fb =
+          (struct multiboot2_tag_framebuffer *)tag;
+      printk("  Framebuffer: 0x%lx %ux%ux%u (pitch %u)\n", fb->framebuffer_addr,
+             fb->framebuffer_width, fb->framebuffer_height, fb->framebuffer_bpp,
+             fb->framebuffer_pitch);
+      break;
+    }
     }
 
     /* Advance to next tag (8-byte aligned) */
