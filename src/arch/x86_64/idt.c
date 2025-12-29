@@ -3,7 +3,6 @@
  */
 
 #include "idt.h"
-#include "cpu.h"
 
 extern void printk(const char *fmt, ...);
 
