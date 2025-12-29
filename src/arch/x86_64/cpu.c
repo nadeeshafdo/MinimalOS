@@ -177,6 +177,7 @@ void cpu_init(void) {
   /* Check for key features */
   cpu_info.x2apic_supported = (ecx & CPUID_FEAT_ECX_X2APIC) != 0;
   cpu_info.xsave_supported = (ecx & CPUID_FEAT_ECX_XSAVE) != 0;
+  cpu_info.tsc_deadline_supported = (ecx & CPUID_FEAT_ECX_TSC_DEADLINE) != 0;
 
   printk("  Features: ");
   if (edx & CPUID_FEAT_EDX_FPU)

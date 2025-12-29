@@ -138,6 +138,49 @@ void apic_timer_periodic(uint32_t count) {
 }
 
 /**
+ * Read Time-Stamp Counter
+ */
+uint64_t rdtsc(void) {
+  uint32_t lo, hi;
+  __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+  return ((uint64_t)hi << 32) | lo;
+}
+
+/**
+ * Initialize APIC Timer in TSC-Deadline mode
+ */
+void apic_timer_tsc_deadline_init(void) {
+  if (!apic_initialized || !cpu_info.tsc_deadline_supported)
+    return;
+
+  printk("  Initializing TSC-Deadline Timer\n");
+
+  /* Set LVT Timer to TSC-Deadline mode (bits 18:17 = 10b), vector 32 */
+  lapic_write(LAPIC_LVT_TIMER, IRQ_TIMER | TIMER_TSC_DEADLINE);
+
+  /* Serialize if xAPIC mode */
+  if (!x2apic_mode) {
+    __asm__ volatile("mfence" : : : "memory");
+  }
+}
+
+/**
+ * Arm TSC-Deadline Timer
+ * @param tsc_value Absolute TSC value to trigger interrupt at
+ */
+void apic_timer_arm(uint64_t tsc_value) {
+  if (!apic_initialized)
+    return;
+
+  /* Serialize if xAPIC mode (required before writing MSR) */
+  if (!x2apic_mode) {
+    __asm__ volatile("mfence" : : : "memory");
+  }
+
+  wrmsr(MSR_IA32_TSC_DEADLINE, tsc_value);
+}
+
+/**
  * Initialize APIC timer (legacy function)
  */
 void apic_timer_init(uint32_t frequency_hz) {
