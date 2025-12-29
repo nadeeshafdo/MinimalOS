@@ -9,31 +9,34 @@
 extern void printk(const char *fmt, ...);
 extern struct cpu_info cpu_info;
 
-/* APIC base address (xAPIC mode only) */
+/* APIC state */
 static volatile uint32_t *lapic_base = NULL;
 static bool x2apic_mode = false;
+static bool apic_initialized = false;
 
-/* Virtual address for LAPIC (memory-mapped) */
-#define LAPIC_VIRT_BASE 0xFFFFFFFF80000000UL + 0xFEE00000UL
+/* Virtual address for LAPIC (memory-mapped) - requires proper page table
+ * mapping */
+#define LAPIC_VIRT_BASE (0xFFFFFFFF80000000UL + 0xFEE00000UL)
 
 /**
- * Read LAPIC register
+ * Read LAPIC register - only valid when APIC is initialized
  */
 static uint32_t lapic_read(uint32_t reg) {
   if (x2apic_mode) {
     return (uint32_t)rdmsr(X2APIC_MSR_BASE + (reg >> 4));
-  } else {
+  } else if (lapic_base != NULL) {
     return lapic_base[reg / 4];
   }
+  return 0;
 }
 
 /**
- * Write LAPIC register
+ * Write LAPIC register - only valid when APIC is initialized
  */
 static void lapic_write(uint32_t reg, uint32_t value) {
   if (x2apic_mode) {
     wrmsr(X2APIC_MSR_BASE + (reg >> 4), value);
-  } else {
+  } else if (lapic_base != NULL) {
     lapic_base[reg / 4] = value;
   }
 }
@@ -47,6 +50,8 @@ bool apic_is_x2apic(void) { return x2apic_mode; }
  * Get local APIC ID
  */
 uint32_t apic_get_id(void) {
+  if (!apic_initialized)
+    return 0;
   if (x2apic_mode) {
     return (uint32_t)rdmsr(X2APIC_ID);
   } else {
@@ -55,9 +60,11 @@ uint32_t apic_get_id(void) {
 }
 
 /**
- * Send End of Interrupt
+ * Send End of Interrupt - safe to call even if APIC not initialized
  */
 void apic_eoi(void) {
+  if (!apic_initialized)
+    return;
   if (x2apic_mode) {
     wrmsr(X2APIC_EOI, 0);
   } else {
@@ -69,11 +76,13 @@ void apic_eoi(void) {
  * Send Inter-Processor Interrupt (IPI)
  */
 void apic_send_ipi(uint32_t apic_id, uint32_t vector) {
+  if (!apic_initialized)
+    return;
   if (x2apic_mode) {
     /* x2APIC: single 64-bit write to ICR */
     uint64_t icr = ((uint64_t)apic_id << 32) | vector;
     wrmsr(X2APIC_ICR, icr);
-  } else {
+  } else if (lapic_base != NULL) {
     /* xAPIC: write destination to ICR_HI, then command to ICR_LO */
     lapic_write(LAPIC_ICR_HI, apic_id << 24);
     lapic_write(LAPIC_ICR_LO, vector);
@@ -89,7 +98,8 @@ void apic_send_ipi(uint32_t apic_id, uint32_t vector) {
  * Initialize APIC timer
  */
 void apic_timer_init(uint32_t frequency_hz) {
-  /* We'll calibrate using PIT later; for now just set up basic timer */
+  if (!apic_initialized)
+    return;
 
   /* Set divider to 16 */
   lapic_write(LAPIC_TIMER_DCR, TIMER_DIV_16);
@@ -134,12 +144,16 @@ void apic_init(void) {
     apic_base_msr |= (1 << 10); /* x2APIC enable bit */
     wrmsr(MSR_IA32_APIC_BASE, apic_base_msr);
     x2apic_mode = true;
+    apic_initialized = true;
     printk("  x2APIC mode enabled\n");
   } else {
-    /* Use xAPIC (memory-mapped) */
-    lapic_base = (volatile uint32_t *)LAPIC_VIRT_BASE;
+    /* xAPIC mode requires memory mapping at physical 0xFEE00000 */
+    /* We don't have that mapped in our initial page tables */
+    printk("  xAPIC mode - skipping (LAPIC not mapped)\n");
+    printk("  NOTE: Full APIC support requires page table mapping\n");
     x2apic_mode = false;
-    printk("  xAPIC mode (base: 0x%lx)\n", (uint64_t)lapic_base);
+    apic_initialized = false;
+    return;
   }
 
   /* Get APIC ID */

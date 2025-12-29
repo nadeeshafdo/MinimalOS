@@ -1,0 +1,233 @@
+[
+  {
+    "directory": "/media/nadeeshafdo/shared/repos/MinimalOS",
+    "file": "src/arch/x86_64/apic.c",
+    "arguments": [
+      "gcc",
+      "-ffreestanding",
+      "-fno-stack-protector",
+      "-fno-pic",
+      "-mno-red-zone",
+      "-mcmodel=kernel",
+      "-std=c11",
+      "-O2",
+      "-g",
+      "-Iinclude",
+      "-Isrc",
+      "-c",
+      "src/arch/x86_64/apic.c",
+      "-o",
+      "src/arch/x86_64/apic.o"
+    ]
+  },
+  {
+    "directory": "/media/nadeeshafdo/shared/repos/MinimalOS",
+    "file": "src/arch/x86_64/cpu.c",
+    "arguments": [
+      "gcc",
+      "-ffreestanding",
+      "-fno-stack-protector",
+      "-fno-pic",
+      "-mno-red-zone",
+      "-mcmodel=kernel",
+      "-std=c11",
+      "-O2",
+      "-g",
+      "-Iinclude",
+      "-Isrc",
+      "-c",
+      "src/arch/x86_64/cpu.c",
+      "-o",
+      "src/arch/x86_64/cpu.o"
+    ]
+  },
+  {
+    "directory": "/media/nadeeshafdo/shared/repos/MinimalOS",
+    "file": "src/arch/x86_64/idt.c",
+    "arguments": [
+      "gcc",
+      "-ffreestanding",
+      "-fno-stack-protector",
+      "-fno-pic",
+      "-mno-red-zone",
+      "-mcmodel=kernel",
+      "-std=c11",
+      "-O2",
+      "-g",
+      "-Iinclude",
+      "-Isrc",
+      "-c",
+      "src/arch/x86_64/idt.c",
+      "-o",
+      "src/arch/x86_64/idt.o"
+    ]
+  },
+  {
+    "directory": "/media/nadeeshafdo/shared/repos/MinimalOS",
+    "file": "src/arch/x86_64/isr.c",
+    "arguments": [
+      "gcc",
+      "-ffreestanding",
+      "-fno-stack-protector",
+      "-fno-pic",
+      "-mno-red-zone",
+      "-mcmodel=kernel",
+      "-std=c11",
+      "-O2",
+      "-g",
+      "-Iinclude",
+      "-Isrc",
+      "-c",
+      "src/arch/x86_64/isr.c",
+      "-o",
+      "src/arch/x86_64/isr.o"
+    ]
+  },
+  {
+    "directory": "/media/nadeeshafdo/shared/repos/MinimalOS",
+    "file": "src/drivers/serial.c",
+    "arguments": [
+      "gcc",
+      "-ffreestanding",
+      "-fno-stack-protector",
+      "-fno-pic",
+      "-mno-red-zone",
+      "-mcmodel=kernel",
+      "-std=c11",
+      "-O2",
+      "-g",
+      "-Iinclude",
+      "-Isrc",
+      "-c",
+      "src/drivers/serial.c",
+      "-o",
+      "src/drivers/serial.o"
+    ]
+  },
+  {
+    "directory": "/media/nadeeshafdo/shared/repos/MinimalOS",
+    "file": "src/drivers/vga.c",
+    "arguments": [
+      "gcc",
+      "-ffreestanding",
+      "-fno-stack-protector",
+      "-fno-pic",
+      "-mno-red-zone",
+      "-mcmodel=kernel",
+      "-std=c11",
+      "-O2",
+      "-g",
+      "-Iinclude",
+      "-Isrc",
+      "-c",
+      "src/drivers/vga.c",
+      "-o",
+      "src/drivers/vga.o"
+    ]
+  },
+  {
+    "directory": "/media/nadeeshafdo/shared/repos/MinimalOS",
+    "file": "src/kernel/main.c",
+    "arguments": [
+      "gcc",
+      "-ffreestanding",
+      "-fno-stack-protector",
+      "-fno-pic",
+      "-mno-red-zone",
+      "-mcmodel=kernel",
+      "-std=c11",
+      "-O2",
+      "-g",
+      "-Iinclude",
+      "-Isrc",
+      "-c",
+      "src/kernel/main.c",
+      "-o",
+      "src/kernel/main.o"
+    ]
+  },
+  {
+    "directory": "/media/nadeeshafdo/shared/repos/MinimalOS",
+    "file": "src/kernel/multiboot2.c",
+    "arguments": [
+      "gcc",
+      "-ffreestanding",
+      "-fno-stack-protector",
+      "-fno-pic",
+      "-mno-red-zone",
+      "-mcmodel=kernel",
+      "-std=c11",
+      "-O2",
+      "-g",
+      "-Iinclude",
+      "-Isrc",
+      "-c",
+      "src/kernel/multiboot2.c",
+      "-o",
+      "src/kernel/multiboot2.o"
+    ]
+  },
+  {
+    "directory": "/media/nadeeshafdo/shared/repos/MinimalOS",
+    "file": "src/kernel/panic.c",
+    "arguments": [
+      "gcc",
+      "-ffreestanding",
+      "-fno-stack-protector",
+      "-fno-pic",
+      "-mno-red-zone",
+      "-mcmodel=kernel",
+      "-std=c11",
+      "-O2",
+      "-g",
+      "-Iinclude",
+      "-Isrc",
+      "-c",
+      "src/kernel/panic.c",
+      "-o",
+      "src/kernel/panic.o"
+    ]
+  },
+  {
+    "directory": "/media/nadeeshafdo/shared/repos/MinimalOS",
+    "file": "src/kernel/printk.c",
+    "arguments": [
+      "gcc",
+      "-ffreestanding",
+      "-fno-stack-protector",
+      "-fno-pic",
+      "-mno-red-zone",
+      "-mcmodel=kernel",
+      "-std=c11",
+      "-O2",
+      "-g",
+      "-Iinclude",
+      "-Isrc",
+      "-c",
+      "src/kernel/printk.c",
+      "-o",
+      "src/kernel/printk.o"
+    ]
+  },
+  {
+    "directory": "/media/nadeeshafdo/shared/repos/MinimalOS",
+    "file": "src/mm/pmm.c",
+    "arguments": [
+      "gcc",
+      "-ffreestanding",
+      "-fno-stack-protector",
+      "-fno-pic",
+      "-mno-red-zone",
+      "-mcmodel=kernel",
+      "-std=c11",
+      "-O2",
+      "-g",
+      "-Iinclude",
+      "-Isrc",
+      "-c",
+      "src/mm/pmm.c",
+      "-o",
+      "src/mm/pmm.o"
+    ]
+  }
+]

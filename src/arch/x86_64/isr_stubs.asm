@@ -71,10 +71,29 @@ isr_spurious:
     iretq               ; Just return, don't send EOI
 
 ; Common ISR stub - saves context and calls C handler
+; Stack at entry (before we push anything):
+;   [rsp+0]  = int_no (pushed by ISR stub)
+;   [rsp+8]  = error_code (pushed by CPU or stub)
+;   [rsp+16] = rip
+;   [rsp+24] = cs
+;   [rsp+32] = rflags
+;   [rsp+40] = rsp
+;   [rsp+48] = ss
+;
+; We need to build interrupt_frame which has:
+;   r15, r14, r13, r12, r11, r10, r9, r8    (pushed last, at lowest address)
+;   rbp, rdi, rsi, rdx, rcx, rbx, rax       (pushed earlier)
+;   int_no, error_code                       (already on stack)
+;   rip, cs, rflags, rsp, ss                 (pushed by CPU)
+
 isr_common_stub:
-    ; Save all general purpose registers
+    ; Save all general purpose registers in order to match interrupt_frame
+    ; First push goes to highest address, last push to lowest
+    ; We want: r15 at lowest (top of stack), rax next, etc.
+    
+    ; Push in reverse order of struct (rax first to match struct layout)
     push rax
-    push rbx
+    push rbx  
     push rcx
     push rdx
     push rsi
@@ -89,25 +108,16 @@ isr_common_stub:
     push r14
     push r15
     
-    ; Save segment registers (for debugging)
-    mov ax, ds
-    push rax
-    
-    ; Load kernel data segment
+    ; Save segment registers (kernel DS)
     mov ax, DATA64_SEL
     mov ds, ax
     mov es, ax
     
     ; Call C handler with pointer to stack frame
-    mov rdi, rsp                ; First argument: pointer to saved registers
+    mov rdi, rsp                ; First argument: pointer to interrupt_frame
     call isr_handler
     
-    ; Restore segment registers
-    pop rax
-    mov ds, ax
-    mov es, ax
-    
-    ; Restore all general purpose registers
+    ; Restore all general purpose registers (reverse of push)
     pop r15
     pop r14
     pop r13

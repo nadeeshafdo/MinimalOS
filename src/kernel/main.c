@@ -68,11 +68,13 @@ void kernel_main(uint64_t multiboot_info) {
   printk("===========================================\n");
   printk("\n");
 
-  /* Enable interrupts */
-  __asm__ volatile("sti");
+  /* Note: Interrupts disabled until APIC or PIC is properly configured */
+  /* Without proper interrupt controller setup, enabling interrupts causes
+   * issues */
+  /* __asm__ volatile("sti"); */
 
   /* Halt loop - kernel idle */
-  printk("Entering idle loop...\n");
+  printk("Entering idle loop (interrupts disabled)...\n");
   for (;;) {
     __asm__ volatile("hlt");
   }

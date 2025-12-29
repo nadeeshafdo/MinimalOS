@@ -43,7 +43,7 @@
 #define IRQ_SPURIOUS 255
 
 /* IDT entry structure (16 bytes for 64-bit) */
-struct idt_entry {
+struct __attribute__((packed)) idt_entry {
   uint16_t offset_low;  /* Offset bits 0..15 */
   uint16_t selector;    /* Code segment selector */
   uint8_t ist;          /* IST index (0 = legacy stack) */
@@ -51,16 +51,16 @@ struct idt_entry {
   uint16_t offset_mid;  /* Offset bits 16..31 */
   uint32_t offset_high; /* Offset bits 32..63 */
   uint32_t reserved;    /* Reserved (zero) */
-} __packed;
+};
 
 /* IDT pointer structure */
-struct idt_ptr {
+struct __attribute__((packed)) idt_ptr {
   uint16_t limit;
   uint64_t base;
-} __packed;
+};
 
 /* Saved CPU state during interrupt */
-struct interrupt_frame {
+struct __attribute__((packed)) interrupt_frame {
   /* Pushed by ISR stub */
   uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
   uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
@@ -72,7 +72,7 @@ struct interrupt_frame {
   uint64_t rflags;
   uint64_t rsp;
   uint64_t ss;
-} __packed;
+};
 
 /* Function prototypes */
 void idt_init(void);

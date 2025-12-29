@@ -44,75 +44,75 @@
 #define MULTIBOOT2_MEMORY_BADRAM 5
 
 /* Multiboot2 information header */
-struct multiboot2_info {
+struct __attribute__((packed)) multiboot2_info {
   uint32_t total_size;
   uint32_t reserved;
   /* Tags follow */
-} __packed;
+};
 
 /* Generic tag header */
-struct multiboot2_tag {
+struct __attribute__((packed)) multiboot2_tag {
   uint32_t type;
   uint32_t size;
-} __packed;
+};
 
 /* Command line tag */
-struct multiboot2_tag_string {
+struct __attribute__((packed)) multiboot2_tag_string {
   uint32_t type;
   uint32_t size;
   char string[];
-} __packed;
+};
 
 /* Basic memory info tag */
-struct multiboot2_tag_basic_meminfo {
+struct __attribute__((packed)) multiboot2_tag_basic_meminfo {
   uint32_t type;
   uint32_t size;
   uint32_t mem_lower; /* KB below 1MB */
   uint32_t mem_upper; /* KB above 1MB */
-} __packed;
+};
 
 /* Memory map entry */
-struct multiboot2_mmap_entry {
+struct __attribute__((packed)) multiboot2_mmap_entry {
   uint64_t addr;
   uint64_t len;
   uint32_t type;
   uint32_t reserved;
-} __packed;
+};
 
 /* Memory map tag */
-struct multiboot2_tag_mmap {
+struct __attribute__((packed)) multiboot2_tag_mmap {
   uint32_t type;
   uint32_t size;
   uint32_t entry_size;
   uint32_t entry_version;
   struct multiboot2_mmap_entry entries[];
-} __packed;
+};
 
 /* Module tag */
-struct multiboot2_tag_module {
+struct __attribute__((packed)) multiboot2_tag_module {
   uint32_t type;
   uint32_t size;
   uint32_t mod_start;
   uint32_t mod_end;
   char cmdline[];
-} __packed;
+};
 
 /* ACPI RSDP tag (old - v1.0) */
-struct multiboot2_tag_old_acpi {
+struct __attribute__((packed)) multiboot2_tag_old_acpi {
   uint32_t type;
   uint32_t size;
   uint8_t rsdp[];
-} __packed;
+};
 
 /* ACPI RSDP tag (new - v2.0+) */
-struct multiboot2_tag_new_acpi {
+struct __attribute__((packed)) multiboot2_tag_new_acpi {
   uint32_t type;
   uint32_t size;
   uint8_t rsdp[];
-} __packed;
+};
 
 /* Framebuffer tag */
-struct multiboot2_tag_framebuffer {
+struct __attribute__((packed)) multiboot2_tag_framebuffer {
   uint32_t type;
   uint32_t size;
   uint64_t framebuffer_addr;
@@ -123,7 +123,7 @@ struct multiboot2_tag_framebuffer {
   uint8_t framebuffer_type;
   uint16_t reserved;
   /* Color info follows based on type */
-} __packed;
+};
 
 /* Function prototypes */
 void multiboot2_parse(uint64_t info_addr);

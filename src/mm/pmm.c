@@ -225,7 +225,6 @@ void pmm_init(void) {
   for (size_t i = 0; i < BITMAP_SIZE; i++) {
     frame_bitmap[i] = 0xFF;
   }
-  used_frames = MAX_FRAMES;
   total_frames = 0;
 
   /* Parse memory map and mark available regions as free */
@@ -252,8 +251,16 @@ void pmm_init(void) {
           size_t region_frames = (end - start) / PAGE_SIZE;
           total_frames += region_frames;
 
-          /* Mark as free */
-          pmm_mark_range_free(start, end);
+          /* Mark as free - directly clear bits without decrementing used_frames
+           */
+          start = PAGE_ALIGN_UP(start);
+          end = PAGE_ALIGN_DOWN(end);
+          for (uint64_t addr = start; addr < end; addr += PAGE_SIZE) {
+            size_t frame = ADDR_TO_PFN(addr);
+            if (frame < MAX_FRAMES) {
+              bitmap_clear(frame);
+            }
+          }
         }
       }
     }
@@ -265,12 +272,34 @@ void pmm_init(void) {
   /* Mark kernel as used */
   uint64_t kernel_start = (uint64_t)_kernel_start_phys;
   uint64_t kernel_end = (uint64_t)_kernel_end_phys;
-  pmm_mark_range_used(kernel_start, kernel_end);
 
-  /* Mark bitmap itself as used (it's in BSS which is in kernel range, but be
-   * safe) */
-  pmm_mark_range_used((uint64_t)frame_bitmap - KERNEL_VMA,
-                      (uint64_t)frame_bitmap - KERNEL_VMA + BITMAP_SIZE);
+  /* Mark kernel region in bitmap */
+  kernel_start = PAGE_ALIGN_DOWN(kernel_start);
+  kernel_end = PAGE_ALIGN_UP(kernel_end);
+  for (uint64_t addr = kernel_start; addr < kernel_end; addr += PAGE_SIZE) {
+    size_t frame = ADDR_TO_PFN(addr);
+    if (frame < MAX_FRAMES) {
+      bitmap_set(frame);
+    }
+  }
+
+  /* Mark bitmap itself as used (it's in BSS which is at high address) */
+  /* Note: frame_bitmap is at a virtual address, we need to be careful here */
+  /* The bitmap is part of the kernel BSS, so it's already covered by kernel
+   * range */
+
+  /* Count actual used frames by scanning the bitmap */
+  used_frames = 0;
+  for (size_t i = 0; i < (total_frames + 7) / 8 && i < BITMAP_SIZE; i++) {
+    for (int bit = 0; bit < 8; bit++) {
+      size_t frame = i * 8 + bit;
+      if (frame >= total_frames)
+        break;
+      if (bitmap_test(frame)) {
+        used_frames++;
+      }
+    }
+  }
 
   size_t free_frames = pmm_get_free_frames();
   size_t free_mb = (free_frames * PAGE_SIZE) / MB;

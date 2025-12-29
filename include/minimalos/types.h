@@ -1,5 +1,6 @@
 /**
  * MinimalOS - Core Type Definitions
+ * Compatible with clangd/IDE language servers
  */
 
 #ifndef MINIMALOS_TYPES_H
@@ -24,20 +25,42 @@ typedef int64_t ptrdiff_t;
 typedef uint64_t uintptr_t;
 typedef int64_t intptr_t;
 
-/* Boolean */
+/* Boolean - C11 compatible */
+#if !defined(__cplusplus)
+#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
 typedef _Bool bool;
+#else
+typedef unsigned char bool;
+#endif
 #define true 1
 #define false 0
+#endif
 
 /* NULL pointer */
+#ifndef NULL
 #define NULL ((void *)0)
+#endif
 
-/* Compiler attributes */
+/* Compiler attributes - named to avoid conflicts */
+#ifndef __packed
 #define __packed __attribute__((packed))
+#endif
+
+#ifndef __aligned
 #define __aligned(x) __attribute__((aligned(x)))
+#endif
+
+#ifndef __always_inline
 #define __always_inline __attribute__((always_inline)) inline
+#endif
+
+#ifndef __noreturn
 #define __noreturn __attribute__((noreturn))
+#endif
+
+#ifndef __unused
 #define __unused __attribute__((unused))
+#endif
 
 /* Bit manipulation */
 #define BIT(n) (1UL << (n))
