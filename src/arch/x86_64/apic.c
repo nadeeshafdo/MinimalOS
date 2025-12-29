@@ -95,7 +95,50 @@ void apic_send_ipi(uint32_t apic_id, uint32_t vector) {
 }
 
 /**
- * Initialize APIC timer
+ * Set APIC timer to one-shot mode for calibration
+ */
+void apic_timer_one_shot(uint32_t count) {
+  if (!apic_initialized)
+    return;
+
+  /* Set divider to 16 */
+  lapic_write(LAPIC_TIMER_DCR, TIMER_DIV_16);
+
+  /* One-shot mode, masked (no interrupt) */
+  lapic_write(LAPIC_LVT_TIMER, LVT_MASKED);
+
+  /* Set initial count */
+  lapic_write(LAPIC_TIMER_ICR, count);
+}
+
+/**
+ * Read current APIC timer count
+ */
+uint32_t apic_timer_read_current(void) {
+  if (!apic_initialized)
+    return 0;
+  return lapic_read(LAPIC_TIMER_CCR);
+}
+
+/**
+ * Set APIC timer to periodic mode
+ */
+void apic_timer_periodic(uint32_t count) {
+  if (!apic_initialized)
+    return;
+
+  /* Set divider to 16 */
+  lapic_write(LAPIC_TIMER_DCR, TIMER_DIV_16);
+
+  /* Periodic mode, vector 32 (timer IRQ) */
+  lapic_write(LAPIC_LVT_TIMER, IRQ_TIMER | TIMER_PERIODIC);
+
+  /* Set initial count */
+  lapic_write(LAPIC_TIMER_ICR, count);
+}
+
+/**
+ * Initialize APIC timer (legacy function)
  */
 void apic_timer_init(uint32_t frequency_hz) {
   if (!apic_initialized)
@@ -108,8 +151,6 @@ void apic_timer_init(uint32_t frequency_hz) {
   lapic_write(LAPIC_LVT_TIMER, IRQ_TIMER | TIMER_PERIODIC);
 
   /* Set initial count (rough estimate - should be calibrated) */
-  /* Assume ~1GHz bus, div 16 = ~62.5 MHz timer */
-  /* For 100 Hz = 625000 counts */
   uint32_t initial_count = 625000; /* ~100 Hz on most systems */
 
   if (frequency_hz != 0 && frequency_hz != 100) {

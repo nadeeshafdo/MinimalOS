@@ -16,18 +16,44 @@ extern void vmm_init(void);
 extern void heap_init(void);
 extern void pic_init(void);
 extern void apic_init(void);
-extern void pic_unmask_irq(uint8_t irq);
+extern void timer_init(void);
+extern void sched_init(void);
+extern uint64_t timer_get_ticks(void);
+
+/* Task functions */
+struct task;
+extern struct task *task_create(void (*entry)(void), const char *name);
+extern struct task *current_task;
 
 /* Kernel version */
 #define KERNEL_VERSION "0.1.0"
 
-/* Timer tick counter */
-static volatile uint64_t timer_ticks = 0;
+/* Task functions */
+extern void task_yield(void);
 
 /**
- * Called from ISR on timer interrupt
+ * Test task 1 - prints periodically and yields
  */
-void timer_tick(void) { timer_ticks++; }
+static void test_task1(void) {
+  uint64_t count = 0;
+  for (;;) {
+    printk("[Task1] count=%lu\n", count++);
+    /* Yield to other tasks */
+    task_yield();
+  }
+}
+
+/**
+ * Test task 2 - prints periodically and yields
+ */
+static void test_task2(void) {
+  uint64_t count = 0;
+  for (;;) {
+    printk("[Task2] count=%lu\n", count++);
+    /* Yield to other tasks */
+    task_yield();
+  }
+}
 
 /**
  * Kernel main entry point
@@ -79,7 +105,7 @@ void kernel_main(uint64_t multiboot_info) {
   heap_init();
   printk("[OK] Kernel heap initialized\n");
 
-  /* Initialize legacy PIC (always, for fallback) */
+  /* Initialize legacy PIC */
   printk("[..] Initializing PIC\n");
   pic_init();
   printk("[OK] PIC initialized\n");
@@ -89,30 +115,46 @@ void kernel_main(uint64_t multiboot_info) {
   apic_init();
   printk("[OK] APIC initialized\n");
 
+  /* Initialize and calibrate timer */
+  printk("[..] Initializing timer\n");
+  timer_init();
+  printk("[OK] Timer initialized\n");
+
+  /* Initialize scheduler */
+  printk("[..] Initializing scheduler\n");
+  sched_init();
+  printk("[OK] Scheduler initialized\n");
+
   printk("\n");
   printk("===========================================\n");
   printk("  MinimalOS kernel initialized!\n");
   printk("===========================================\n");
   printk("\n");
 
-  /* Unmask timer IRQ for testing */
-  pic_unmask_irq(0); /* IRQ0 = Timer */
+  /* Create test tasks */
+  printk("Creating test tasks...\n");
+  task_create(test_task1, "task1");
+  task_create(test_task2, "task2");
 
   /* Enable interrupts */
   printk("Enabling interrupts...\n");
   __asm__ volatile("sti");
 
-  /* Halt loop - kernel idle with timer */
-  printk("Entering idle loop...\n");
-  uint64_t last_ticks = 0;
+  /* Start first real task (cooperative switch) */
+  printk("Starting scheduler...\n");
+  extern void schedule(void);
+  schedule();
 
+  /* Main kernel loop - just idle, scheduler handles the rest */
+  uint64_t last_ticks = 0;
   for (;;) {
     __asm__ volatile("hlt");
 
-    /* Print tick count every 100 ticks */
-    if (timer_ticks >= last_ticks + 100) {
-      printk("Timer: %lu ticks\n", timer_ticks);
-      last_ticks = timer_ticks;
+    /* Print timer tick every 500 ticks (5 seconds) */
+    uint64_t ticks = timer_get_ticks();
+    if (ticks >= last_ticks + 500) {
+      printk("--- %lu seconds uptime ---\n", ticks / 100);
+      last_ticks = ticks;
     }
   }
 }

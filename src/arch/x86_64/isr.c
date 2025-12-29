@@ -130,8 +130,8 @@ void isr_handler(struct interrupt_frame *frame) {
     case 0: /* Timer */
       /* Call timer tick handler */
       {
-        extern void timer_tick(void);
-        timer_tick();
+        extern void timer_tick_handler(void);
+        timer_tick_handler();
       }
       break;
 
@@ -149,13 +149,9 @@ void isr_handler(struct interrupt_frame *frame) {
       break;
     }
 
-    /* Send End of Interrupt - use PIC for IRQs 0-15, APIC for others */
-    if (irq < 16) {
-      extern void pic_eoi(uint8_t irq);
-      pic_eoi((uint8_t)irq);
-    } else {
-      apic_eoi();
-    }
+    /* Send End of Interrupt to APIC */
+    /* Since we're using APIC timer, always send APIC EOI */
+    apic_eoi();
   }
 }
 
