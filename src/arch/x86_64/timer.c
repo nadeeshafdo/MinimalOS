@@ -1,12 +1,10 @@
 /**
  * MinimalOS - Timer Implementation
  * APIC timer calibration using PIT
- * Supports both APIC Periodic Timer and TSC-Deadline Timer
  */
 
 #include "timer.h"
 #include "apic.h"
-#include "cpu.h"
 #include "idt.h"
 
 extern void printk(const char *fmt, ...);
@@ -14,6 +12,7 @@ extern void printk(const char *fmt, ...);
 /* PIT (Programmable Interval Timer) ports and constants */
 #define PIT_CHANNEL0 0x40
 #define PIT_COMMAND 0x43
+#define PIT_FREQUENCY 1193182 /* PIT base frequency in Hz */
 
 /* I/O port access */
 static inline void outb(uint16_t port, uint8_t val) {
@@ -30,12 +29,6 @@ static inline uint8_t inb(uint16_t port) {
 static volatile uint64_t timer_ticks = 0;
 static uint32_t apic_ticks_per_ms = 0;
 
-/* TSC-Deadline state */
-static bool using_tsc_deadline = false;
-static uint64_t tsc_frequency = 0;
-static uint64_t tsc_deadline_interval = 0;
-static uint64_t next_tsc_deadline = 0;
-
 /**
  * PIT one-shot delay for calibration
  * Waits for approximately 10ms
@@ -45,7 +38,7 @@ static void pit_wait_10ms(void) {
   /* Divisor for 10ms: 1193182 / 100 = 11932 */
   uint16_t divisor = 11932;
 
-  outb(PIT_COMMAND, 0x30); /* Channel 0, lobyte/hibyte, mode 0 */
+  outb(PIT_COMMAND, 0x30);
   outb(PIT_CHANNEL0, divisor & 0xFF);
   outb(PIT_CHANNEL0, (divisor >> 8) & 0xFF);
 
@@ -60,13 +53,11 @@ static void pit_wait_10ms(void) {
 
 /**
  * Calibrate APIC timer using PIT
- * Returns APIC timer ticks per millisecond
  */
 static uint32_t calibrate_apic_timer(void) {
   extern void apic_timer_one_shot(uint32_t count);
   extern uint32_t apic_timer_read_current(void);
 
-  /* Set APIC timer to a large initial count */
   uint32_t initial_count = 0xFFFFFFFF;
 
   apic_timer_one_shot(initial_count);
@@ -82,53 +73,24 @@ static uint32_t calibrate_apic_timer(void) {
  * Initialize timer subsystem
  */
 void timer_init(void) {
-  printk("  Initializing timer...\n");
-
-  /* Check for TSC-Deadline support */
-  if (cpu_info.tsc_deadline_supported) {
-    printk("  TSC-Deadline support detected\n");
-    printk("  Calibrating TSC...\n");
-
-    uint64_t t1 = rdtsc();
-    pit_wait_10ms();
-    uint64_t t2 = rdtsc();
-
-    /* Calculate TSC frequency (ticks per 10ms * 100) */
-    tsc_frequency = (t2 - t1) * 100;
-    tsc_deadline_interval = tsc_frequency / TIMER_FREQUENCY_HZ;
-
-    printk("  TSC Frequency: %lu Hz\n", tsc_frequency);
-
-    /* Initialize TSC Deadline mode */
-    apic_timer_tsc_deadline_init();
-
-    /* Arm first deadline */
-    using_tsc_deadline = true;
-    next_tsc_deadline = rdtsc() + tsc_deadline_interval;
-    apic_timer_arm(next_tsc_deadline);
-
-    printk("  TSC-Deadline timer configured: %u Hz\n", TIMER_FREQUENCY_HZ);
-    return;
-  }
-
-  /* Fallback to Periodic APIC Timer */
-  printk("  Using Legacy APIC Periodic Timer\n");
   printk("  Calibrating APIC timer...\n");
 
   apic_ticks_per_ms = calibrate_apic_timer();
 
   if (apic_ticks_per_ms == 0) {
-    printk("  WARNING: APIC calibration failed, using default\n");
+    printk("  WARNING: APIC timer calibration failed, using default\n");
     apic_ticks_per_ms = 100000;
   }
 
   printk("  APIC timer: %u ticks/ms\n", apic_ticks_per_ms);
 
   uint32_t count = (apic_ticks_per_ms * 1000) / TIMER_FREQUENCY_HZ;
+
   extern void apic_timer_periodic(uint32_t count);
   apic_timer_periodic(count);
 
-  printk("  Periodic timer configured: %u Hz\n", TIMER_FREQUENCY_HZ);
+  printk("  Timer configured: %u Hz (%u ms/tick)\n", TIMER_FREQUENCY_HZ,
+         TIMER_MS_PER_TICK);
 }
 
 /**
@@ -157,13 +119,7 @@ void timer_sleep_ms(uint32_t ms) {
 void timer_tick_handler(void) {
   timer_ticks++;
 
-  /* Re-arm TSC Deadline timer if active */
-  if (using_tsc_deadline) {
-    next_tsc_deadline += tsc_deadline_interval;
-    apic_timer_arm(next_tsc_deadline);
-  }
-
-  /* Call scheduler */
+  /* Call scheduler for preemption tracking */
   extern void sched_tick(void);
   sched_tick();
 }

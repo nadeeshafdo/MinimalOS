@@ -24,13 +24,11 @@
 #define CPUID_FEAT_ECX_SSE41 (1 << 19)
 #define CPUID_FEAT_ECX_SSE42 (1 << 20)
 #define CPUID_FEAT_ECX_X2APIC (1 << 21)
-#define CPUID_FEAT_ECX_TSC_DEADLINE (1 << 24)
 #define CPUID_FEAT_ECX_XSAVE (1 << 26)
 #define CPUID_FEAT_ECX_AVX (1 << 28)
 
 /* Model Specific Registers */
 #define MSR_IA32_APIC_BASE 0x1B
-#define MSR_IA32_TSC_DEADLINE 0x6E0
 #define MSR_IA32_EFER 0xC0000080
 #define MSR_IA32_STAR 0xC0000081
 #define MSR_IA32_LSTAR 0xC0000082
@@ -53,20 +51,10 @@ struct cpu_info {
   uint8_t apic_id;
   bool x2apic_supported;
   bool xsave_supported;
-  bool tsc_deadline_supported;
-};
-
-/* Per-CPU data */
-struct per_cpu_data {
-  void *current_task;    /* Pointer to current task (struct task*) */
-  uint64_t scratch;      /* Scratch space helper */
-  uint64_t kernel_stack; /* Top of kernel stack for syscall */
-  uint64_t user_rsp;     /* Saved user RSP */
 };
 
 /* Global CPU info */
 extern struct cpu_info cpu_info;
-extern struct per_cpu_data bsp_cpu_data;
 
 /* Function prototypes */
 void cpu_init(void);

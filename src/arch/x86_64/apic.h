@@ -116,9 +116,6 @@ void apic_eoi(void);
 uint32_t apic_get_id(void);
 void apic_send_ipi(uint32_t apic_id, uint32_t vector);
 void apic_timer_init(uint32_t frequency_hz);
-void apic_timer_tsc_deadline_init(void);
-void apic_timer_arm(uint64_t tsc_value);
-uint64_t rdtsc(void);
 bool apic_is_x2apic(void);
 
 #endif /* ARCH_X86_64_APIC_H */

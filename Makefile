@@ -34,8 +34,7 @@ ASM_SOURCES = $(SRC_DIR)/boot/multiboot2.asm \
               $(SRC_DIR)/boot/gdt.asm \
               $(SRC_DIR)/boot/long_mode.asm \
               $(SRC_DIR)/arch/x86_64/isr_stubs.asm \
-              $(SRC_DIR)/arch/x86_64/context.asm \
-              $(SRC_DIR)/arch/x86_64/syscall_entry.asm
+              $(SRC_DIR)/arch/x86_64/context.asm
 
 C_SOURCES = $(SRC_DIR)/kernel/main.c \
             $(SRC_DIR)/kernel/panic.c \
@@ -45,13 +44,11 @@ C_SOURCES = $(SRC_DIR)/kernel/main.c \
             $(SRC_DIR)/arch/x86_64/cpu.c \
             $(SRC_DIR)/arch/x86_64/idt.c \
             $(SRC_DIR)/arch/x86_64/isr.c \
-            $(SRC_DIR)/arch/x86_64/syscall.c \
             $(SRC_DIR)/arch/x86_64/apic.c \
             $(SRC_DIR)/arch/x86_64/pic.c \
             $(SRC_DIR)/arch/x86_64/timer.c \
             $(SRC_DIR)/drivers/serial.c \
             $(SRC_DIR)/drivers/vga.c \
-            $(SRC_DIR)/drivers/framebuffer.c \
             $(SRC_DIR)/mm/pmm.c \
             $(SRC_DIR)/mm/vmm.c \
             $(SRC_DIR)/mm/heap.c

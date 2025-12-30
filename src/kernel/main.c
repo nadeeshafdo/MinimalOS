@@ -2,8 +2,6 @@
  * MinimalOS - Kernel Main Entry Point
  */
 
-#include "drivers/framebuffer.h"
-#include <arch/x86_64/cpu.h>
 #include <minimalos/multiboot2.h>
 #include <minimalos/types.h>
 
@@ -102,14 +100,6 @@ void kernel_main(uint64_t multiboot_info) {
   vmm_init();
   printk("[OK] Virtual memory manager initialized\n");
 
-  /* Initialize framebuffer if available (needs VMM) */
-  framebuffer_init((struct multiboot2_tag_framebuffer *)multiboot2_find_tag(
-      MULTIBOOT2_TAG_FRAMEBUFFER));
-
-  if (framebuffer_is_ready()) {
-    printk("[OK] Framebuffer console initialized\n");
-  }
-
   /* Initialize kernel heap */
   printk("[..] Initializing kernel heap\n");
   heap_init();
@@ -129,12 +119,6 @@ void kernel_main(uint64_t multiboot_info) {
   printk("[..] Initializing timer\n");
   timer_init();
   printk("[OK] Timer initialized\n");
-
-  /* Initialize system call interface */
-  printk("[..] Initializing SYSCALL interface\n");
-  extern void syscall_init(void);
-  syscall_init();
-  printk("[OK] SYSCALL interface initialized\n");
 
   /* Initialize scheduler */
   printk("[..] Initializing scheduler\n");
