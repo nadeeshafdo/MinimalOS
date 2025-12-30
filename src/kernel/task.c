@@ -14,6 +14,9 @@ static struct task *idle_task = NULL;
 struct task *current_task = NULL;
 static uint64_t next_tid = 0;
 
+/* Preemption flag - set by timer ISR, checked after ISR returns */
+volatile int need_resched = 0;
+
 /* Time slice in ticks */
 #define DEFAULT_TIME_SLICE 10 /* 100ms at 100Hz */
 
@@ -234,10 +237,7 @@ void schedule(void) {
 }
 
 /**
- * Timer tick handler for preemption
- * Note: Preemptive scheduling from interrupt context requires
- * saving/restoring the full interrupt frame, which is more complex.
- * For now, just track tick counts.
+ * Timer tick handler for preemption tracking
  */
 void sched_tick(void) {
   if (!current_task)
@@ -248,9 +248,39 @@ void sched_tick(void) {
   if (current_task->time_slice > 0) {
     current_task->time_slice--;
   }
+}
 
-  /* TODO: Preemptive scheduling requires saving interrupt context */
-  /* For now, rely on cooperative scheduling via task_yield() */
+/**
+ * Include interrupt frame structure
+ */
+struct interrupt_frame;
+
+/**
+ * Preemption check - called from timer interrupt
+ * Sets flag for schedule to be called after interrupt returns
+ */
+void sched_preempt_check(struct interrupt_frame *frame) {
+  (void)frame;
+
+  if (!current_task || current_task == idle_task)
+    return;
+
+  /* Check if time slice expired */
+  if (current_task->time_slice == 0) {
+    /* Set flag - actual switch happens when task checks or yields */
+    need_resched = 1;
+  }
+}
+
+/**
+ * Check if reschedule is needed and do it
+ * Should be called periodically by long-running tasks
+ */
+void sched_maybe_preempt(void) {
+  if (need_resched) {
+    need_resched = 0;
+    schedule();
+  }
 }
 
 /**
@@ -270,5 +300,5 @@ void sched_init(void) {
   current_task = idle_task;
   current_task->state = TASK_RUNNING;
 
-  printk("  Scheduler ready\n");
+  printk("  Scheduler ready (preemptive)\n");
 }

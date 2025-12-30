@@ -41,6 +41,9 @@ struct task {
   /* CPU context */
   struct cpu_context *context; /* Saved context pointer (RSP) */
 
+  /* Interrupt context for preemption */
+  uint64_t interrupt_rsp; /* RSP when interrupted (0 if not in interrupt) */
+
   /* Stack */
   void *stack_base;  /* Base of allocated stack */
   size_t stack_size; /* Stack size */

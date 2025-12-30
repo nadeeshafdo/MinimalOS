@@ -128,10 +128,14 @@ void isr_handler(struct interrupt_frame *frame) {
 
     switch (irq) {
     case 0: /* Timer */
-      /* Call timer tick handler */
+      /* Call timer tick handler with frame for preemption */
       {
         extern void timer_tick_handler(void);
         timer_tick_handler();
+
+        /* Check if preemption is needed */
+        extern void sched_preempt_check(struct interrupt_frame * frame);
+        sched_preempt_check(frame);
       }
       break;
 

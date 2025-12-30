@@ -30,28 +30,35 @@ extern struct task *current_task;
 
 /* Task functions */
 extern void task_yield(void);
+extern void sched_maybe_preempt(void);
 
 /**
- * Test task 1 - prints periodically and yields
+ * Test task 1 - prints periodically (preempted by timer)
  */
 static void test_task1(void) {
   uint64_t count = 0;
   for (;;) {
     printk("[Task1] count=%lu\n", count++);
-    /* Yield to other tasks */
-    task_yield();
+    /* Busy loop with preemption checks */
+    for (volatile int i = 0; i < 2000000; i++) {
+      if (i % 100000 == 0)
+        sched_maybe_preempt();
+    }
   }
 }
 
 /**
- * Test task 2 - prints periodically and yields
+ * Test task 2 - prints periodically (preempted by timer)
  */
 static void test_task2(void) {
   uint64_t count = 0;
   for (;;) {
     printk("[Task2] count=%lu\n", count++);
-    /* Yield to other tasks */
-    task_yield();
+    /* Busy loop with preemption checks */
+    for (volatile int i = 0; i < 2000000; i++) {
+      if (i % 100000 == 0)
+        sched_maybe_preempt();
+    }
   }
 }
 
