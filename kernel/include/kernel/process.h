@@ -1,77 +1,57 @@
-#ifndef _KERNEL_PROCESS_H
-#define _KERNEL_PROCESS_H
+/* Process management header for x86_64 */
+#ifndef KERNEL_PROCESS_H
+#define KERNEL_PROCESS_H
 
-#include <stdint.h>
 #include <kernel/paging.h>
-
-/* Maximum number of processes */
-#define MAX_PROCESSES 256
+#include <stdint.h>
 
 /* Process states */
 typedef enum {
-    PROCESS_STATE_UNUSED = 0,
-    PROCESS_STATE_READY,
-    PROCESS_STATE_RUNNING,
-    PROCESS_STATE_BLOCKED,
-    PROCESS_STATE_ZOMBIE
+  PROCESS_STATE_NEW,
+  PROCESS_STATE_READY,
+  PROCESS_STATE_RUNNING,
+  PROCESS_STATE_BLOCKED,
+  PROCESS_STATE_ZOMBIE
 } process_state_t;
 
-/* CPU context for context switching */
+/* CPU context for x86_64 */
 typedef struct {
-    uint32_t edi;
-    uint32_t esi;
-    uint32_t ebp;
-    uint32_t esp;
-    uint32_t ebx;
-    uint32_t edx;
-    uint32_t ecx;
-    uint32_t eax;
-    uint32_t eip;
-    uint32_t cs;
-    uint32_t eflags;
+  uint64_t r15, r14, r13, r12; /* Callee-saved registers */
+  uint64_t rbx, rbp;
+  uint64_t rsp;    /* Stack pointer */
+  uint64_t rip;    /* Instruction pointer */
+  uint64_t rflags; /* Flags register */
 } cpu_context_t;
 
-/* Process Control Block (PCB) */
+/* Process Control Block */
 typedef struct process {
-    uint32_t pid;               /* Process ID */
-    process_state_t state;      /* Current state */
-    char name[32];              /* Process name */
-    
-    /* Memory */
-    page_directory_t *page_dir; /* Page directory */
-    uint32_t kernel_stack;      /* Kernel stack pointer */
-    uint32_t user_stack;        /* User stack pointer */
-    
-    /* CPU state */
-    cpu_context_t context;      /* Saved CPU state */
-    
-    /* Scheduling */
-    uint32_t priority;          /* Process priority */
-    uint32_t time_slice;        /* Time slice remaining */
-    
-    /* Linked list for scheduler */
-    struct process *next;       /* Next process in queue */
+  uint32_t pid;          /* Process ID */
+  process_state_t state; /* Current state */
+  char name[32];         /* Process name */
+
+  cpu_context_t context;      /* CPU context */
+  page_directory_t *page_dir; /* Page directory */
+  uint64_t kernel_stack;      /* Kernel stack pointer */
+
+  uint32_t priority;   /* Scheduling priority */
+  uint32_t time_slice; /* Time slice remaining */
+
+  struct process *next; /* Next process in queue */
 } process_t;
 
-/* Initialize process subsystem */
+/* Maximum processes */
+#define MAX_PROCESSES 256
+
+/* Default time slice (in timer ticks) */
+#define DEFAULT_TIME_SLICE 10
+
+/* Functions */
 void process_init(void);
-
-/* Create a new kernel process */
 process_t *process_create(const char *name, void (*entry)(void));
-
-/* Exit current process */
 void process_exit(int status);
-
-/* Get current running process */
 process_t *process_current(void);
-
-/* Get process by PID */
 process_t *process_get(uint32_t pid);
-
-/* Yield CPU to next process */
 void process_yield(void);
+void process_switch(process_t *next);
 
-/* Switch to user mode (never returns) */
-void enter_user_mode(void *entry_point, uint32_t user_stack_top);
-
-#endif /* _KERNEL_PROCESS_H */
+#endif

@@ -1,80 +1,77 @@
-/* Command utility functions */
-#include <stdint.h>
+/* Utility functions for shell commands */
 #include <kernel/commands.h>
 #include <kernel/tty.h>
+#include <stdint.h>
 
-/* Print hex number */
-void cmd_print_hex(uint32_t value) {
-    char hex[11] = "0x00000000";
-    const char* digits = "0123456789ABCDEF";
-    for (int i = 9; i >= 2; i--) {
-        hex[i] = digits[value & 0xF];
-        value >>= 4;
+/* Parse hexadecimal string to uint64 */
+uint64_t parse_hex(const char *str) {
+  uint64_t value = 0;
+
+  /* Skip "0x" prefix if present */
+  if (str[0] == '0' && (str[1] == 'x' || str[1] == 'X')) {
+    str += 2;
+  }
+
+  while (*str) {
+    char c = *str++;
+    uint64_t digit;
+
+    if (c >= '0' && c <= '9') {
+      digit = c - '0';
+    } else if (c >= 'a' && c <= 'f') {
+      digit = c - 'a' + 10;
+    } else if (c >= 'A' && c <= 'F') {
+      digit = c - 'A' + 10;
+    } else {
+      break;
     }
-    terminal_writestring(hex);
+
+    value = (value << 4) | digit;
+  }
+
+  return value;
 }
 
-/* Print hex byte */
-void cmd_print_hex_byte(uint8_t value) {
-    const char* digits = "0123456789ABCDEF";
-    terminal_putchar(digits[(value >> 4) & 0xF]);
-    terminal_putchar(digits[value & 0xF]);
+/* Parse decimal string to uint64 */
+uint64_t parse_dec(const char *str) {
+  uint64_t value = 0;
+
+  while (*str >= '0' && *str <= '9') {
+    value = value * 10 + (*str - '0');
+    str++;
+  }
+
+  return value;
 }
 
-/* Print decimal number */
-void cmd_print_dec(uint32_t value) {
-    char buf[12];
-    int i = 10;
-    buf[11] = '\0';
-    if (value == 0) {
-        terminal_writestring("0");
-        return;
-    }
-    while (value > 0) {
-        buf[i--] = '0' + (value % 10);
-        value /= 10;
-    }
-    terminal_writestring(&buf[i + 1]);
+/* Print 64-bit hex value */
+void print_hex64(uint64_t value) {
+  char hex[19] = "0x0000000000000000";
+  const char *digits = "0123456789ABCDEF";
+
+  for (int i = 17; i >= 2; i--) {
+    hex[i] = digits[value & 0xF];
+    value >>= 4;
+  }
+
+  terminal_writestring(hex);
 }
 
-/* Parse hex string */
-uint32_t cmd_parse_hex(const char *s) {
-    uint32_t result = 0;
-    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
-    while (*s) {
-        char c = *s++;
-        result <<= 4;
-        if (c >= '0' && c <= '9') result |= c - '0';
-        else if (c >= 'a' && c <= 'f') result |= c - 'a' + 10;
-        else if (c >= 'A' && c <= 'F') result |= c - 'A' + 10;
-        else break;
-    }
-    return result;
-}
+/* Print 64-bit decimal value */
+void print_dec64(uint64_t value) {
+  char buf[21];
+  int i = 20;
+  buf[i] = '\0';
 
-/* Parse decimal string */
-uint32_t cmd_parse_dec(const char *s) {
-    uint32_t result = 0;
-    while (*s >= '0' && *s <= '9') {
-        result = result * 10 + (*s++ - '0');
-    }
-    return result;
-}
+  if (value == 0) {
+    terminal_writestring("0");
+    return;
+  }
 
-/* Get next argument */
-const char* cmd_get_arg(const char *s, char *buf, uint32_t max) {
-    while (*s == ' ' || *s == '\t') s++;
-    uint32_t i = 0;
-    while (*s && *s != ' ' && *s != '\t' && i < max - 1) {
-        buf[i++] = *s++;
-    }
-    buf[i] = '\0';
-    return s;
-}
+  while (value > 0 && i > 0) {
+    buf[--i] = '0' + (value % 10);
+    value /= 10;
+  }
 
-/* String length helper */
-uint32_t cmd_strlen(const char *s) {
-    uint32_t len = 0;
-    while (s[len]) len++;
-    return len;
+  terminal_writestring(&buf[i]);
 }

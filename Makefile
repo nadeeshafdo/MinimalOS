@@ -1,137 +1,187 @@
-# Build configuration
-ARCH ?= i386
-HOST ?= $(ARCH)-elf
+# MinimalOS Build System - x86_64 with Limine Bootloader
+# Supports both BIOS and UEFI boot
 
-# Try to detect cross-compiler, fall back to system compiler with freestanding flags
-CC := $(shell which $(HOST)-gcc 2>/dev/null || echo gcc)
-AS := $(shell which $(HOST)-as 2>/dev/null || echo as)
-LD := $(shell which $(HOST)-gcc 2>/dev/null || echo gcc)
+# Build configuration
+ARCH := x86_64
+
+# Toolchain
+CC := gcc
+LD := ld
+AS := as
+NASM := nasm
 
 # Build directories
 BUILDDIR := build
 DISTDIR := $(BUILDDIR)/dist
-
-# Compiler flags
-CFLAGS := -std=gnu99 -ffreestanding -O2 -Wall -Wextra -Werror=implicit-function-declaration
-CFLAGS += -Ikernel/include -m32 -nostdlib -fno-pie -fno-stack-protector
-
-# Assembler flags
-ASFLAGS := --32
-
-# Linker flags
-LDFLAGS := -m32 -ffreestanding -nostdlib -T arch/$(ARCH)/linker.ld
-
-# Directories
-ARCHDIR := arch/$(ARCH)
-KERNELDIR := kernel
-DRIVERDIR := drivers
-LIBCDIR := libc
+OBJDIR := $(BUILDDIR)/obj
+ISODIR := $(BUILDDIR)/iso
 
 # Output files
-KERNEL := $(DISTDIR)/minimalos.bin
+KERNEL := $(DISTDIR)/minimalos
 ISO := $(DISTDIR)/minimalos.iso
 
+# Compiler flags for x86_64 freestanding kernel
+CFLAGS := -std=gnu11 -ffreestanding -O2 -Wall -Wextra
+CFLAGS += -Ikernel/include
+CFLAGS += -m64 -mcmodel=kernel -mno-red-zone
+CFLAGS += -mno-80387 -mno-mmx -mno-sse -mno-sse2
+CFLAGS += -fno-stack-protector -fno-stack-check -fno-lto -fno-PIC
+CFLAGS += -ffunction-sections -fdata-sections
+
+# Preprocessor flags
+CPPFLAGS := -MMD -MP
+
+# Assembler flags
+ASFLAGS := --64
+
+# Linker flags
+LDFLAGS := -m elf_x86_64 -nostdlib -static -z max-page-size=0x1000
+LDFLAGS += --gc-sections -T arch/$(ARCH)/linker.ld
+
 # Source files
-KERNEL_SOURCES := \
-	$(KERNELDIR)/kernel.c \
-	$(KERNELDIR)/tty.c \
-	$(KERNELDIR)/arch/i386/gdt.c \
-	$(KERNELDIR)/arch/i386/idt.c \
-	$(KERNELDIR)/arch/i386/isr.c \
-	$(KERNELDIR)/arch/i386/irq.c \
-	$(KERNELDIR)/mm/pmm.c \
-	$(KERNELDIR)/mm/paging.c \
-	$(KERNELDIR)/mm/kheap.c \
-	$(KERNELDIR)/process/process.c \
-	$(KERNELDIR)/process/scheduler.c \
-	$(KERNELDIR)/process/syscall.c \
-	$(KERNELDIR)/shell.c \
-	$(KERNELDIR)/commands/utils.c \
-	$(KERNELDIR)/commands/basic.c \
-	$(KERNELDIR)/commands/sysinfo.c \
-	$(KERNELDIR)/commands/memory.c \
-	$(KERNELDIR)/commands/display.c \
-	$(KERNELDIR)/commands/tests.c
+KERNEL_C_SOURCES := \
+	kernel/kernel.c \
+	kernel/tty.c \
+	kernel/shell.c \
+	kernel/arch/x86_64/gdt.c \
+	kernel/arch/x86_64/idt.c \
+	kernel/arch/x86_64/isr.c \
+	kernel/arch/x86_64/irq.c \
+	kernel/mm/pmm.c \
+	kernel/mm/paging.c \
+	kernel/mm/kheap.c \
+	kernel/process/process.c \
+	kernel/process/scheduler.c \
+	kernel/process/syscall.c \
+	kernel/commands/utils.c \
+	kernel/commands/basic.c \
+	kernel/commands/sysinfo.c \
+	kernel/commands/memory.c \
+	kernel/commands/display.c \
+	kernel/commands/tests.c
 
-DRIVER_SOURCES := \
-	$(DRIVERDIR)/timer.c \
-	$(DRIVERDIR)/keyboard.c \
-	$(DRIVERDIR)/framebuffer.c \
-	$(DRIVERDIR)/font.c
+DRIVER_C_SOURCES := \
+	drivers/timer.c \
+	drivers/keyboard.c \
+	drivers/framebuffer.c \
+	drivers/font.c
 
-ARCH_ASM_SOURCES := \
-	$(ARCHDIR)/boot.s \
-	$(KERNELDIR)/arch/i386/gdt_flush.s \
-	$(KERNELDIR)/arch/i386/idt_flush.s \
-	$(KERNELDIR)/arch/i386/isr_stub.s \
-	$(KERNELDIR)/arch/i386/irq_stub.s \
-	$(KERNELDIR)/arch/i386/switch.s \
-	$(KERNELDIR)/arch/i386/usermode.s
+ASM_SOURCES := \
+	kernel/arch/x86_64/gdt_flush.s \
+	kernel/arch/x86_64/idt_flush.s \
+	kernel/arch/x86_64/isr_stub.s \
+	kernel/arch/x86_64/irq_stub.s \
+	kernel/arch/x86_64/switch.s \
+	kernel/arch/x86_64/usermode.s
 
-# Object files (in build directory)
-KERNEL_OBJS := $(patsubst %.c,$(BUILDDIR)/%.o,$(KERNEL_SOURCES))
-DRIVER_OBJS := $(patsubst %.c,$(BUILDDIR)/%.o,$(DRIVER_SOURCES))
-ARCH_OBJS := $(patsubst %.s,$(BUILDDIR)/%.o,$(ARCH_ASM_SOURCES))
+# Object files
+KERNEL_OBJS := $(patsubst %.c,$(OBJDIR)/%.o,$(KERNEL_C_SOURCES))
+DRIVER_OBJS := $(patsubst %.c,$(OBJDIR)/%.o,$(DRIVER_C_SOURCES))
+ASM_OBJS := $(patsubst %.s,$(OBJDIR)/%.o,$(ASM_SOURCES))
 
-ALL_OBJS := $(ARCH_OBJS) $(KERNEL_OBJS) $(DRIVER_OBJS)
+ALL_OBJS := $(KERNEL_OBJS) $(DRIVER_OBJS) $(ASM_OBJS)
+DEPS := $(ALL_OBJS:.o=.d)
+
+# Limine paths
+LIMINE_DIR := limine
+LIMINE_BRANCH := v8.x-binary
 
 # Phony targets
-.PHONY: all clean iso qemu qemu-iso qemu-debug run help dirs
+.PHONY: all clean iso qemu qemu-bios qemu-uefi run dirs limine help
 
 # Default target
 all: dirs $(KERNEL)
 
+# Include generated dependencies
+-include $(DEPS)
+
 # Create build directories
 dirs:
 	@mkdir -p $(DISTDIR)
-	@mkdir -p $(BUILDDIR)/$(ARCHDIR)
-	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/arch/i386
-	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/mm
-	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/process
-	@mkdir -p $(BUILDDIR)/$(KERNELDIR)/commands
-	@mkdir -p $(BUILDDIR)/$(DRIVERDIR)
+	@mkdir -p $(OBJDIR)/kernel/arch/x86_64
+	@mkdir -p $(OBJDIR)/kernel/mm
+	@mkdir -p $(OBJDIR)/kernel/process
+	@mkdir -p $(OBJDIR)/kernel/commands
+	@mkdir -p $(OBJDIR)/drivers
 
 # Link kernel
 $(KERNEL): $(ALL_OBJS)
 	@echo "Linking kernel..."
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS)
-	@echo "Kernel built successfully: $@"
+	@echo "Kernel built: $@"
 
 # Compile C sources
-$(BUILDDIR)/%.o: %.c
-	@echo "Compiling $<..."
-	$(CC) $(CFLAGS) -c $< -o $@
+$(OBJDIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "CC $<"
+	@$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
-# Assemble sources
-$(BUILDDIR)/%.o: %.s
-	@echo "Assembling $<..."
-	$(AS) $(ASFLAGS) $< -o $@
+# Assemble sources (GNU as)
+$(OBJDIR)/%.o: %.s
+	@mkdir -p $(dir $@)
+	@echo "AS $<"
+	@$(AS) $(ASFLAGS) $< -o $@
 
-# Create bootable ISO
-iso: $(KERNEL)
+# Clone/update Limine
+limine:
+	@if [ ! -d "$(LIMINE_DIR)" ]; then \
+		echo "Cloning Limine..."; \
+		git clone https://github.com/limine-bootloader/limine.git $(LIMINE_DIR) --branch=$(LIMINE_BRANCH) --depth=1; \
+	fi
+	@make -C $(LIMINE_DIR)
+
+# Create bootable ISO (BIOS + UEFI)
+iso: $(KERNEL) limine
 	@echo "Creating bootable ISO..."
-	@mkdir -p $(BUILDDIR)/iso/boot/grub
-	@cp $(KERNEL) $(BUILDDIR)/iso/boot/
-	@cp iso/boot/grub/grub.cfg $(BUILDDIR)/iso/boot/grub/ 2>/dev/null || \
-		echo "Note: No grub.cfg found, create iso/boot/grub/grub.cfg first"
-	@grub-mkrescue -o $(ISO) $(BUILDDIR)/iso 2>/dev/null || \
-		(echo "Error: grub-mkrescue not found. Install grub-pc-bin or grub-common"; exit 1)
+	@mkdir -p $(ISODIR)/boot/limine
+	@mkdir -p $(ISODIR)/EFI/BOOT
+	
+	# Copy kernel
+	@cp $(KERNEL) $(ISODIR)/boot/
+	
+	# Copy Limine configuration
+	@cp limine.conf $(ISODIR)/boot/limine/
+	
+	# Copy Limine boot files
+	@cp $(LIMINE_DIR)/limine-bios.sys $(ISODIR)/boot/limine/
+	@cp $(LIMINE_DIR)/limine-bios-cd.bin $(ISODIR)/boot/limine/
+	@cp $(LIMINE_DIR)/limine-uefi-cd.bin $(ISODIR)/boot/limine/
+	
+	# Copy EFI executables
+	@cp $(LIMINE_DIR)/BOOTX64.EFI $(ISODIR)/EFI/BOOT/
+	@cp $(LIMINE_DIR)/BOOTIA32.EFI $(ISODIR)/EFI/BOOT/
+	
+	# Create ISO with xorriso
+	xorriso -as mkisofs -R -r -J \
+		-b boot/limine/limine-bios-cd.bin \
+		-no-emul-boot -boot-load-size 4 -boot-info-table \
+		-hfsplus -apm-block-size 2048 \
+		--efi-boot boot/limine/limine-uefi-cd.bin \
+		-efi-boot-part --efi-boot-image --protective-msdos-label \
+		$(ISODIR) -o $(ISO)
+	
+	# Install Limine BIOS stages
+	./$(LIMINE_DIR)/limine bios-install $(ISO)
+	
 	@echo "ISO created: $(ISO)"
 
-# Run in QEMU (kernel only)
-qemu: $(KERNEL)
-	qemu-system-i386 -kernel $(KERNEL) -serial stdio
+# Run in QEMU (BIOS mode)
+qemu-bios: iso
+	qemu-system-x86_64 -cdrom $(ISO) -serial stdio -m 256M
 
-# Run ISO in QEMU
-qemu-iso: iso
-	qemu-system-i386 -cdrom $(ISO) -serial stdio
+# Run in QEMU (UEFI mode) - requires OVMF
+qemu-uefi: iso
+	qemu-system-x86_64 -cdrom $(ISO) -serial stdio -m 256M \
+		-bios /usr/share/OVMF/OVMF_CODE.fd
 
-# Run in QEMU with debugging
-qemu-debug: $(KERNEL)
-	qemu-system-i386 -kernel $(KERNEL) -serial stdio -d int,cpu_reset -no-reboot
-
-# Convenient alias for running the OS
+# Default run target (BIOS)
+qemu: qemu-bios
 run: qemu
+
+# Debug mode
+qemu-debug: iso
+	qemu-system-x86_64 -cdrom $(ISO) -serial stdio -m 256M \
+		-d int,cpu_reset -no-reboot
 
 # Clean build artifacts
 clean:
@@ -139,19 +189,22 @@ clean:
 	@rm -rf $(BUILDDIR)
 	@echo "Clean complete"
 
-# Help target
+# Full clean (including Limine)
+distclean: clean
+	@rm -rf $(LIMINE_DIR)
+
+# Help
 help:
-	@echo "MinimalOS Build System"
-	@echo "====================="
+	@echo "MinimalOS Build System (x86_64 + Limine)"
+	@echo "========================================="
 	@echo ""
 	@echo "Targets:"
-	@echo "  make          - Build kernel binary"
-	@echo "  make run      - Run kernel in QEMU (alias for 'make qemu')"
-	@echo "  make iso      - Create bootable ISO image"
-	@echo "  make qemu     - Run kernel in QEMU"
-	@echo "  make qemu-iso - Run ISO in QEMU"
-	@echo "  make clean    - Remove build artifacts"
+	@echo "  make           - Build kernel"
+	@echo "  make iso       - Create bootable ISO (BIOS + UEFI)"
+	@echo "  make run       - Run in QEMU (BIOS mode)"
+	@echo "  make qemu-bios - Run in QEMU (BIOS mode)"
+	@echo "  make qemu-uefi - Run in QEMU (UEFI mode)"
+	@echo "  make clean     - Remove build artifacts"
+	@echo "  make distclean - Remove build + Limine"
 	@echo ""
-	@echo "Output directory: $(DISTDIR)/"
-	@echo "Compiler: $(CC)"
-	@echo "Assembler: $(AS)"
+	@echo "Output: $(ISO)"

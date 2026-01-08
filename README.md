@@ -1,11 +1,12 @@
 # MinimalOS
 
-A functional 32-bit x86 operating system built from scratch following OSDev wiki best practices.
+A functional 64-bit x86_64 operating system built from scratch using the Limine bootloader.
 
 ## Current Features
 
 ### ✅ Core System
-- Multiboot-compliant bootloader (GRUB compatible)
+- **Limine bootloader** (BIOS and UEFI support)
+- **64-bit Long Mode** kernel
 - GDT (Global Descriptor Table) with kernel and user segments
 - IDT (Interrupt Descriptor Table) with 256 entries
 - TSS (Task State Segment) for user mode support
@@ -14,19 +15,17 @@ A functional 32-bit x86 operating system built from scratch following OSDev wiki
 
 ### ✅ Memory Management
 - Physical Memory Manager (PMM) with bitmap allocator
-- Virtual Memory / Paging (32-bit, 4KB pages)
+- Higher Half Direct Map (HHDM) for physical memory access
 - Kernel Heap (kmalloc/kfree)
-- Dynamic framebuffer region mapping
 
 ### ✅ Process Management
 - Process creation and management
 - Round-robin scheduler
-- Context switching
+- Context switching (64-bit)
 - System calls (int 0x80)
 
 ### ✅ Drivers
-- **VGA Text Mode** (80×25) with scrolling and colors
-- **VESA Framebuffer** (1024×768×32) with 8×16 bitmap font
+- **VESA Framebuffer** (graphics mode) with 8×16 bitmap font
 - **PS/2 Keyboard** with shift key support
 - **PIT Timer** at 100Hz
 
@@ -58,11 +57,12 @@ A functional 32-bit x86 operating system built from scratch following OSDev wiki
 ## Building
 
 ### Prerequisites
-- GCC (with 32-bit support)
+- GCC (with 64-bit support)
 - GNU Make
 - GNU Assembler
 - QEMU (for testing)
-- GRUB tools (for ISO creation)
+- xorriso (for ISO creation)
+- Git (to clone Limine)
 
 ### Compile
 ```bash
@@ -70,47 +70,55 @@ cd MinimalOS
 make
 ```
 
-Output: `build/dist/minimalos.bin`
-
-### Run in QEMU
-```bash
-make run
-```
+Output: `build/dist/minimalos`
 
 ### Create Bootable ISO
 ```bash
 make iso
-make qemu-iso
+```
+
+This will:
+1. Clone/update Limine bootloader
+2. Build the kernel
+3. Create a bootable ISO supporting both BIOS and UEFI
+
+### Run in QEMU
+
+**BIOS mode:**
+```bash
+make qemu-bios
+# or just: make run
+```
+
+**UEFI mode:** (requires OVMF)
+```bash
+make qemu-uefi
 ```
 
 ## Project Structure
 
 ```
 MinimalOS/
-├── arch/i386/              # Bootloader and linker script
-│   ├── boot.s              # Multiboot header (1024×768 framebuffer)
-│   └── linker.ld
+├── arch/x86_64/             # Architecture-specific files
+│   └── linker.ld            # Linker script for higher-half kernel
 ├── kernel/
-│   ├── kernel.c            # Main entry point
-│   ├── tty.c               # Dual VGA/framebuffer terminal
-│   ├── shell.c             # Command dispatcher
-│   ├── arch/i386/          # GDT, IDT, ISR, IRQ, context switch
-│   ├── mm/                 # PMM, paging, kernel heap
-│   ├── process/            # Process, scheduler, syscalls
-│   ├── commands/           # Shell command implementations
-│   │   ├── basic.c         # help, clear, echo, reboot, halt, poweroff
-│   │   ├── sysinfo.c       # info, mem, uptime, ps, cpuid
-│   │   ├── memory.c        # peek, poke, hexdump, alloc
-│   │   ├── display.c       # color, banner
-│   │   └── tests.c         # test, cpufreq
-│   └── include/kernel/     # All kernel headers
+│   ├── kernel.c             # Main entry point (Limine protocol)
+│   ├── tty.c                # Framebuffer terminal
+│   ├── shell.c              # Command dispatcher
+│   ├── arch/x86_64/         # GDT, IDT, ISR, IRQ, context switch
+│   ├── mm/                  # PMM, paging, kernel heap
+│   ├── process/             # Process, scheduler, syscalls
+│   ├── commands/            # Shell command implementations
+│   └── include/             # All kernel headers
+│       └── limine.h         # Limine boot protocol header
 ├── drivers/
-│   ├── keyboard.c          # PS/2 keyboard
-│   ├── timer.c             # PIT timer
-│   ├── framebuffer.c       # VESA graphics
-│   └── font.c              # 8×16 bitmap font
-├── build/                  # Build output directory
-│   └── dist/               # Final binaries
+│   ├── keyboard.c           # PS/2 keyboard
+│   ├── timer.c              # PIT timer
+│   ├── framebuffer.c        # VESA graphics
+│   └── font.c               # 8×16 bitmap font
+├── limine.conf              # Limine bootloader configuration
+├── build/                   # Build output directory
+│   └── dist/                # Final binaries and ISO
 └── Makefile
 ```
 
@@ -119,30 +127,38 @@ MinimalOS/
 | Phase | Status | Description |
 |-------|--------|-------------|
 | 1. Environment Setup | ✅ Complete | Toolchain, QEMU, Makefile |
-| 2. Bare Bones Kernel | ✅ Complete | Boot, VGA terminal |
-| 3. Core Initialization | ✅ Complete | GDT, IDT, ISR, IRQ, PIC |
-| 4. Drivers | ✅ Complete | Timer, keyboard, framebuffer |
-| 5. Memory Management | ✅ Complete | PMM, paging, heap |
-| 6. Process Management | ✅ Complete | Processes, scheduler, TSS |
-| 7. System Calls | ✅ Complete | int 0x80 interface |
-| 8. File System | 🔲 Planned | VFS, initrd, FAT32 |
-| 9. Shell | ✅ Complete | 18 built-in commands |
-| 10. Testing | ✅ Working | QEMU + real hardware tested |
+| 2. 64-bit Long Mode | ✅ Complete | x86_64 kernel |
+| 3. Limine Bootloader | ✅ Complete | BIOS/UEFI support |
+| 4. Core Initialization | ✅ Complete | GDT, IDT, ISR, IRQ, PIC |
+| 5. Drivers | ✅ Complete | Timer, keyboard, framebuffer |
+| 6. Memory Management | ✅ Complete | PMM, HHDM, heap |
+| 7. Process Management | ✅ Complete | Processes, scheduler, TSS |
+| 8. System Calls | ✅ Complete | int 0x80 interface |
+| 9. File System | 🔲 Planned | VFS, initrd, FAT32 |
+| 10. Shell | ✅ Complete | 18 built-in commands |
 
 ## Known Limitations
 
-- **32-bit only** - 4GB address space limit
 - **No disk I/O** - File system not yet implemented  
 - **No ACPI** - Poweroff works on VMs only, halts on real hardware
-- **Legacy BIOS only** - No UEFI support
+- **No 4-level paging customization** - Uses Limine's page tables
 
 ## Future Plans
 
 - [ ] ATA/AHCI disk driver
 - [ ] File system (FAT32 or custom)
 - [ ] ACPI for real hardware power management
-- [ ] Consider 64-bit long mode migration
+- [ ] Custom page table management
 - [ ] User-space program execution
+
+## Boot Modes
+
+This OS supports both boot methods:
+
+| Mode | Description | QEMU Command |
+|------|-------------|--------------|
+| **BIOS** | Legacy BIOS boot | `make qemu-bios` |
+| **UEFI** | Modern UEFI boot | `make qemu-uefi` |
 
 ## License
 
@@ -151,5 +167,5 @@ Educational project. Free to use and modify.
 ## References
 
 - [OSDev Wiki](https://wiki.osdev.org/)
-- [OSDev Bare Bones](https://wiki.osdev.org/Bare_Bones)
-- [OSDev Meaty Skeleton](https://wiki.osdev.org/Meaty_Skeleton)
+- [Limine Bootloader](https://github.com/limine-bootloader/limine)
+- [OSDev Limine Bare Bones](https://wiki.osdev.org/Limine_Bare_Bones)

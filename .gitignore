@@ -1,1 +1,21 @@
+# Build artifacts
 build/
+
+# Limine bootloader (downloaded)
+limine/
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Object files
+*.o
+*.d
+
+# OS images
+*.iso
+*.img
+*.hdd

@@ -1,22 +1,20 @@
-#ifndef _KERNEL_KHEAP_H
-#define _KERNEL_KHEAP_H
+/* Kernel heap header for x86_64 */
+#ifndef KERNEL_KHEAP_H
+#define KERNEL_KHEAP_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* Initialize kernel heap */
 void kheap_init(void);
 
-/* Allocate memory from kernel heap */
+/* Memory allocation */
 void *kmalloc(size_t size);
-
-/* Allocate aligned memory from kernel heap */
 void *kmalloc_aligned(size_t size, size_t alignment);
-
-/* Free memory back to kernel heap */
 void kfree(void *ptr);
 
-/* Get heap statistics */
+/* Memory info */
 size_t kheap_get_used(void);
 size_t kheap_get_free(void);
 
-#endif /* _KERNEL_KHEAP_H */
+#endif

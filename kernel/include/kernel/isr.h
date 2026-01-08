@@ -1,30 +1,34 @@
-#ifndef _KERNEL_ISR_H
-#define _KERNEL_ISR_H
+/* ISR header for x86_64 */
+#ifndef KERNEL_ISR_H
+#define KERNEL_ISR_H
 
+#include <kernel/tty.h> /* For VGA colors */
 #include <stdint.h>
 
-/* CPU register state - must match the stack layout from isr/irq stubs */
+/* 64-bit interrupt stack frame */
 struct registers {
-    /* Pushed last, popped first - segment registers */
-    uint32_t gs, fs, es, ds;
-    /* Pushed by pusha - order is: eax, ecx, edx, ebx, esp, ebp, esi, edi */
-    uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
-    /* Pushed by our stub - interrupt number and error code */
-    uint32_t int_no, err_code;
-    /* Pushed by CPU on interrupt - instruction pointer, code segment, flags */
-    uint32_t eip, cs, eflags, useresp, ss;
-};
+  /* Pushed by our ISR stub */
+  uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
+  uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
 
-/* ISR handler function type */
-typedef void (*isr_handler_t)(struct registers*);
+  /* Interrupt number and error code */
+  uint64_t int_no, err_code;
+
+  /* Pushed by CPU automatically */
+  uint64_t rip, cs, rflags, rsp, ss;
+} __attribute__((packed));
+
+/* ISR handler function pointer type */
+typedef void (*isr_handler_t)(struct registers *);
+
+/* Register and call handlers */
+void isr_register_handler(uint8_t num, isr_handler_t handler);
+void isr_handler(struct registers *regs);
 
 /* Initialize ISRs */
 void isr_init(void);
 
-/* Register custom ISR handler */
-void isr_register_handler(uint8_t num, isr_handler_t handler);
-
-/* External ISR declarations (0-31 for CPU exceptions) */
+/* ISR stubs (assembly) */
 extern void isr0(void);
 extern void isr1(void);
 extern void isr2(void);
@@ -58,4 +62,7 @@ extern void isr29(void);
 extern void isr30(void);
 extern void isr31(void);
 
-#endif /* _KERNEL_ISR_H */
+/* Syscall ISR */
+extern void isr128(void);
+
+#endif

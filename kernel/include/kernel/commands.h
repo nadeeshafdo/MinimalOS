@@ -1,14 +1,9 @@
-#ifndef _KERNEL_COMMANDS_H
-#define _KERNEL_COMMANDS_H
+/* Shell commands header */
+#ifndef KERNEL_COMMANDS_H
+#define KERNEL_COMMANDS_H
 
+#include <kernel/tty.h>
 #include <stdint.h>
-
-/* Utility functions for commands */
-void cmd_print_hex(uint32_t value);
-void cmd_print_dec(uint32_t value);
-uint32_t cmd_parse_hex(const char *s);
-uint32_t cmd_parse_dec(const char *s);
-const char* cmd_get_arg(const char *s, char *buf, uint32_t max);
 
 /* Basic commands */
 void cmd_help(void);
@@ -25,7 +20,7 @@ void cmd_uptime(void);
 void cmd_ps(void);
 void cmd_cpuid(void);
 
-/* Memory tool commands */
+/* Memory commands */
 void cmd_peek(const char *args);
 void cmd_poke(const char *args);
 void cmd_hexdump(const char *args);
@@ -40,4 +35,10 @@ void cmd_test(void);
 void cmd_panic(void);
 void cmd_cpufreq(void);
 
-#endif /* _KERNEL_COMMANDS_H */
+/* Utility functions */
+uint64_t parse_hex(const char *str);
+uint64_t parse_dec(const char *str);
+void print_hex64(uint64_t value);
+void print_dec64(uint64_t value);
+
+#endif

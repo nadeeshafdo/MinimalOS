@@ -1,59 +1,44 @@
-#ifndef _KERNEL_PAGING_H
-#define _KERNEL_PAGING_H
+/* Paging header for x86_64 */
+#ifndef KERNEL_PAGING_H
+#define KERNEL_PAGING_H
 
 #include <stdint.h>
-#include <kernel/isr.h>
 
-/* Page directory/table entry flags */
-#define PAGE_PRESENT    0x001
-#define PAGE_WRITE      0x002
-#define PAGE_USER       0x004
-#define PAGE_ACCESSED   0x020
-#define PAGE_DIRTY      0x040
+/* Page size */
+#define PAGE_SIZE 4096
 
-/* Page directory entry */
-typedef uint32_t page_directory_entry_t;
+/* Page flags */
+#define PAGE_PRESENT 0x001
+#define PAGE_WRITE 0x002
+#define PAGE_USER 0x004
+#define PAGE_PWT 0x008
+#define PAGE_PCD 0x010
+#define PAGE_ACCESSED 0x020
+#define PAGE_DIRTY 0x040
+#define PAGE_HUGE 0x080
+#define PAGE_GLOBAL 0x100
+#define PAGE_NX (1ULL << 63)
 
-/* Page table entry */
-typedef uint32_t page_table_entry_t;
-
-/* Page directory structure */
+/* Page table structures for x86_64 4-level paging */
+/* Each level has 512 entries (9 bits per level) */
 typedef struct {
-    page_directory_entry_t entries[1024];
-} __attribute__((aligned(4096))) page_directory_t;
+  uint64_t entries[512];
+} page_table_t;
 
-/* Page table structure */
-typedef struct {
-    page_table_entry_t entries[1024];
-} __attribute__((aligned(4096))) page_table_t;
+/* Page directory (actually PML4 in x86_64) */
+typedef page_table_t page_directory_t;
 
-/* Initialize paging */
+/* Functions */
 void paging_init(void);
-
-/* Map a large region (for framebuffer etc) - call BEFORE paging_init */
-void paging_map_region(uint32_t phys_addr, uint32_t size);
-
-/* Map virtual address to physical address */
-void paging_map(uint32_t virtual_addr, uint32_t physical_addr, uint32_t flags);
-
-/* Unmap virtual address */
-void paging_unmap(uint32_t virtual_addr);
-
-/* Get physical address from virtual address */
-uint32_t paging_get_physical(uint32_t virtual_addr);
-
-/* Page fault handler */
-void page_fault_handler(struct registers *regs);
-
-/* Flush TLB for a specific address */
-static inline void paging_flush_tlb(uint32_t addr) {
-    __asm__ volatile ("invlpg (%0)" : : "r"(addr) : "memory");
-}
-
-/* Switch page directory */
+void paging_map(uint64_t virtual_addr, uint64_t physical_addr, uint64_t flags);
+void paging_unmap(uint64_t virtual_addr);
+uint64_t paging_get_physical(uint64_t virtual_addr);
 void paging_switch_directory(page_directory_t *dir);
-
-/* Get current page directory */
 page_directory_t *paging_get_directory(void);
 
-#endif /* _KERNEL_PAGING_H */
+/* Flush TLB for a specific address */
+static inline void paging_flush_tlb(uint64_t addr) {
+  __asm__ volatile("invlpg (%0)" : : "r"(addr) : "memory");
+}
+
+#endif
