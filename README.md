@@ -54,6 +54,16 @@ A functional 64-bit x86_64 operating system built from scratch using the Limine 
 | `banner` | ASCII art logo |
 | `test` | Run diagnostics |
 
+## Documentation
+
+Detailed documentation for each component is available in the `docs/` directory:
+
+- [Kernel Architecture](docs/kernel_architecture.md) - Boot flow, GDT, IDT, Interrupts
+- [Memory Management](docs/memory_management.md) - PMM, Virtual Memory, Heap
+- [Process Management](docs/process_management.md) - Scheduler, PCB, System Calls
+- [Drivers](docs/drivers.md) - Framebuffer, Keyboard, Timer
+- [Development Guide](docs/development_guide.md) - Adding commands and syscalls
+
 ## Building
 
 ### Prerequisites
