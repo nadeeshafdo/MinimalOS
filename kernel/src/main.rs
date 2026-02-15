@@ -10,13 +10,9 @@ use limine::BaseRevision;
 use limine::request::FramebufferRequest;
 
 /// Base revision supported by this kernel.
-#[used]
-#[link_section = ".limine_requests"]
 static BASE_REVISION: BaseRevision = BaseRevision::new();
 
 /// Request a framebuffer from the bootloader.
-#[used]
-#[link_section = ".limine_requests"]
 static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 
 /// Kernel entry point called by the Limine bootloader.
