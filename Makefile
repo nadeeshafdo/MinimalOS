@@ -79,7 +79,7 @@ qemu-bios: iso
 # Run in QEMU (UEFI mode) - requires OVMF
 qemu-uefi: iso
 	qemu-system-x86_64 -M q35 -m 2G -cdrom $(ISO) -serial stdio \
-		-bios /usr/share/OVMF/OVMF_CODE.fd
+		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd
 
 # Default run target (BIOS)
 qemu: qemu-bios
