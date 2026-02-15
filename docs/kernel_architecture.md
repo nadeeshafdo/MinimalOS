@@ -1,46 +1,85 @@
 # Kernel Architecture
 
 ## Overview
-MinimalOS is a 64-bit x86_64 operating system kernel that relies on the Limine bootloader for BIOS and UEFI support. The kernel is designed to be simple, utilizing a synchronous initialization process followed by a task scheduler.
+
+MinimalOS is a 64-bit x86_64 operating system kernel written in Rust. It boots via the
+[Limine bootloader](https://github.com/limine-bootloader/limine) (v8.x protocol) and
+runs in the higher-half of virtual address space at `0xFFFFFFFF80000000`.
+
+The project is structured as a Cargo workspace with a central kernel binary and several
+supporting crates.
 
 ## Boot Flow
-The boot process is handled by the Limine bootloader, which performs the following steps:
-1. Loads the kernel into memory.
-2. Sets up 64-bit Long Mode.
-3. Provides memory map, framebuffer, and HHDM (Higher Half Direct Map) information via the Limine protocol.
-4. Jumps to the kernel entry point `kmain`.
 
-### Kernel Entry (`kmain`)
-Located in `kernel/kernel.c`, the `kmain` function serves as the central orchestration point for system initialization.
-1. **Limine Handshake**: Verifies the implementation of the Limine Base Revision.
-2. **HHDM Retrieval**: Fetches the offset for Higher Half Direct Map to facilitate physical memory access.
-3. **Framebuffer Initialization**: Sets up the VESA framebuffer for graphical text output.
-4. **GDT/IDT Setup**: Initializes the Global Descriptor Table and Interrupt Descriptor Table.
-5. **Interrupts**: Configures ISRs (Interrupt Service Routines) and IRQs (Interrupt Requests) via the PIC (Programmable Interrupt Controller).
-6. **Drivers**: Initializes Timer (PIT) and Keyboard (PS/2).
-7. **Memory**: Sets up the Physical Memory Manager (PMM) and Kernel Heap.
-8. **Scheduler**: Initializes process management and starts the first shell task.
-9. **Idle Loop**: Enters a halt loop if the scheduler returns (though the scheduler typically takes over).
+1. **Limine bootloader** loads the kernel ELF from the ISO (`boot:///kernel`).
+2. The bootloader sets up long mode (64-bit), page tables with a higher-half direct
+   map, and passes control to the kernel entry point `_start`.
+3. `_start` (in `kernel/src/main.rs`) verifies that the Limine base revision is
+   supported.
+4. The kernel requests a framebuffer from the bootloader via `FramebufferRequest`.
+5. Currently the kernel halts after framebuffer acquisition (`hlt` loop).
 
-## CPU Architecture Setup
+## Memory Layout
 
-### Global Descriptor Table (GDT)
-The GDT is configured in `kernel/arch/x86_64/gdt.c`. It defines the following segments:
-- **Null Descriptor**: Required 0x00 entry.
-- **Kernel Code (0x08)**: 64-bit code segment, ring 0.
-- **Kernel Data (0x10)**: 64-bit data segment, ring 0.
-- **User Code (0x18)**: 64-bit code segment, ring 3.
-- **User Data (0x20)**: 64-bit data segment, ring 3.
-- **TSS (Task State Segment)**: Used for stack switching during interrupts in user mode.
+The linker script (`build/linker.ld`) places the kernel in the higher half:
 
-### Interrupt Descriptor Table (IDT)
-The IDT is set up in `kernel/arch/x86_64/idt.c` and supports 256 entries:
-- **0-31**: CPU Exceptions (ISRs).
-- **32-47**: Hardware Interrupts (IRQs) remapped from the PIC.
-- **128 (0x80)**: System Call handler.
+| Section              | Description                            |
+|----------------------|----------------------------------------|
+| `.limine_requests`   | Limine protocol request structures     |
+| `.text`              | Executable code                        |
+| `.rodata`            | Read-only data                         |
+| `.data` / `.bss`     | Mutable and zero-initialised data      |
 
-### Interrupt Handling
-- **ISR**: Handles CPU exceptions (e.g., Page Fault, General Protection Fault). Defined in `kernel/arch/x86_64/isr.c`.
-- **IRQ**: Handles hardware events. The PIC is remapped to offset 32 to avoid conflicts with CPU exceptions.
-  - **IRQ 0**: Timer (100Hz).
-  - **IRQ 1**: Keyboard.
+Symbols `__kernel_start` and `__kernel_end` delimit the kernel image.
+
+All sections are page-aligned (`MAXPAGESIZE`).
+
+## Custom Target
+
+The kernel is compiled against a custom target specification
+(`build/target-kernel.json`):
+
+- **LLVM target**: `x86_64-unknown-none-elf`
+- **Code model**: `kernel` (suitable for higher-half addresses)
+- **Linker**: `rust-lld` (GNU-LLD flavour)
+- **Panic strategy**: `abort` (no unwinding)
+- **Red zone**: disabled (required for interrupt safety)
+- **SIMD/FPU**: disabled (`-mmx,-sse,-sse2,…,+soft-float`)
+
+A separate user-space target (`build/target-user.json`) exists for future user-mode
+binaries. It differs in that the red zone is **not** disabled and no restricted feature
+flags are set.
+
+## Kernel Modules
+
+The kernel source is organised into four submodules under `kernel/src/`:
+
+| Module     | File                          | Purpose                              |
+|------------|-------------------------------|--------------------------------------|
+| `arch`     | `kernel/src/arch/mod.rs`      | x86_64-specific code (CPU, GDT, etc)|
+| `memory`   | `kernel/src/memory/mod.rs`    | Physical and virtual memory managers |
+| `task`     | `kernel/src/task/mod.rs`      | Task scheduler and process control   |
+| `traps`    | `kernel/src/traps/mod.rs`     | Interrupt and exception handling     |
+
+All four modules are currently stubs awaiting implementation.
+
+## External Dependencies
+
+| Crate    | Version | Purpose                                   |
+|----------|---------|-------------------------------------------|
+| `limine` | 0.5     | Limine boot protocol request/response API |
+| `x86_64` | 0.15    | CPU structures (GDT, IDT, paging, I/O)    |
+| `spin`   | 0.9     | Spinlock-based synchronisation primitives  |
+
+## Build Script
+
+`kernel/build.rs` tells Cargo to:
+
+1. Add `build/` to the native library search path.
+2. Pass `-Tlinker.ld` to the linker so the custom linker script is used.
+3. Rebuild when `build/linker.ld` changes.
+
+## Panic Handler
+
+A minimal panic handler is provided that halts the CPU in an infinite loop. There is
+no unwinding support.
