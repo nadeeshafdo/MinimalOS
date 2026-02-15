@@ -1,37 +1,54 @@
 # Memory Management
 
-## Overview
-MinimalOS employs a straightforward memory management strategy, leveraging the groundwork laid by the Limine bootloader. It features a physical memory manager (bitmap-based), a kernel heap (linked-list based), and relies on Limine for initial paging setup.
+## Current Status
 
-## Physical Memory Manager (PMM)
-The PMM is responsible for tracking free and used physical memory frames (4KB blocks). It is implemented in `kernel/mm/pmm.c`.
+The memory management subsystem (`kernel/src/memory/mod.rs`) is **stubbed out** and
+awaiting implementation. This document describes the planned architecture and the
+infrastructure already in place.
 
-### Implementation Details
-- **Algorithm**: Bitmap Allocator.
-- **Bitmap Location**: Placed at the beginning of the largest usable memory region found in the memory map.
-- **HHDM Usage**: The bitmap is accessed via the Higher Half Direct Map (HHDM) to avoid identity mapping issues.
-- **Allocation**: `pmm_alloc_frame()` scans the bitmap for the first free bit (0), marks it as used (1), and returns the physical address.
-- **Deallocation**: `pmm_free_frame()` calculates the bit index from the physical address and clears it.
+## Higher-Half Direct Map (HHDM)
 
-## Virtual Memory (Paging)
-The kernel currently relies on the 4-level paging structure set up by the Limine bootloader.
-- **Kernel Space**: Mapped in the higher half (e.g., `0xFFFFFFFF80000000`).
-- **Physical Memory**: Identity mapped starting at the HHDM offset (provided by Limine).
-- **Page Faults**: A handler is registered to catch page faults (ISR 14), dumping the faulting address and register state before halting the system.
+The Limine bootloader establishes a Higher-Half Direct Map, which identity-maps all
+physical memory into the upper half of the virtual address space. The kernel is linked
+at `0xFFFFFFFF80000000` (see `build/linker.ld`).
 
-## Kernel Heap
-The kernel heap provides dynamic memory allocation (`kmalloc`, `kfree`) for the kernel. It is implemented in `kernel/mm/kheap.c`.
+This means any physical address `phys` can be accessed by the kernel at
+`HHDM_BASE + phys` without setting up additional page tables.
 
-### Implementation Details
-- **Placement**: The heap is initialized at `HHDM_OFFSET + 16MB`. This ensures it resides in a known free region of physical memory, accessed comfortably via the higher half.
-- **Structure**: A doubly linked list of block headers.
-  ```c
-  typedef struct block_header {
-    size_t size;               /* Size of block (including header) */
-    uint8_t is_free;           /* Is this block free? */
-    struct block_header *next; /* Next block in list */
-    struct block_header *prev; /* Previous block in list */
-  } block_header_t;
-  ```
-- **Allocation Strategy**: First-fit. It iterates through the list to find the first free block that is large enough. If the block is significantly larger than requested, it is split into two.
-- **Deallocation**: Marks the block as free and attempts to merge it with adjacent free blocks (coalescing) to prevent fragmentation.
+## Planned Components
+
+### Physical Memory Manager (PMM)
+
+A bitmap-based physical frame allocator is planned:
+
+- Parse the Limine memory map to discover usable RAM regions.
+- Maintain a bitmap where each bit represents a 4 KiB physical frame.
+- Provide `alloc_frame()` and `free_frame()` interfaces.
+- Track total, used, and free frame counts.
+
+### Virtual Memory Manager (VMM)
+
+Once the PMM is in place, a virtual memory manager will:
+
+- Create and manipulate 4-level x86_64 page tables.
+- Map/unmap virtual pages to physical frames.
+- Support kernel-space and (future) user-space address spaces.
+
+### Kernel Heap
+
+A kernel heap allocator will be built on top of PMM + VMM:
+
+- Implement the `GlobalAlloc` trait so `alloc::` collections work in the kernel.
+- Likely a simple linked-list or bump allocator initially.
+
+## Available Crates
+
+The `x86_64` crate (v0.15) already provides page table structures, frame types, and
+address types that the implementation will leverage.
+
+## Quest Tracking
+
+Related quests from `QUESTS.md`:
+
+- **[009]** Physical Memory Manager (PMM)
+- **[010]** Virtual Memory Manager (VMM)
