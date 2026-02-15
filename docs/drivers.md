@@ -1,35 +1,57 @@
 # Drivers
 
-## Overview
-MinimalOS includes basic drivers for essential hardware: video output, keyboard input, and system timing.
+## Current Status
 
-## VESA Framebuffer
-The framebuffer driver enables graphical output by writing directly to video memory.
-- **Initialization**: Retrieves framebuffer information (address, resolution, pitch, bpp) from the Limine bootloader response.
-- **Features**:
-  - `fb_putpixel`: Writes a 32-bit color value to a specific (x, y) coordinate.
-  - `fb_clear`: Fills the entire screen with a color.
-  - `fb_scroll`: Moves screen content up to make room for new text (terminal scrolling).
-- **Text Rendering**: The `tty` module layers on top of the framebuffer, using a bitmap font to render characters.
+Driver support is in the **early stages**. The kernel currently requests a framebuffer
+from the Limine bootloader but does not yet render to it. Individual driver modules
+have not been implemented.
 
-## PS/2 Keyboard
-The keyboard driver handles user input via the PS/2 controller.
-- **Type**: Interrupt-driven (IRQ 1).
-- **Communication**: Reads scancodes from I/O port `0x60`.
-- **Scancode Set**: Key release is detected by checking the high bit (0x80).
-- **Features**:
-  - Maintains a circular buffer for input characters.
-  - Handles Shift key state for upper/lower case characters.
-  - Converts raw scancodes to ASCII.
-  - Feeds input directly to the shell.
+## Framebuffer Display (`kdisplay` crate)
 
-## Programmable Interval Timer (PIT)
-The PIT is used to generate periodic system ticks for the scheduler.
-- **Type**: Interrupt-driven (IRQ 0).
-- **Configuration**:
-  - Channel 0.
-  - Frequency: 100 Hz.
-  - Mode: Rate Generator.
-- **Functionality**:
-  - Updates the system tick counter.
-  - Triggers `scheduler_tick()` to drive process preemption.
+The `kdisplay` crate (`crates/kdisplay/src/lib.rs`) is a `#![no_std]` library intended
+to provide:
+
+- Framebuffer initialisation from the Limine `FramebufferResponse`.
+- Pixel plotting and rectangle drawing primitives.
+- A text console with bitmap font rendering.
+- Colour support and scrolling.
+
+The kernel's `_start` function already obtains the framebuffer response—`kdisplay` will
+consume it.
+
+## Hardware Abstraction Layer (`khal` crate)
+
+The `khal` crate (`crates/khal/src/lib.rs`) is a `#![no_std]` library that will wrap
+low-level hardware access:
+
+- **Port I/O** — reading and writing x86 I/O ports.
+- **PIC (8259)** — Programmable Interrupt Controller initialisation and masking.
+- **PIT (8254)** — Programmable Interval Timer configuration for periodic ticks.
+- **PS/2 Controller** — Keyboard scan-code reading.
+
+The `x86_64` crate provides the underlying port I/O primitives.
+
+## Planned Drivers
+
+| Driver             | Location / Crate | Description                          |
+|--------------------|-------------------|--------------------------------------|
+| Framebuffer/Console| `kdisplay`        | VESA framebuffer text rendering      |
+| PS/2 Keyboard      | `khal`            | Scan-code decoding, key events       |
+| PIT Timer          | `khal`            | 100 Hz system tick                   |
+| Serial (COM1)      | `khal`            | Debug output over serial port        |
+| PIC                | `khal`            | IRQ routing and acknowledgement      |
+
+## Interrupt Integration
+
+Once the `traps` module implements the IDT and IRQ handlers, drivers will register
+their interrupt service routines:
+
+- **IRQ 0** — PIT timer tick → scheduler.
+- **IRQ 1** — PS/2 keyboard → input buffer.
+
+## Quest Tracking
+
+Related quests from `QUESTS.md`:
+
+- **[006]** Framebuffer Display (kdisplay)
+- **[007]** Hardware Abstraction Layer (khal)
