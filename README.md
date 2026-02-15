@@ -1,174 +1,167 @@
 # MinimalOS
 
-A functional 64-bit x86_64 operating system built from scratch using the Limine bootloader.
+A 64-bit x86_64 operating system kernel written in **Rust** from scratch, using the [Limine bootloader](https://github.com/limine-bootloader/limine).
 
-## Current Features
+> **Note**: This project is in **early development**. Core subsystems are currently stubbed and awaiting implementation. See [QUESTS.md](QUESTS.md) for the development roadmap.
 
-### ✅ Core System
-- **Limine bootloader** (BIOS and UEFI support)
-- **64-bit Long Mode** kernel
-- GDT (Global Descriptor Table) with kernel and user segments
-- IDT (Interrupt Descriptor Table) with 256 entries
-- TSS (Task State Segment) for user mode support
-- 32 CPU exception handlers (ISRs)
-- 16 hardware interrupt handlers (IRQs) with PIC remapping
+## Current Status
 
-### ✅ Memory Management
-- Physical Memory Manager (PMM) with bitmap allocator
-- Higher Half Direct Map (HHDM) for physical memory access
-- Kernel Heap (kmalloc/kfree)
+### ✅ Working
 
-### ✅ Process Management
-- Process creation and management
-- Round-robin scheduler
-- Context switching (64-bit)
-- System calls (int 0x80)
+- **Limine bootloader** integration (v8.x protocol, BIOS + UEFI support)
+- **Higher-half kernel** linked at `0xFFFFFFFF80000000`
+- **Framebuffer request** from bootloader (acquired but not yet rendered to)
+- **Custom Rust target** with kernel code model and disabled red zone
+- **Cargo workspace** structure with modular crates
 
-### ✅ Drivers
-- **VESA Framebuffer** (graphics mode) with 8×16 bitmap font
-- **PS/2 Keyboard** with shift key support
-- **PIT Timer** at 100Hz
+### 🚧 Planned / In Progress
 
-### ✅ Interactive Shell
-18 built-in commands:
-
-| Command | Description |
-|---------|-------------|
-| `help` | Show available commands |
-| `clear` | Clear screen |
-| `echo <text>` | Print text |
-| `reboot` | Restart system |
-| `halt` | Halt CPU |
-| `poweroff` | Power off (QEMU/VMs) |
-| `info` | System information |
-| `mem` | Memory usage |
-| `uptime` | System uptime |
-| `ps` | List processes |
-| `cpuid` | CPU information |
-| `cpufreq` | Estimate CPU speed |
-| `peek <addr>` | Read memory |
-| `poke <addr> <val>` | Write memory |
-| `hexdump <addr>` | Dump 64 bytes |
-| `alloc <size>` | Allocate memory |
-| `color <fg> <bg>` | Set terminal colors |
-| `banner` | ASCII art logo |
-| `test` | Run diagnostics |
+- **GDT, IDT, TSS** (architecture module stubbed)
+- **Physical Memory Manager** (PMM with bitmap allocator)
+- **Virtual Memory Manager** (VMM with 4-level paging)
+- **Kernel heap allocator** (`GlobalAlloc` trait implementation)
+- **Task scheduler** (round-robin, context switching)
+- **Interrupt handling** (exceptions, IRQs, PIC/APIC)
+- **Drivers** (framebuffer console, PS/2 keyboard, PIT timer, serial)
+- **System calls** (syscall/sysret or int 0x80)
 
 ## Documentation
 
-Detailed documentation for each component is available in the `docs/` directory:
+Comprehensive documentation is available in the [`docs/`](docs/) directory:
 
-- [Kernel Architecture](docs/kernel_architecture.md) - Boot flow, GDT, IDT, Interrupts
-- [Memory Management](docs/memory_management.md) - PMM, Virtual Memory, Heap
-- [Process Management](docs/process_management.md) - Scheduler, PCB, System Calls
-- [Drivers](docs/drivers.md) - Framebuffer, Keyboard, Timer
-- [Development Guide](docs/development_guide.md) - Adding commands and syscalls
+- [**Kernel Architecture**](docs/kernel_architecture.md) — Boot flow, memory layout, modules, custom target
+- [**Memory Management**](docs/memory_management.md) — HHDM, PMM, VMM, kernel heap (planned)
+- [**Process Management**](docs/process_management.md) — TCB, scheduler, context switching (planned)
+- [**Drivers**](docs/drivers.md) — Framebuffer (`kdisplay`), HAL (`khal`), planned driver table
+- [**Development Guide**](docs/development_guide.md) — Building, running, adding modules/crates, debugging
 
 ## Building
 
 ### Prerequisites
-- GCC (with 64-bit support)
-- GNU Make
-- GNU Assembler
-- QEMU (for testing)
-- xorriso (for ISO creation)
-- Git (to clone Limine)
 
-### Compile
+| Tool           | Purpose                                      |
+|----------------|----------------------------------------------|
+| **Rust**       | Nightly toolchain (`nightly-2025-01-01`)     |
+| **GNU Make**   | Build orchestration                          |
+| **QEMU**       | x86_64 system emulator for testing           |
+| **xorriso**    | ISO 9660 image creation                      |
+| **Git**        | Cloning Limine bootloader                    |
+
+The Rust toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml) and will be installed automatically by `rustup`.
+
+### Build the Kernel
+
 ```bash
-cd MinimalOS
 make
+# or explicitly:
+make kernel
 ```
 
-Output: `build/dist/minimalos`
+This compiles the kernel against the custom target [`build/target-kernel.json`](build/target-kernel.json) using Cargo. Output: `target/target-kernel/debug/minimalos_kernel`
 
-### Create Bootable ISO
+### Create a Bootable ISO
+
 ```bash
 make iso
 ```
 
 This will:
-1. Clone/update Limine bootloader
+
+1. Clone/update the Limine bootloader (v8.x binary branch)
 2. Build the kernel
-3. Create a bootable ISO supporting both BIOS and UEFI
+3. Assemble a hybrid BIOS + UEFI bootable ISO
+
+Output: `build/dist/minimalos.iso`
 
 ### Run in QEMU
 
-**BIOS mode:**
 ```bash
-make qemu-bios
-# or just: make run
-```
-
-**UEFI mode:** (requires OVMF)
-```bash
-make qemu-uefi
+make run          # BIOS mode (default)
+make qemu-bios    # BIOS mode (explicit)
+make qemu-uefi    # UEFI mode (requires OVMF firmware)
+make qemu-debug   # BIOS mode with interrupt logging
 ```
 
 ## Project Structure
 
-```
+```text
 MinimalOS/
-├── arch/x86_64/             # Architecture-specific files
-│   └── linker.ld            # Linker script for higher-half kernel
-├── kernel/
-│   ├── kernel.c             # Main entry point (Limine protocol)
-│   ├── tty.c                # Framebuffer terminal
-│   ├── shell.c              # Command dispatcher
-│   ├── arch/x86_64/         # GDT, IDT, ISR, IRQ, context switch
-│   ├── mm/                  # PMM, paging, kernel heap
-│   ├── process/             # Process, scheduler, syscalls
-│   ├── commands/            # Shell command implementations
-│   └── include/             # All kernel headers
-│       └── limine.h         # Limine boot protocol header
-├── drivers/
-│   ├── keyboard.c           # PS/2 keyboard
-│   ├── timer.c              # PIT timer
-│   ├── framebuffer.c        # VESA graphics
-│   └── font.c               # 8×16 bitmap font
-├── limine.conf              # Limine bootloader configuration
-├── build/                   # Build output directory
-│   └── dist/                # Final binaries and ISO
-└── Makefile
+├── Cargo.toml                  # Workspace root
+├── Makefile                    # Build system (Rust + Limine + ISO creation)
+├── limine.cfg                  # Bootloader configuration
+├── rust-toolchain.toml         # Pinned nightly Rust toolchain
+├── QUESTS.md                   # Quest-based development roadmap
+│
+├── build/
+│   ├── linker.ld               # Higher-half kernel linker script
+│   ├── target-kernel.json      # Custom Rust target for kernel
+│   └── target-user.json        # Custom Rust target for userspace
+│
+├── kernel/                     # Kernel binary crate (no_std)
+│   ├── Cargo.toml
+│   ├── build.rs                # Links the linker script
+│   └── src/
+│       ├── main.rs             # Entry point (_start)
+│       ├── arch/mod.rs         # x86_64 (GDT, IDT, TSS, context switch) [stubbed]
+│       ├── memory/mod.rs       # PMM, VMM, heap [stubbed]
+│       ├── task/mod.rs         # Scheduler, processes [stubbed]
+│       └── traps/mod.rs        # Interrupts, exceptions [stubbed]
+│
+├── crates/                     # Kernel-space support libraries (no_std)
+│   ├── kdisplay/               # Framebuffer graphics and text console
+│   ├── khal/                   # Hardware Abstraction Layer (ports, PIC, PIT, etc.)
+│   └── klog/                   # Kernel logging subsystem
+│
+├── sdk/
+│   └── sys/                    # Shared types (kernel ↔ userspace)
+│
+└── docs/                       # Project documentation
+    ├── kernel_architecture.md
+    ├── memory_management.md
+    ├── process_management.md
+    ├── drivers.md
+    └── development_guide.md
 ```
 
-## Development Status
+## Development Phases
 
-| Phase | Status | Description |
-|-------|--------|-------------|
-| 1. Environment Setup | ✅ Complete | Toolchain, QEMU, Makefile |
-| 2. 64-bit Long Mode | ✅ Complete | x86_64 kernel |
-| 3. Limine Bootloader | ✅ Complete | BIOS/UEFI support |
-| 4. Core Initialization | ✅ Complete | GDT, IDT, ISR, IRQ, PIC |
-| 5. Drivers | ✅ Complete | Timer, keyboard, framebuffer |
-| 6. Memory Management | ✅ Complete | PMM, HHDM, heap |
-| 7. Process Management | ✅ Complete | Processes, scheduler, TSS |
-| 8. System Calls | ✅ Complete | int 0x80 interface |
-| 9. File System | 🔲 Planned | VFS, initrd, FAT32 |
-| 10. Shell | ✅ Complete | 18 built-in commands |
+Progress is tracked in [`QUESTS.md`](QUESTS.md):
 
-## Known Limitations
+| Phase | Focus                                    | Status          |
+|-------|------------------------------------------|-----------------|
+| 1     | Foundation (toolchain, build, boot)      | 🟢 In progress  |
+| 2     | Subsystems (klog, kdisplay, khal, sys)   | 🔲 Not started  |
+| 3     | Memory management (PMM, VMM, heap)       | 🔲 Not started  |
+| 4     | Interrupts & scheduling (IDT, PIT, tasks)| 🔲 Not started  |
+| 5     | Userspace (ulib, first userspace app)    | 🔲 Not started  |
 
-- **No disk I/O** - File system not yet implemented  
-- **No ACPI** - Poweroff works on VMs only, halts on real hardware
-- **No 4-level paging customization** - Uses Limine's page tables
+## Dependencies
 
-## Future Plans
+The kernel uses the following external Rust crates:
 
-- [ ] ATA/AHCI disk driver
-- [ ] File system (FAT32 or custom)
-- [ ] ACPI for real hardware power management
-- [ ] Custom page table management
-- [ ] User-space program execution
+| Crate      | Version | Purpose                                           |
+|------------|---------|---------------------------------------------------|
+| `limine`   | 0.5     | Limine boot protocol request/response API         |
+| `x86_64`   | 0.15    | CPU structures (GDT, IDT, page tables, port I/O)  |
+| `spin`     | 0.9     | Spinlock-based synchronization primitives         |
+
+All kernel-space crates are `#![no_std]`.
+
+## Cleaning
+
+```bash
+make clean      # Remove Cargo build artifacts and ISO
+make distclean  # Also remove the cloned Limine directory
+```
 
 ## Boot Modes
 
-This OS supports both boot methods:
+MinimalOS supports both legacy and modern boot:
 
-| Mode | Description | QEMU Command |
-|------|-------------|--------------|
-| **BIOS** | Legacy BIOS boot | `make qemu-bios` |
-| **UEFI** | Modern UEFI boot | `make qemu-uefi` |
+| Mode       | Description         | QEMU Command     |
+|------------|---------------------|------------------|
+| **BIOS**   | Legacy BIOS boot    | `make qemu-bios` |
+| **UEFI**   | Modern UEFI boot    | `make qemu-uefi` |
 
 ## License
 
@@ -178,4 +171,6 @@ Educational project. Free to use and modify.
 
 - [OSDev Wiki](https://wiki.osdev.org/)
 - [Limine Bootloader](https://github.com/limine-bootloader/limine)
-- [OSDev Limine Bare Bones](https://wiki.osdev.org/Limine_Bare_Bones)
+- [Limine Protocol Specification](https://github.com/limine-bootloader/limine/blob/trunk/PROTOCOL.md)
+- [The Rust Embedded Book](https://docs.rust-embedded.org/book/)
+- [Writing an OS in Rust](https://os.phil-opp.com/)
