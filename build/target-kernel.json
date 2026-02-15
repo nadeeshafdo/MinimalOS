@@ -14,8 +14,8 @@
     "disable-redzone": true,
     "max-atomic-width": 64,
     "plt-by-default": false,
-    "position-independent-executables": true,
-    "static-position-independent-executables": true,
+    "position-independent-executables": false,
+    "static-position-independent-executables": false,
     "relro-level": "full",
     "features": "-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2,+soft-float"
 }

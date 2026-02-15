@@ -18,7 +18,11 @@ static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 /// Kernel entry point called by the Limine bootloader.
 #[no_mangle]
 unsafe extern "C" fn _start() -> ! {
-    assert!(BASE_REVISION.is_supported());
+    if !BASE_REVISION.is_supported() {
+        loop {
+            core::arch::asm!("hlt");
+        }
+    }
 
     if let Some(_framebuffer_response) = FRAMEBUFFER_REQUEST.get_response() {
         // Framebuffer is available for use

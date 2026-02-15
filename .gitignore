@@ -1,6 +1,5 @@
-# Build artifacts (C build)
+# Build artifacts
 build/dist/
-build/obj/
 build/iso/
 
 # Rust build artifacts
@@ -15,10 +14,6 @@ limine/
 *~
 .vscode/
 .idea/
-
-# Object files
-*.o
-*.d
 
 # OS images
 *.iso
