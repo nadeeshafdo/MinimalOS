@@ -1,5 +1,9 @@
 # Build artifacts
-build/
+build/dist/
+build/iso/
+
+# Rust build artifacts
+target/
 
 # Limine bootloader (downloaded)
 limine/
@@ -10,10 +14,6 @@ limine/
 *~
 .vscode/
 .idea/
-
-# Object files
-*.o
-*.d
 
 # OS images
 *.iso
