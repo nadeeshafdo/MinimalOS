@@ -88,6 +88,7 @@ LIMINE_BRANCH := v8.x-binary
 
 # Phony targets
 .PHONY: all clean iso qemu qemu-bios qemu-uefi run dirs limine help
+.PHONY: kernel rust-kernel rust-iso rust-run rust-clean
 
 # Default target
 all: dirs $(KERNEL)
@@ -198,8 +199,8 @@ help:
 	@echo "MinimalOS Build System (x86_64 + Limine)"
 	@echo "========================================="
 	@echo ""
-	@echo "Targets:"
-	@echo "  make           - Build kernel"
+	@echo "C Kernel Targets:"
+	@echo "  make           - Build C kernel"
 	@echo "  make iso       - Create bootable ISO (BIOS + UEFI)"
 	@echo "  make run       - Run in QEMU (BIOS mode)"
 	@echo "  make qemu-bios - Run in QEMU (BIOS mode)"
@@ -207,4 +208,55 @@ help:
 	@echo "  make clean     - Remove build artifacts"
 	@echo "  make distclean - Remove build + Limine"
 	@echo ""
-	@echo "Output: $(ISO)"
+	@echo "Rust Kernel Targets:"
+	@echo "  make kernel    - Build Rust kernel via Cargo"
+	@echo "  make rust-iso  - Create bootable ISO with Rust kernel"
+	@echo "  make rust-run  - Run Rust kernel in QEMU"
+	@echo ""
+	@echo "Output (C): $(ISO)"
+
+# =============================================================================
+# Rust Kernel Build Targets
+# =============================================================================
+
+RUST_TARGET := build/target-kernel.json
+RUST_KERNEL_BIN := target/target-kernel/debug/minimalos_kernel
+RUST_ISO := $(DISTDIR)/minimalos-rust.iso
+RUST_ISODIR := $(BUILDDIR)/rust-iso
+
+# Build Rust kernel via Cargo
+kernel:
+	cargo build --package minimalos_kernel --target $(RUST_TARGET)
+
+rust-kernel: kernel
+
+# Create bootable ISO with Rust kernel
+rust-iso: kernel limine
+	@echo "Creating bootable ISO (Rust kernel)..."
+	@mkdir -p $(RUST_ISODIR)/boot/limine
+	@mkdir -p $(RUST_ISODIR)/EFI/BOOT
+	@cp $(RUST_KERNEL_BIN) $(RUST_ISODIR)/boot/kernel
+	@cp limine.cfg $(RUST_ISODIR)/boot/limine/
+	@cp $(LIMINE_DIR)/limine-bios.sys $(RUST_ISODIR)/boot/limine/
+	@cp $(LIMINE_DIR)/limine-bios-cd.bin $(RUST_ISODIR)/boot/limine/
+	@cp $(LIMINE_DIR)/limine-uefi-cd.bin $(RUST_ISODIR)/boot/limine/
+	@cp $(LIMINE_DIR)/BOOTX64.EFI $(RUST_ISODIR)/EFI/BOOT/
+	@cp $(LIMINE_DIR)/BOOTIA32.EFI $(RUST_ISODIR)/EFI/BOOT/
+	xorriso -as mkisofs -R -r -J \
+		-b boot/limine/limine-bios-cd.bin \
+		-no-emul-boot -boot-load-size 4 -boot-info-table \
+		-hfsplus -apm-block-size 2048 \
+		--efi-boot boot/limine/limine-uefi-cd.bin \
+		-efi-boot-part --efi-boot-image --protective-msdos-label \
+		$(RUST_ISODIR) -o $(RUST_ISO)
+	./$(LIMINE_DIR)/limine bios-install $(RUST_ISO)
+	@echo "ISO created: $(RUST_ISO)"
+
+# Run Rust kernel in QEMU
+rust-run: rust-iso
+	qemu-system-x86_64 -M q35 -m 2G -cdrom $(RUST_ISO) -serial stdio
+
+# Clean Rust build artifacts
+rust-clean:
+	cargo clean
+	@rm -rf $(RUST_ISODIR)

@@ -1,5 +1,10 @@
-# Build artifacts
-build/
+# Build artifacts (C build)
+build/dist/
+build/obj/
+build/iso/
+
+# Rust build artifacts
+target/
 
 # Limine bootloader (downloaded)
 limine/
