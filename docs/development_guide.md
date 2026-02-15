@@ -1,39 +1,145 @@
 # Development Guide
 
-## Adding a Shell Command
-The shell is a simple command dispatcher located in `kernel/shell.c`. To add a new command:
+## Prerequisites
 
-1. **Implement the Command**:
-   Create a new function in `kernel/commands/` (or an existing file) that implements your command logic.
-   ```c
-   void cmd_mycommand(const char *args) {
-       terminal_writestring("Hello from my command!\n");
-   }
+| Tool        | Purpose                                    |
+|-------------|--------------------------------------------|
+| **Rust**    | Nightly toolchain (`nightly-2025-01-01`)   |
+| **QEMU**    | x86_64 system emulator for testing         |
+| **xorriso** | ISO 9660 image creation                    |
+| **Git**     | Cloning Limine bootloader                  |
+| **GNU Make**| Build orchestration                        |
+
+The exact Rust toolchain is pinned in `rust-toolchain.toml` and includes the
+`rust-src` and `llvm-tools-preview` components.
+
+## Building
+
+### Build the Kernel
+
+```bash
+make kernel
+# or simply:
+make
+```
+
+This compiles the `minimalos_kernel` package against the custom target
+`build/target-kernel.json`. The resulting ELF binary is placed at
+`target/target-kernel/debug/minimalos_kernel`.
+
+### Create a Bootable ISO
+
+```bash
+make iso
+```
+
+This will:
+
+1. Build the kernel.
+2. Clone/update the Limine bootloader (v8.x branch).
+3. Assemble a hybrid BIOS+UEFI bootable ISO at `build/dist/minimalos.iso`.
+
+### Run in QEMU
+
+```bash
+make run          # BIOS mode (default)
+make qemu-bios    # BIOS mode (explicit)
+make qemu-uefi    # UEFI mode (requires OVMF)
+make qemu-debug   # BIOS mode with interrupt logging, no reboot on triple-fault
+```
+
+QEMU is configured with a Q35 machine type and 2 GiB RAM. Serial output is
+directed to `stdio`.
+
+## Project Layout
+
+```
+MinimalOS/
+├── Cargo.toml                  # Workspace root
+├── Makefile                    # Build orchestration
+├── limine.cfg                  # Bootloader configuration
+├── rust-toolchain.toml         # Pinned nightly Rust toolchain
+├── QUESTS.md                   # Development quest tracker
+│
+├── build/
+│   ├── linker.ld               # Higher-half kernel linker script
+│   ├── target-kernel.json      # Custom Rust target for the kernel
+│   └── target-user.json        # Custom Rust target for user-space
+│
+├── kernel/                     # Kernel binary crate
+│   ├── Cargo.toml
+│   ├── build.rs                # Linker script integration
+│   └── src/
+│       ├── main.rs             # Entry point (_start)
+│       ├── arch/mod.rs         # x86_64-specific code
+│       ├── memory/mod.rs       # PMM / VMM
+│       ├── task/mod.rs         # Scheduler / processes
+│       └── traps/mod.rs        # IDT / exceptions / IRQs
+│
+├── crates/                     # Kernel-space libraries
+│   ├── kdisplay/               # Framebuffer graphics
+│   ├── khal/                   # Hardware Abstraction Layer
+│   └── klog/                   # Kernel logging
+│
+├── sdk/
+│   └── sys/                    # Shared types (kernel ↔ userspace)
+│
+└── docs/                       # Project documentation
+```
+
+## Workspace Crates
+
+| Crate        | Path               | Description                                |
+|--------------|--------------------|--------------------------------------------|
+| `minimalos_kernel` | `kernel/`    | Kernel entry point and core subsystems     |
+| `klog`       | `crates/klog/`     | Kernel logging subsystem                   |
+| `kdisplay`   | `crates/kdisplay/` | Framebuffer display and text console       |
+| `khal`       | `crates/khal/`     | Hardware abstraction (ports, PIC, PIT)     |
+| `sys`        | `sdk/sys/`         | Shared types between kernel and userspace  |
+
+All crates are `#![no_std]`.
+
+## Adding a New Kernel Module
+
+1. Create a new directory under `kernel/src/` (e.g., `kernel/src/mymod/mod.rs`).
+2. Declare it in `kernel/src/main.rs` with `mod mymod;`.
+3. Implement your module. Use `klog` for debug output once it is available.
+
+## Adding a New Crate
+
+1. Create a new directory under `crates/` with a `Cargo.toml` and `src/lib.rs`.
+2. Mark it `#![no_std]`.
+3. The workspace `Cargo.toml` uses `members = ["crates/*"]` so it will be picked up
+   automatically.
+4. Add it as a dependency in `kernel/Cargo.toml` if the kernel needs it:
+   ```toml
+   mylib = { path = "../crates/mylib" }
    ```
 
-2. **Register the Command**:
-   Open `kernel/shell.c` and add your command to the `execute_command` function.
-   ```c
-   else if (strcmp(cmd_buffer, "mycommand") == 0) cmd_mycommand(NULL);
-   ```
+## Cleaning
 
-3. **Update Headers**:
-   Ensure your function prototype is available to `shell.c`, typically by adding it to `kernel/include/kernel/commands.h`.
+```bash
+make clean      # Remove Cargo build artifacts and ISO output
+make distclean  # Also remove the cloned Limine directory
+```
 
-## Adding a System Call
-System calls allow user-space programs (once implemented) to interact with the kernel.
+## Development Roadmap
 
-1. **Implement the Handler**:
-   In `kernel/process/syscall.c`, create a static function that takes a `struct registers *regs` argument.
-   ```c
-   static void sys_mycall(struct registers *regs) {
-       // Implementation
-       // regs->rbx, regs->rcx, etc. contain arguments
-   }
-   ```
+The project follows the quest phases defined in `QUESTS.md`:
 
-2. **Register in Table**:
-   Add your function to the `syscalls[]` array in `kernel/process/syscall.c`. The index in this array will be the system call number.
+| Phase | Focus                          | Status      |
+|-------|--------------------------------|-------------|
+| 1     | Foundation (toolchain, build)  | In progress |
+| 2     | Subsystems (klog, kdisplay, khal, sys) | Not started |
+| 3     | Memory management (PMM, VMM)  | Not started |
+| 4     | Interrupts & scheduling        | Not started |
+| 5     | Userspace                      | Not started |
 
-3. **Usage**:
-   The system call can be invoked via interrupt `0x80`, with `RAX` set to the system call number.
+## Debugging Tips
+
+- Use `make qemu-debug` to get interrupt/exception logs and prevent automatic reboot
+  on triple-faults.
+- Serial output goes to the terminal (`-serial stdio`), so once `klog` + serial
+  driver are implemented, `println!`-style debugging will work.
+- The `x86_64` crate provides utilities for reading CR2, CR3, and other control
+  registers useful during page-fault debugging.
