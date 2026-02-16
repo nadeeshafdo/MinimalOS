@@ -23,6 +23,9 @@ checksum = "2f8a2ca5ac02d09563609681103aada9e1777d54fc57a5acd7a41404f9c93b6e"
 [[package]]
 name = "kdisplay"
 version = "0.1.0"
+dependencies = [
+ "limine",
+]
 
 [[package]]
 name = "khal"
