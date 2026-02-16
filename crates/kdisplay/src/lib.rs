@@ -178,15 +178,45 @@ pub unsafe fn draw_char(fb: &Framebuffer, x: usize, y: usize, ch: char, color: C
     let height = font.height() as usize;
     let bytes_per_row = (width + 7) / 8; // Round up to nearest byte
 
+    // Bounds check
+    let fb_width = fb.width() as usize;
+    let fb_height = fb.height() as usize;
+    if x >= fb_width || y >= fb_height {
+        return;
+    }
+
+    let pitch = fb.pitch() as usize;
+    let bpp = fb.bpp() as usize / 8;
+    let fb_ptr = fb.addr() as *mut u8;
+
+    // Pack color once
+    let packed = ((color.a as u32) << 24)
+        | ((color.r as u32) << 16)
+        | ((color.g as u32) << 8)
+        | (color.b as u32);
+
+    // Draw glyph using direct pointer arithmetic (avoid draw_pixel overhead)
     for row in 0..height {
+        let py = y + row;
+        if py >= fb_height {
+            break;
+        }
+
+        let row_start = fb_ptr.add(py * pitch + x * bpp) as *mut u32;
+
         for col in 0..width {
+            let px = x + col;
+            if px >= fb_width {
+                break;
+            }
+
             let byte_index = row * bytes_per_row + col / 8;
             let bit_index = 7 - (col % 8);
             
             if byte_index < glyph_data.len() {
                 let byte = glyph_data[byte_index];
                 if (byte & (1 << bit_index)) != 0 {
-                    draw_pixel(fb, x + col, y + row, color);
+                    row_start.add(col).write_volatile(packed);
                 }
             }
         }
@@ -194,12 +224,29 @@ pub unsafe fn draw_char(fb: &Framebuffer, x: usize, y: usize, ch: char, color: C
 }
 
 /// Draw a string at the given coordinates.
+/// Wraps to the next line if text exceeds screen width.
 /// 
 /// # Safety
 /// Caller must ensure the framebuffer pointer is valid.
-pub unsafe fn draw_string(fb: &Framebuffer, mut x: usize, y: usize, s: &str, color: Color) {
-    let char_width = get_font().width() as usize;
+pub unsafe fn draw_string(fb: &Framebuffer, mut x: usize, mut y: usize, s: &str, color: Color) {
+    let font = get_font();
+    let char_width = font.width() as usize;
+    let char_height = font.height() as usize;
+    let fb_width = fb.width() as usize;
+    let fb_height = fb.height() as usize;
+
     for ch in s.chars() {
+        // Check if character would exceed screen width
+        if x + char_width > fb_width {
+            x = 0;
+            y += char_height;
+        }
+
+        // Stop if we've run out of vertical space
+        if y + char_height > fb_height {
+            break;
+        }
+
         draw_char(fb, x, y, ch, color);
         x += char_width;
     }
