@@ -60,13 +60,21 @@ unsafe extern "C" fn _start() -> ! {
             kdisplay::fill_screen(&fb, kdisplay::Color::BLUE);
             klog::info!("[011] Screen filled with blue");
 
-            // [014] Hello World - Render string using PSF2 font
-            kdisplay::draw_string(&fb, 50, 50, "Hello MinimalOS", kdisplay::Color::WHITE);
-            klog::info!("[014] String rendered: 'Hello MinimalOS'");
+            // [015] Initialize framebuffer console
+            kdisplay::init_console(&fb, kdisplay::Color::WHITE, kdisplay::Color::BLUE);
+            klog::info!("[015] Framebuffer console initialized");
 
-            // [010] First Pixel - Draw white pixel at (100, 100)
-            kdisplay::draw_pixel(&fb, 100, 100, kdisplay::Color::RED);
-            klog::info!("[010] First Pixel drawn");
+            // [014] Hello World
+            kdisplay::kprintln!("Hello MinimalOS!");
+            kdisplay::kprintln!();
+
+            // [017] Formatting test
+            kdisplay::kprintln!("Framebuffer: {}x{} @ {}bpp", fb.width(), fb.height(), fb.bpp());
+            kdisplay::kprintln!("Pitch: {} bytes", fb.pitch());
+            kdisplay::kprintln!("Magic: {:#010X}", 0xDEADBEEFu32);
+            kdisplay::kprintln!();
+            kdisplay::kprintln!("Kernel initialized successfully.");
+            klog::info!("[017] Formatted output rendered");
         }
     } else {
         klog::warn!("No framebuffer available");
