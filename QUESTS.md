@@ -1,17 +1,17 @@
 # MinimalOS Quest Tracker
 
-## Phase 1: Foundation
+## Phase 1: Foundation ✅
 
-- [ ] [001] Workspace & Toolchain Configuration
-- [ ] [002] Build Artifacts (Target Spec, Linker Script)
-- [ ] [003] Kernel Core Entry Point
-- [ ] [004] Bootable ISO Creation
+- [x] [001] Workspace & Toolchain Configuration
+- [x] [002] Build Artifacts (Target Spec, Linker Script)
+- [x] [003] Kernel Core Entry Point
+- [x] [004] Bootable ISO Creation
 
-## Phase 2: Subsystems
+## Phase 2: Subsystems 🟡
 
-- [ ] [005] Kernel Logging (klog)
+- [x] [005] Kernel Logging (klog)
 - [ ] [006] Framebuffer Display (kdisplay)
-- [ ] [007] Hardware Abstraction Layer (khal)
+- [~] [007] Hardware Abstraction Layer (khal)
 - [ ] [008] Shared Types (sdk/sys)
 
 ## Phase 3: Memory Management
