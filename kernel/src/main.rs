@@ -55,6 +55,10 @@ unsafe extern "C" fn _start() -> ! {
             klog::debug!("  Resolution: {}x{}", fb.width(), fb.height());
             klog::debug!("  Pitch: {}", fb.pitch());
             klog::debug!("  BPP: {}", fb.bpp());
+
+            // [010] First Pixel - Draw white pixel at (100, 100)
+            kdisplay::draw_pixel(&fb, 100, 100, kdisplay::Color::WHITE);
+            klog::info!("[010] First Pixel drawn at (100, 100)");
         }
     } else {
         klog::warn!("No framebuffer available");
