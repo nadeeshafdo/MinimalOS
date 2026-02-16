@@ -63,6 +63,10 @@ unsafe extern "C" fn _start() -> ! {
             // [010] First Pixel - Draw white pixel at (100, 100)
             kdisplay::draw_pixel(&fb, 100, 100, kdisplay::Color::WHITE);
             klog::info!("[010] First Pixel drawn at (100, 100)");
+
+            // [012] The Glyph - Verify bitmap font for letter 'A' exists
+            let letter_a = kdisplay::font::LETTER_A;
+            klog::info!("[012] Bitmap font created: {} bytes for 'A'", letter_a.len());
         }
     } else {
         klog::warn!("No framebuffer available");
