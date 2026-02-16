@@ -67,6 +67,10 @@ unsafe extern "C" fn _start() -> ! {
             // [012] The Glyph - Verify bitmap font for letter 'A' exists
             let letter_a = kdisplay::font::LETTER_A;
             klog::info!("[012] Bitmap font created: {} bytes for 'A'", letter_a.len());
+
+            // [013] The Typesetter - Draw character 'A' at (200, 200)
+            kdisplay::draw_char(&fb, 200, 200, 'A', kdisplay::Color::WHITE);
+            klog::info!("[013] Character 'A' drawn at (200, 200)");
         }
     } else {
         klog::warn!("No framebuffer available");
