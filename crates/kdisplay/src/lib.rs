@@ -91,3 +91,23 @@ pub unsafe fn fill_screen(fb: &Framebuffer, color: Color) {
         }
     }
 }
+
+/// Draw a character glyph at the given coordinates using a bitmap font.
+/// 
+/// # Safety
+/// Caller must ensure the framebuffer pointer is valid and coordinates are within bounds.
+pub unsafe fn draw_char(fb: &Framebuffer, x: usize, y: usize, ch: char, color: Color) {
+    let glyph = match ch {
+        'A' | 'a' => &font::LETTER_A,
+        _ => return, // Unknown character, skip
+    };
+
+    for (row, &byte) in glyph.iter().enumerate() {
+        for col in 0..8 {
+            // Check if bit is set (bit 7 = leftmost)
+            if (byte & (1 << (7 - col))) != 0 {
+                draw_pixel(fb, x + col, y + row, color);
+            }
+        }
+    }
+}
