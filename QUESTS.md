@@ -1,6 +1,6 @@
 # MinimalOS Quest Tracker
 
-> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.16`**
+> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.19`**
 >
 > Start: `v0.0.0` → Goal: `v1.0.0` (~100 micro-tasks)
 >
@@ -22,7 +22,7 @@
 - [x] [007] **The Map:** Successfully read the `BootInfo` struct from Limine (Framebuffer ptr).
 - [x] [008] **Panic Button:** Implement `#[panic_handler]` so the OS halts safely instead of rebooting.
 
-## 🎨 Rank II: The Artist (Graphics & Output) 🟡
+## 🎨 Rank II: The Artist (Graphics & Output) ✅
 
 *Focus: We have no VGA text mode. We must paint every pixel.*
 
@@ -32,9 +32,9 @@
 - [x] [012] **The Glyph:** Create a byte-array representing the letter 'A' (bitmap font).
 - [x] [013] **The Typesetter:** Write a function `draw_char(x, y, char, color)`.
 - [x] [014] **Hello World:** Render the string "Hello MinimalOS" to the screen.
-- [ ] [015] **The Logger:** Implement a `kprint!` macro that uses the framebuffer.
-- [ ] [016] **Scrollbar:** When text hits the bottom of the screen, shift the entire buffer up (software scrolling).
-- [ ] [017] **Formatting:** Support Rust formatting `kprintln!("Value: {:x}", 0xDEADBEEF)`.
+- [x] [015] **The Logger:** Implement a `kprint!` macro that uses the framebuffer.
+- [x] [016] **Scrollbar:** When text hits the bottom of the screen, shift the entire buffer up (software scrolling).
+- [x] [017] **Formatting:** Support Rust formatting `kprintln!("Value: {:x}", 0xDEADBEEF)`.
 
 ## ⚡ Rank III: The Reflexes (Interrupts & CPU)
 
