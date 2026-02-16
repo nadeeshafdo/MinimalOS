@@ -48,3 +48,30 @@ pub unsafe fn draw_pixel(fb: &Framebuffer, x: usize, y: usize, color: Color) {
 
     pixel.write_volatile(packed);
 }
+
+/// Fill the entire screen with a single color.
+/// 
+/// # Safety
+/// Caller must ensure the framebuffer pointer is valid.
+pub unsafe fn fill_screen(fb: &Framebuffer, color: Color) {
+    let width = fb.width() as usize;
+    let height = fb.height() as usize;
+    let pitch = fb.pitch() as usize;
+    let bpp = fb.bpp() as usize / 8;
+
+    let fb_ptr = fb.addr() as *mut u8;
+    
+    // Pack color once
+    let packed = ((color.a as u32) << 24)
+        | ((color.r as u32) << 16)
+        | ((color.g as u32) << 8)
+        | (color.b as u32);
+
+    // Fill each row
+    for y in 0..height {
+        let row_start = fb_ptr.add(y * pitch) as *mut u32;
+        for x in 0..width {
+            row_start.add(x).write_volatile(packed);
+        }
+    }
+}
