@@ -1,2 +1,50 @@
 //! Framebuffer graphics subsystem.
 #![no_std]
+
+use limine::framebuffer::Framebuffer;
+
+/// Color represented as 32-bit RGBA.
+#[derive(Debug, Clone, Copy)]
+pub struct Color {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+impl Color {
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b, a: 255 }
+    }
+
+    pub const WHITE: Color = Color::new(255, 255, 255);
+    pub const BLACK: Color = Color::new(0, 0, 0);
+    pub const RED: Color = Color::new(255, 0, 0);
+    pub const GREEN: Color = Color::new(0, 255, 0);
+    pub const BLUE: Color = Color::new(0, 0, 255);
+}
+
+/// Draw a single pixel at the given coordinates.
+/// 
+/// # Safety
+/// Caller must ensure the framebuffer pointer is valid and the coordinates are within bounds.
+pub unsafe fn draw_pixel(fb: &Framebuffer, x: usize, y: usize, color: Color) {
+    if x >= fb.width() as usize || y >= fb.height() as usize {
+        return; // Out of bounds
+    }
+
+    let pitch = fb.pitch() as usize;
+    let bpp = fb.bpp() as usize / 8; // bytes per pixel
+    let offset = y * pitch + x * bpp;
+
+    let fb_ptr = fb.addr() as *mut u8;
+    let pixel = fb_ptr.add(offset) as *mut u32;
+
+    // Pack color as 0xAARRGGBB (assuming 32-bit framebuffer)
+    let packed = ((color.a as u32) << 24)
+        | ((color.r as u32) << 16)
+        | ((color.g as u32) << 8)
+        | (color.b as u32);
+
+    pixel.write_volatile(packed);
+}
