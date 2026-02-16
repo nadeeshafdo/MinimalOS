@@ -60,17 +60,13 @@ unsafe extern "C" fn _start() -> ! {
             kdisplay::fill_screen(&fb, kdisplay::Color::BLUE);
             klog::info!("[011] Screen filled with blue");
 
+            // [014] Hello World - Render string using PSF2 font
+            kdisplay::draw_string(&fb, 50, 50, "Hello MinimalOS", kdisplay::Color::WHITE);
+            klog::info!("[014] String rendered: 'Hello MinimalOS'");
+
             // [010] First Pixel - Draw white pixel at (100, 100)
-            kdisplay::draw_pixel(&fb, 100, 100, kdisplay::Color::WHITE);
-            klog::info!("[010] First Pixel drawn at (100, 100)");
-
-            // [012] The Glyph - Verify bitmap font for letter 'A' exists
-            let letter_a = kdisplay::font::LETTER_A;
-            klog::info!("[012] Bitmap font created: {} bytes for 'A'", letter_a.len());
-
-            // [013] The Typesetter - Draw character 'A' at (200, 200)
-            kdisplay::draw_char(&fb, 200, 200, 'A', kdisplay::Color::WHITE);
-            klog::info!("[013] Character 'A' drawn at (200, 200)");
+            kdisplay::draw_pixel(&fb, 100, 100, kdisplay::Color::RED);
+            klog::info!("[010] First Pixel drawn");
         }
     } else {
         klog::warn!("No framebuffer available");
