@@ -24,6 +24,22 @@ impl Color {
     pub const BLUE: Color = Color::new(0, 0, 255);
 }
 
+/// 8x8 bitmap font data.
+/// Each byte represents one row of the glyph (bit 7 = leftmost pixel).
+pub mod font {
+    /// Bitmap for letter 'A' (8x8).
+    pub const LETTER_A: [u8; 8] = [
+        0b00111100,  // __####__
+        0b01100110,  // _##__##_
+        0b01100110,  // _##__##_
+        0b01111110,  // _######_
+        0b01100110,  // _##__##_
+        0b01100110,  // _##__##_
+        0b01100110,  // _##__##_
+        0b00000000,  // ________
+    ];
+}
+
 /// Draw a single pixel at the given coordinates.
 /// 
 /// # Safety
