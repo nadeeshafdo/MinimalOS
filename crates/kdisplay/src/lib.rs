@@ -1,6 +1,7 @@
 //! Framebuffer graphics subsystem.
 #![no_std]
 
+use core::fmt;
 use limine::framebuffer::Framebuffer;
 
 /// PSF2 font header (32 bytes).
@@ -250,4 +251,231 @@ pub unsafe fn draw_string(fb: &Framebuffer, mut x: usize, mut y: usize, s: &str,
         draw_char(fb, x, y, ch, color);
         x += char_width;
     }
+}
+
+// ========================
+// Console / kprint! system
+// ========================
+
+/// Framebuffer text console with cursor tracking and scrolling.
+pub struct Console {
+    fb_addr: usize,
+    fb_width: usize,
+    fb_height: usize,
+    fb_pitch: usize,
+    fb_bpp: usize,
+    cursor_x: usize,  // pixel position
+    cursor_y: usize,
+    char_width: usize,
+    char_height: usize,
+    fg: Color,
+    bg: Color,
+}
+
+impl Console {
+    /// Create a new console from a Limine Framebuffer.
+    ///
+    /// # Safety
+    /// The framebuffer address must remain valid for the console's lifetime.
+    pub unsafe fn new(fb: &Framebuffer, fg: Color, bg: Color) -> Self {
+        let font = get_font();
+        Self {
+            fb_addr: fb.addr() as usize,
+            fb_width: fb.width() as usize,
+            fb_height: fb.height() as usize,
+            fb_pitch: fb.pitch() as usize,
+            fb_bpp: fb.bpp() as usize / 8,
+            cursor_x: 0,
+            cursor_y: 0,
+            char_width: font.width() as usize,
+            char_height: font.height() as usize,
+            fg,
+            bg,
+        }
+    }
+
+    /// Number of character columns on screen.
+    pub fn cols(&self) -> usize {
+        self.fb_width / self.char_width
+    }
+
+    /// Number of character rows on screen.
+    pub fn rows(&self) -> usize {
+        self.fb_height / self.char_height
+    }
+
+    /// Clear the entire screen with the background color.
+    pub fn clear(&mut self) {
+        let packed = self.pack_color(self.bg);
+        let fb_ptr = self.fb_addr as *mut u8;
+
+        for y in 0..self.fb_height {
+            let row_start = unsafe { fb_ptr.add(y * self.fb_pitch) as *mut u32 };
+            for x in 0..self.fb_width {
+                unsafe { row_start.add(x).write_volatile(packed) };
+            }
+        }
+
+        self.cursor_x = 0;
+        self.cursor_y = 0;
+    }
+
+    /// Write a single character at the current cursor position.
+    pub fn put_char(&mut self, ch: char) {
+        match ch {
+            '\n' => {
+                self.cursor_x = 0;
+                self.cursor_y += self.char_height;
+            }
+            '\r' => {
+                self.cursor_x = 0;
+            }
+            '\t' => {
+                // Tab to next 4-column boundary
+                let tab_stop = ((self.cursor_x / self.char_width / 4) + 1) * 4 * self.char_width;
+                self.cursor_x = tab_stop;
+                if self.cursor_x + self.char_width > self.fb_width {
+                    self.cursor_x = 0;
+                    self.cursor_y += self.char_height;
+                }
+            }
+            ch => {
+                // Wrap if we'd go off the right edge
+                if self.cursor_x + self.char_width > self.fb_width {
+                    self.cursor_x = 0;
+                    self.cursor_y += self.char_height;
+                }
+
+                // Scroll if we'd go off the bottom
+                if self.cursor_y + self.char_height > self.fb_height {
+                    self.scroll_up();
+                }
+
+                self.draw_glyph(self.cursor_x, self.cursor_y, ch);
+                self.cursor_x += self.char_width;
+            }
+        }
+
+        // Scroll check after newlines too
+        if self.cursor_y + self.char_height > self.fb_height {
+            self.scroll_up();
+        }
+    }
+
+    /// Scroll the entire screen up by one line of text.
+    fn scroll_up(&mut self) {
+        let fb_ptr = self.fb_addr as *mut u8;
+        let row_bytes = self.char_height * self.fb_pitch;
+        let total_bytes = self.fb_height * self.fb_pitch;
+
+        unsafe {
+            // Copy everything up by one text row
+            core::ptr::copy(
+                fb_ptr.add(row_bytes),
+                fb_ptr,
+                total_bytes - row_bytes,
+            );
+
+            // Clear the last text row with background color
+            let packed = self.pack_color(self.bg);
+            let clear_start_y = self.fb_height - self.char_height;
+            for y in clear_start_y..self.fb_height {
+                let row_start = fb_ptr.add(y * self.fb_pitch) as *mut u32;
+                for x in 0..self.fb_width {
+                    row_start.add(x).write_volatile(packed);
+                }
+            }
+        }
+
+        self.cursor_y -= self.char_height;
+    }
+
+    /// Draw a glyph at pixel position (x, y) with foreground on background.
+    fn draw_glyph(&self, x: usize, y: usize, ch: char) {
+        let font = get_font();
+        let glyph_data = match font.get_glyph(ch) {
+            Some(g) => g,
+            None => return,
+        };
+
+        let width = self.char_width;
+        let height = self.char_height;
+        let bytes_per_row = (width + 7) / 8;
+        let fb_ptr = self.fb_addr as *mut u8;
+        let packed_fg = self.pack_color(self.fg);
+        let packed_bg = self.pack_color(self.bg);
+
+        for row in 0..height {
+            let py = y + row;
+            if py >= self.fb_height {
+                break;
+            }
+
+            let row_start = unsafe { fb_ptr.add(py * self.fb_pitch + x * self.fb_bpp) as *mut u32 };
+
+            for col in 0..width {
+                if x + col >= self.fb_width {
+                    break;
+                }
+
+                let byte_index = row * bytes_per_row + col / 8;
+                let bit_index = 7 - (col % 8);
+
+                let is_set = byte_index < glyph_data.len()
+                    && (glyph_data[byte_index] & (1 << bit_index)) != 0;
+
+                // Draw both foreground AND background pixels for proper text rendering
+                let packed = if is_set { packed_fg } else { packed_bg };
+                unsafe { row_start.add(col).write_volatile(packed) };
+            }
+        }
+    }
+
+    #[inline]
+    fn pack_color(&self, c: Color) -> u32 {
+        ((c.a as u32) << 24) | ((c.r as u32) << 16) | ((c.g as u32) << 8) | (c.b as u32)
+    }
+}
+
+impl fmt::Write for Console {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for ch in s.chars() {
+            self.put_char(ch);
+        }
+        Ok(())
+    }
+}
+
+/// Global console instance, protected by a spinlock.
+static CONSOLE: spin::Mutex<Option<Console>> = spin::Mutex::new(None);
+
+/// Initialize the global framebuffer console.
+///
+/// # Safety
+/// Must be called once with a valid framebuffer reference.
+pub unsafe fn init_console(fb: &Framebuffer, fg: Color, bg: Color) {
+    let mut console = Console::new(fb, fg, bg);
+    console.clear();
+    *CONSOLE.lock() = Some(console);
+}
+
+/// Write a formatted string to the framebuffer console.
+pub fn console_write_fmt(args: fmt::Arguments) {
+    use fmt::Write;
+    if let Some(ref mut console) = *CONSOLE.lock() {
+        let _ = console.write_fmt(args);
+    }
+}
+
+/// Print to the framebuffer console.
+#[macro_export]
+macro_rules! kprint {
+    ($($arg:tt)*) => ($crate::console_write_fmt(format_args!($($arg)*)));
+}
+
+/// Print to the framebuffer console with a newline.
+#[macro_export]
+macro_rules! kprintln {
+    () => ($crate::kprint!("\n"));
+    ($($arg:tt)*) => ($crate::kprint!("{}\n", format_args!($($arg)*)));
 }
