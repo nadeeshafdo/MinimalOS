@@ -25,6 +25,7 @@ name = "kdisplay"
 version = "0.1.0"
 dependencies = [
  "limine",
+ "spin",
 ]
 
 [[package]]
@@ -62,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "minimalos_kernel"
-version = "0.0.14"
+version = "0.0.15"
 dependencies = [
  "kdisplay",
  "khal",
