@@ -27,10 +27,17 @@ version = "0.1.0"
 [[package]]
 name = "khal"
 version = "0.1.0"
+dependencies = [
+ "spin",
+ "x86_64",
+]
 
 [[package]]
 name = "klog"
 version = "0.1.0"
+dependencies = [
+ "khal",
+]
 
 [[package]]
 name = "limine"
@@ -55,6 +62,7 @@ name = "minimalos_kernel"
 version = "0.1.0"
 dependencies = [
  "kdisplay",
+ "khal",
  "klog",
  "limine",
  "spin",

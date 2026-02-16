@@ -47,7 +47,7 @@ iso: kernel limine
 	@cp $(RUST_KERNEL_BIN) $(ISODIR)/boot/kernel
 	
 	# Copy Limine configuration
-	@cp limine.cfg $(ISODIR)/boot/limine/
+	@cp limine.conf $(ISODIR)/boot/limine/
 	
 	# Copy Limine boot files
 	@cp $(LIMINE_DIR)/limine-bios.sys $(ISODIR)/boot/limine/
