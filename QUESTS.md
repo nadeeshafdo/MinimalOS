@@ -1,6 +1,6 @@
 # MinimalOS Quest Tracker
 
-> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.13`**
+> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.14`**
 >
 > Start: `v0.0.0` → Goal: `v1.0.0` (~100 micro-tasks)
 >
@@ -29,7 +29,7 @@
 - [x] [009] **The Canvas:** Extract the Framebuffer address, width, height, and pitch from `BootInfo`.
 - [x] [010] **First Pixel:** Write a white pixel to `(100, 100)` by directly modifying memory.
 - [x] [011] **The Screen Wipe:** Write a function to fill the entire screen with a specific color.
-- [ ] [012] **The Glyph:** Create a byte-array representing the letter 'A' (bitmap font).
+- [x] [012] **The Glyph:** Create a byte-array representing the letter 'A' (bitmap font).
 - [ ] [013] **The Typesetter:** Write a function `draw_char(x, y, char, color)`.
 - [ ] [014] **Hello World:** Render the string "Hello MinimalOS" to the screen.
 - [ ] [015] **The Logger:** Implement a `kprint!` macro that uses the framebuffer.
