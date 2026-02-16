@@ -5,7 +5,6 @@ ENTRY(_start)
 
 PHDRS
 {
-    limine_requests PT_LOAD;
     text    PT_LOAD;
     rodata  PT_LOAD;
     data    PT_LOAD;
@@ -18,13 +17,6 @@ SECTIONS
 
     __kernel_start = .;
 
-    .limine_requests : {
-        KEEP(*(.limine_requests_start))
-        KEEP(*(.limine_requests))
-        KEEP(*(.limine_requests_end))
-    } :limine_requests
-
-    . = ALIGN(CONSTANT(MAXPAGESIZE));
     .text : {
         *(.text .text.*)
     } :text
@@ -37,11 +29,17 @@ SECTIONS
     . = ALIGN(CONSTANT(MAXPAGESIZE));
     .data : {
         *(.data .data.*)
+
+        /* Limine request markers and requests */
+        KEEP(*(.requests_start_marker))
+        KEEP(*(.requests))
+        KEEP(*(.requests_end_marker))
     } :data
 
+    /* NOTE: .bss must be the last thing mapped to :data */
     .bss : {
-        *(COMMON)
         *(.bss .bss.*)
+        *(COMMON)
     } :data
 
     __kernel_end = .;
