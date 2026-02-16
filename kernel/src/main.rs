@@ -87,7 +87,8 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     
     loop {
         unsafe {
-            core::arch::asm!("hlt");
+            // Disable interrupts and halt to prevent spurious wakeups
+            core::arch::asm!("cli; hlt", options(nomem, nostack));
         }
     }
 }
