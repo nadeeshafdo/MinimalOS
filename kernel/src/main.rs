@@ -56,6 +56,10 @@ unsafe extern "C" fn _start() -> ! {
             klog::debug!("  Pitch: {}", fb.pitch());
             klog::debug!("  BPP: {}", fb.bpp());
 
+            // [011] The Screen Wipe - Fill entire screen with blue
+            kdisplay::fill_screen(&fb, kdisplay::Color::BLUE);
+            klog::info!("[011] Screen filled with blue");
+
             // [010] First Pixel - Draw white pixel at (100, 100)
             kdisplay::draw_pixel(&fb, 100, 100, kdisplay::Color::WHITE);
             klog::info!("[010] First Pixel drawn at (100, 100)");
