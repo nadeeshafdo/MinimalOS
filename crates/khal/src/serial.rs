@@ -3,6 +3,8 @@
 use core::fmt;
 use spin::Mutex;
 
+use crate::port::{inb, outb};
+
 /// COM1 base port address
 const COM1_PORT: u16 = 0x3F8;
 
@@ -19,60 +21,36 @@ impl Serial {
         }
     }
 
-    /// Write a byte to a port
-    #[inline]
-    unsafe fn outb(port: u16, value: u8) {
-        core::arch::asm!(
-            "out dx, al",
-            in("dx") port,
-            in("al") value,
-            options(nomem, nostack, preserves_flags)
-        );
-    }
-
-    /// Read a byte from a port
-    #[inline]
-    unsafe fn inb(port: u16) -> u8 {
-        let value: u8;
-        core::arch::asm!(
-            "in al, dx",
-            in("dx") port,
-            out("al") value,
-            options(nomem, nostack, preserves_flags)
-        );
-        value
-    }
-
     /// Initialize the serial port (115200 baud, 8N1)
     pub fn init(&mut self) {
         unsafe {
             // Disable all interrupts
-            Self::outb(COM1_PORT + 1, 0x00);
+            outb(COM1_PORT + 1, 0x00);
 
             // Enable DLAB (set baud rate divisor)
-            Self::outb(COM1_PORT + 3, 0x80);
+            outb(COM1_PORT + 3, 0x80);
 
             // Set divisor to 1 (115200 baud)
-            Self::outb(COM1_PORT + 0, 0x01); // Divisor low byte
-            Self::outb(COM1_PORT + 1, 0x00); // Divisor high byte
+            outb(COM1_PORT + 0, 0x01); // Divisor low byte
+            outb(COM1_PORT + 1, 0x00); // Divisor high byte
 
             // 8 bits, no parity, one stop bit (clear DLAB)
-            Self::outb(COM1_PORT + 3, 0x03);
+            outb(COM1_PORT + 3, 0x03);
 
             // Enable FIFO, clear them, with 14-byte threshold
-            Self::outb(COM1_PORT + 2, 0xC7);
+            outb(COM1_PORT + 2, 0xC7);
 
             // Set RTS/DSR, disable IRQ gate (OUT2=0)
-            Self::outb(COM1_PORT + 4, 0x03);
+            outb(COM1_PORT + 4, 0x03);
 
             // Put chip in loopback mode to test
-            Self::outb(COM1_PORT + 4, 0x1E);
+            outb(COM1_PORT + 4, 0x1E);
 
             // Send test byte
-            Self::outb(COM1_PORT + 0, 0xAE);
+            outb(COM1_PORT + 0, 0xAE);
 
             // Check if we receive same byte back
-            if Self::inb(COM1_PORT + 0) != 0xAE {
+            if inb(COM1_PORT + 0) != 0xAE {
                 // Serial port is faulty, but continue anyway
                 self.initialized = true;
                 return;
@@ -80,10 +58,10 @@ impl Serial {
 
             // Loopback passed - set normal operation (OUT1, OUT2, RTS, DTR)
             // OUT2 must be set for interrupts but we keep interrupts disabled
-            Self::outb(COM1_PORT + 4, 0x0F);
+            outb(COM1_PORT + 4, 0x0F);
 
             // Keep interrupts disabled - we poll instead
-            Self::outb(COM1_PORT + 1, 0x00);
+            outb(COM1_PORT + 1, 0x00);
 
             self.initialized = true;
         }
@@ -91,7 +69,7 @@ impl Serial {
 
     /// Check if transmit buffer is empty
     fn is_transmit_empty() -> bool {
-        unsafe { Self::inb(COM1_PORT + 5) & 0x20 != 0 }
+        unsafe { inb(COM1_PORT + 5) & 0x20 != 0 }
     }
 
     /// Write a byte to the serial port
@@ -106,7 +84,7 @@ impl Serial {
         }
 
         unsafe {
-            Self::outb(COM1_PORT, byte);
+            outb(COM1_PORT, byte);
         }
     }
 
