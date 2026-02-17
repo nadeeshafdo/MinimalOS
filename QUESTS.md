@@ -1,6 +1,6 @@
 # MinimalOS Quest Tracker
 
-> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.19`**
+> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.20`**
 >
 > Start: `v0.0.0` → Goal: `v1.0.0` (~100 micro-tasks)
 >
@@ -40,7 +40,7 @@
 
 *Focus: Handling hardware events without crashing.*
 
-- [ ] [018] **The Gatekeeper:** Define the IDT (Interrupt Descriptor Table) struct.
+- [x] [018] **The Gatekeeper:** Define the IDT (Interrupt Descriptor Table) struct.
 - [ ] [019] **The Loader:** Load the IDT using the `lidt` assembly instruction.
 - [ ] [020] **Trap Card:** Create a handler for "Breakpoint" (Int 3) and trigger it successfully.
 - [ ] [021] **Safety Net:** Create a "Double Fault" handler with a separate stack (IST).
