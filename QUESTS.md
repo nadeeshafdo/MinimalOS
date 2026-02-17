@@ -47,8 +47,8 @@
 - [x] [022] **Silence the Old:** Remap and disable the legacy 8259 PIC.
 - [x] [023] **Modern Times:** Enable the APIC (Advanced Programmable Interrupt Controller).
 - [x] [024] **The Heartbeat:** Enable the Local APIC Timer.
-- [ ] [025] **Tick Tock:** Print a dot `.` to the screen every time the timer fires (e.g., 100Hz).
-- [ ] [026] **No Red Zone:** Verify compilation flags disable the "Red Zone" (critical for interrupt safety).
+- [x] [025] **Tick Tock:** Print a dot `.` to the screen every time the timer fires (e.g., 100Hz).
+- [x] [026] **No Red Zone:** Verify compilation flags disable the "Red Zone" (critical for interrupt safety).
 
 ## 🧠 Rank IV: The Mind (Memory Management)
 
