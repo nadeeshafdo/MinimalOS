@@ -64,6 +64,15 @@ pub fn init_idt() {
         = handlers::double_fault_handler;
     idt.set_handler(8, df_handler as usize, cs, double_fault_options);
 
+    // [024] Register timer interrupt handler (vector 32)
+    let timer_options = EntryOptions::new()
+        .set_present(true)
+        .set_gate_type(GateType::Interrupt);
+
+    let timer_handler: extern "x86-interrupt" fn(x86_64::structures::idt::InterruptStackFrame)
+        = handlers::timer_handler;
+    idt.set_handler(khal::apic::TIMER_VECTOR, timer_handler as usize, cs, timer_options);
+
     // [023] Register spurious interrupt handler (vector 0xFF)
     let spurious_options = EntryOptions::new()
         .set_present(true)
