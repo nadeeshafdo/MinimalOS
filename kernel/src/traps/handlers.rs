@@ -36,3 +36,38 @@ pub extern "x86-interrupt" fn double_fault_handler(
         }
     }
 }
+
+/// Spurious interrupt handler (vector 0xFF).
+///
+/// The APIC may deliver spurious interrupts when the interrupt condition
+/// disappears before the CPU acknowledges it. These should be silently
+/// ignored — no EOI is sent for spurious interrupts.
+pub extern "x86-interrupt" fn spurious_handler(_stack_frame: InterruptStackFrame) {
+    // Spurious interrupts require NO end-of-interrupt signal.
+    // Simply return.
+}
+
+/// Page Fault exception handler (INT 14).
+///
+/// Temporary diagnostic handler to identify page fault causes.
+/// Prints the faulting address (CR2) and error code.
+pub extern "x86-interrupt" fn page_fault_handler(
+    stack_frame: InterruptStackFrame,
+    error_code: x86_64::structures::idt::PageFaultErrorCode,
+) {
+    let cr2: u64;
+    unsafe {
+        core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack, preserves_flags));
+    }
+    klog::error!("=== PAGE FAULT ===");
+    klog::error!("Faulting address (CR2): {:#018x}", cr2);
+    klog::error!("Error code: {:?}", error_code);
+    klog::error!("{:#?}", stack_frame);
+    klog::error!("System halted.");
+
+    loop {
+        unsafe {
+            core::arch::asm!("cli; hlt", options(nomem, nostack));
+        }
+    }
+}
