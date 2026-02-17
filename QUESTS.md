@@ -1,6 +1,6 @@
 # MinimalOS Quest Tracker
 
-> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.28`**
+> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.29`**
 >
 > Start: `v0.0.0` → Goal: `v1.0.0` (~100 micro-tasks)
 >
@@ -55,7 +55,7 @@
 *Focus: Moving from raw addresses to managed memory.*
 
 - [x] [027] **The Census:** Iterate over the Limine Memory Map and calculate total RAM in bytes.
-- [ ] [028] **The Accountant:** Implement a Bitmap Allocator (Physical Memory Manager).
+- [x] [028] **The Accountant:** Implement a Bitmap Allocator (Physical Memory Manager).
 - [ ] [029] **Mine!:** Successfully call `pmm_alloc_frame()` and get a valid address.
 - [ ] [030] **Return It:** Successfully call `pmm_free_frame()` and update the bitmap.
 - [ ] [031] **Higher Plane:** Create the recursive Page Table structure.
