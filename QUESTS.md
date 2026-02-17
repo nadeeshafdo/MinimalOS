@@ -1,6 +1,6 @@
 # MinimalOS Quest Tracker
 
-> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.31`**
+> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.34`**
 >
 > Start: `v0.0.0` → Goal: `v1.0.0` (~100 micro-tasks)
 >
@@ -58,9 +58,9 @@
 - [x] [028] **The Accountant:** Implement a Bitmap Allocator (Physical Memory Manager).
 - [x] [029] **Mine!:** Successfully call `pmm_alloc_frame()` and get a valid address.
 - [x] [030] **Return It:** Successfully call `pmm_free_frame()` and update the bitmap.
-- [ ] [031] **Higher Plane:** Create the recursive Page Table structure.
-- [ ] [032] **The Mapper:** Write `map_page(virt, phys, flags)`.
-- [ ] [033] **The Translator:** Write `virt_to_phys(addr)`.
+- [x] [031] **Higher Plane:** Create the recursive Page Table structure.
+- [x] [032] **The Mapper:** Write `map_page(virt, phys, flags)`.
+- [x] [033] **The Translator:** Write `virt_to_phys(addr)`.
 - [ ] [034] **The Heap:** Initialize the `GlobalAlloc` trait.
 - [ ] [035] **Dynamic Power:** Successfully use `Box::new(10)` inside the kernel.
 - [ ] [036] **Vectorization:** Successfully push an item to a `Vec<i32>`.
