@@ -1,6 +1,7 @@
 //! Hardware Abstraction Layer.
 #![no_std]
 
+pub mod apic;
 pub mod pic;
 pub mod port;
 pub mod serial;
