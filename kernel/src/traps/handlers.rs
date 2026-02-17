@@ -85,3 +85,24 @@ pub extern "x86-interrupt" fn page_fault_handler(
         }
     }
 }
+
+/// Keyboard interrupt handler (IRQ1 = vector 33).
+///
+/// Reads the scancode from the PS/2 data port, decodes it to ASCII,
+/// and prints the character to the framebuffer console.
+pub extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {
+    let status = khal::keyboard::read_status();
+    if status & 0x01 != 0 {
+        let scancode = khal::keyboard::read_scancode();
+        khal::keyboard::set_last_scancode(scancode);
+
+        // [040] Decode scancode to ASCII
+        if let Some(ch) = khal::keyboard::scancode_to_ascii(scancode) {
+            // [041] Echo + [042] Backspace
+            kdisplay::console_try_put_char(ch);
+        }
+    }
+
+    // Send EOI to PIC1
+    khal::keyboard::send_eoi();
+}
