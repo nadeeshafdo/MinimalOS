@@ -223,6 +223,16 @@ unsafe extern "C" fn _start() -> ! {
         klog::warn!("No framebuffer available");
     }
 
+    // [038] PS/2 Controller - Read status register
+    let ps2_status = khal::keyboard::read_status();
+    klog::info!("[038] PS/2 status register: {:#04x} (output_full={})",
+        ps2_status, ps2_status & 0x01);
+
+    // [039] Key Down - Enable keyboard IRQ1
+    khal::keyboard::enable_irq();
+    klog::info!("[039] Keyboard IRQ1 enabled (vector {})", khal::keyboard::KEYBOARD_VECTOR);
+    klog::info!("[041] Keyboard echo active — type to see characters on screen");
+
     klog::info!("Kernel initialized successfully");
     klog::info!("Entering idle loop...");
 
