@@ -8,7 +8,9 @@ mod task;
 mod traps;
 
 use limine::BaseRevision;
-use limine::request::{FramebufferRequest, HhdmRequest, RequestsStartMarker, RequestsEndMarker};
+use limine::request::{
+    FramebufferRequest, HhdmRequest, MemoryMapRequest, RequestsStartMarker, RequestsEndMarker,
+};
 
 /// Limine requests start marker.
 #[used]
@@ -29,6 +31,11 @@ static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 #[used]
 #[unsafe(link_section = ".requests")]
 static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
+
+/// Request the memory map from the bootloader.
+#[used]
+#[unsafe(link_section = ".requests")]
+static MEMORY_MAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
 
 /// Limine requests end marker.
 #[used]
@@ -70,6 +77,11 @@ unsafe extern "C" fn _start() -> ! {
         .expect("HHDM response not available")
         .offset();
     klog::debug!("HHDM offset: {:#x}", hhdm_offset);
+
+    // [027] The Census - Iterate memory map and calculate total RAM
+    let mmap_response = MEMORY_MAP_REQUEST.get_response()
+        .expect("Memory map response not available");
+    let (_total_ram, _usable_ram) = memory::census(mmap_response.entries());
 
     // Read APIC physical base from MSR
     let apic_low: u32;
@@ -135,6 +147,9 @@ unsafe extern "C" fn _start() -> ! {
             kdisplay::kprintln!("Framebuffer: {}x{} @ {}bpp", fb.width(), fb.height(), fb.bpp());
             kdisplay::kprintln!("Pitch: {} bytes", fb.pitch());
             kdisplay::kprintln!("Magic: {:#010X}", 0xDEADBEEFu32);
+            kdisplay::kprintln!();
+            kdisplay::kprintln!("RAM: {} MiB usable / {} MiB total",
+                _usable_ram / (1024 * 1024), _total_ram / (1024 * 1024));
             kdisplay::kprintln!();
             kdisplay::kprintln!("Kernel initialized successfully.");
             klog::info!("[017] Formatted output rendered");

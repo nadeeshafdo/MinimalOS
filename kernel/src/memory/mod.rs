@@ -1,6 +1,7 @@
 //! Physical and virtual memory management.
 
 use core::ptr;
+use limine::memory_map::{Entry, EntryType};
 
 /// Page table entry flags.
 const PTE_PRESENT: u64 = 1 << 0;
@@ -167,4 +168,72 @@ unsafe fn virt_to_phys(hhdm_offset: u64, pml4_virt: *const u64, virt_addr: u64) 
     }
 
     (pt_entry & 0x000F_FFFF_FFFF_F000) | (virt_addr & 0xFFF)
+}
+
+/// Human-readable name for a memory map entry type.
+fn entry_type_name(et: EntryType) -> &'static str {
+    match et {
+        EntryType::USABLE => "Usable",
+        EntryType::RESERVED => "Reserved",
+        EntryType::ACPI_RECLAIMABLE => "ACPI Reclaimable",
+        EntryType::ACPI_NVS => "ACPI NVS",
+        EntryType::BAD_MEMORY => "Bad Memory",
+        EntryType::BOOTLOADER_RECLAIMABLE => "Bootloader Reclaimable",
+        EntryType::EXECUTABLE_AND_MODULES => "Kernel/Modules",
+        EntryType::FRAMEBUFFER => "Framebuffer",
+        _ => "Unknown",
+    }
+}
+
+/// Iterate the Limine memory map and log each region.
+///
+/// Returns `(total_ram, usable_ram)` in bytes.
+/// - `total_ram` includes all non-bad-memory regions (physical footprint).
+/// - `usable_ram` includes only `USABLE` regions available for allocation.
+pub fn census(entries: &[&Entry]) -> (u64, u64) {
+    klog::info!("[027] Memory Map Census ({} entries):", entries.len());
+    klog::info!("  {:<20} {:>16}  {:>12}  {}", "Type", "Base", "Length", "End");
+    klog::info!("  {:-<20} {:-<16}  {:-<12}  {:-<16}", "", "", "", "");
+
+    let mut total_ram: u64 = 0;
+    let mut usable_ram: u64 = 0;
+
+    for entry in entries {
+        let base = entry.base;
+        let length = entry.length;
+        let et = entry.entry_type;
+        let end = base + length;
+
+        klog::info!(
+            "  {:<20} {:#016x}  {:>10} KiB  {:#016x}",
+            entry_type_name(et),
+            base,
+            length / 1024,
+            end,
+        );
+
+        // Sum usable RAM (what we can allocate from)
+        if et == EntryType::USABLE {
+            usable_ram += length;
+        }
+
+        // Sum total physical footprint (everything except bad memory)
+        if et != EntryType::BAD_MEMORY {
+            total_ram += length;
+        }
+    }
+
+    klog::info!("  {:-<20} {:-<16}  {:-<12}  {:-<16}", "", "", "", "");
+    klog::info!(
+        "  Total RAM:  {} MiB ({} bytes)",
+        total_ram / (1024 * 1024),
+        total_ram,
+    );
+    klog::info!(
+        "  Usable RAM: {} MiB ({} bytes)",
+        usable_ram / (1024 * 1024),
+        usable_ram,
+    );
+
+    (total_ram, usable_ram)
 }
