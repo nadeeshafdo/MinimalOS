@@ -50,6 +50,12 @@ unsafe extern "C" fn _start() -> ! {
 
     // [019] The Loader - Initialize and load the IDT
     klog::debug!("Initializing IDT...");
+
+    // [022] Silence the Old - Disable legacy 8259 PIC
+    klog::debug!("Disabling legacy 8259 PIC...");
+    khal::pic::disable();
+    klog::info!("[022] Legacy PIC disabled (IRQs remapped to 32-47, all masked)");
+
     traps::init_idt();
     klog::info!("[019] IDT loaded successfully");
 
