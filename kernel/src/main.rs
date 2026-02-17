@@ -86,6 +86,23 @@ unsafe extern "C" fn _start() -> ! {
     // [028] The Accountant - Initialize the bitmap physical memory manager
     memory::pmm::init(hhdm_offset, mmap_response.entries());
 
+    // [029] Mine! - Allocate a physical frame and verify
+    let free_before = memory::pmm::free_frame_count();
+    let frame = memory::pmm::alloc_frame().expect("pmm_alloc_frame() returned None");
+    let free_after = memory::pmm::free_frame_count();
+    klog::info!(
+        "[029] pmm_alloc_frame() = {:#x} (free: {} -> {})",
+        frame, free_before, free_after,
+    );
+
+    // [030] Return It! - Free the frame and verify the bitmap updates
+    memory::pmm::free_frame(frame);
+    let free_restored = memory::pmm::free_frame_count();
+    klog::info!(
+        "[030] pmm_free_frame({:#x}) OK (free: {} -> {})",
+        frame, free_after, free_restored,
+    );
+
     // Read APIC physical base from MSR
     let apic_low: u32;
     let apic_high: u32;
