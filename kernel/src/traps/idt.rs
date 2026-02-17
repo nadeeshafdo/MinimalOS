@@ -1,57 +1,75 @@
 //! IDT initialization and management.
 
+use crate::arch::gdt::Gdt;
 use crate::arch::idt::{Idt, EntryOptions, GateType};
+use crate::arch::tss::Tss;
 use spin::Once;
 
 use super::handlers;
 
 /// Global IDT instance.
-///
-/// This is initialized once at kernel startup and loaded into the CPU.
 static IDT: Once<Idt> = Once::new();
 
-/// Initialize and load the Interrupt Descriptor Table.
+/// Global TSS instance.
+static TSS: Once<Tss> = Once::new();
+
+/// Global GDT instance.
+static GDT: Once<Gdt> = Once::new();
+
+/// Initialize the GDT, TSS, and IDT.
 ///
-/// This function creates a new IDT with all entries initially set to missing
-/// (not present), then loads it into the CPU using the `lidt` instruction.
-///
-/// After loading, the IDT is ready to receive handlers for specific interrupt
-/// vectors (which will be added in subsequent achievements).
+/// This sets up:
+/// 1. TSS with IST1 pointing to a dedicated double fault stack
+/// 2. GDT with kernel code, kernel data, and TSS descriptors
+/// 3. IDT with breakpoint and double fault handlers
 pub fn init_idt() {
-    // Create a new IDT with all entries marked as missing
+    // [021] Initialize TSS with IST stacks
+    let tss_ref = TSS.call_once(|| {
+        let mut tss = Tss::new();
+        tss.init();
+        tss
+    });
+
+    // [021] Initialize GDT with TSS descriptor
+    let (gdt, selectors) = Gdt::new(tss_ref);
+    let gdt_ref = GDT.call_once(|| gdt);
+
+    // Load GDT and set segment registers
+    unsafe {
+        gdt_ref.load(&selectors);
+    }
+    klog::debug!("GDT loaded (CS=0x{:04x}, DS=0x{:04x}, TSS=0x{:04x})",
+        selectors.kernel_code, selectors.kernel_data, selectors.tss);
+
+    // Create IDT
     let mut idt = Idt::new();
+    let cs = selectors.kernel_code;
 
     // [020] Register breakpoint handler (INT 3)
     let breakpoint_options = EntryOptions::new()
         .set_present(true)
         .set_gate_type(GateType::Interrupt);
-    
-    let handler_fn: extern "x86-interrupt" fn(x86_64::structures::idt::InterruptStackFrame) = handlers::breakpoint_handler;
-    let handler_addr = handler_fn as usize;
-    
-    // Get the current code segment selector from CS register
-    let cs: u16;
-    unsafe {
-        core::arch::asm!("mov {:x}, cs", out(reg) cs);
-    }
-    
-    idt.set_handler(
-        3, // Breakpoint vector
-        handler_addr,
-        cs, // Current kernel code segment
-        breakpoint_options,
-    );
 
-    // Initialize the global IDT
+    let bp_handler: extern "x86-interrupt" fn(x86_64::structures::idt::InterruptStackFrame)
+        = handlers::breakpoint_handler;
+    idt.set_handler(3, bp_handler as usize, cs, breakpoint_options);
+
+    // [021] Register double fault handler (INT 8) with IST1
+    let double_fault_options = EntryOptions::new()
+        .set_present(true)
+        .set_gate_type(GateType::Interrupt)
+        .set_stack_index(handlers::DOUBLE_FAULT_IST_INDEX);
+
+    let df_handler: extern "x86-interrupt" fn(x86_64::structures::idt::InterruptStackFrame, u64) -> !
+        = handlers::double_fault_handler;
+    idt.set_handler(8, df_handler as usize, cs, double_fault_options);
+
+    // Load IDT
     let idt_ref = IDT.call_once(|| idt);
-
-    // Load the IDT into the CPU using the lidt instruction
     idt_ref.load();
 }
 
 /// Get a reference to the global IDT.
-///
-/// Returns `None` if the IDT has not been initialized yet.
 #[allow(dead_code)]
 pub fn get_idt() -> Option<&'static Idt> {
     IDT.get()
