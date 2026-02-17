@@ -1,6 +1,6 @@
 # MinimalOS Quest Tracker
 
-> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.37`**
+> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.43`**
 >
 > Start: `v0.0.0` → Goal: `v1.0.0` (~100 micro-tasks)
 >
@@ -36,7 +36,7 @@
 - [x] [016] **Scrollbar:** When text hits the bottom of the screen, shift the entire buffer up (software scrolling).
 - [x] [017] **Formatting:** Support Rust formatting `kprintln!("Value: {:x}", 0xDEADBEEF)`.
 
-## ⚡ Rank III: The Reflexes (Interrupts & CPU)
+## ⚡ Rank III: The Reflexes (Interrupts & CPU) ✅
 
 *Focus: Handling hardware events without crashing.*
 
@@ -65,14 +65,14 @@
 - [x] [035] **Dynamic Power:** Successfully use `Box::new(10)` inside the kernel.
 - [x] [036] **Vectorization:** Successfully push an item to a `Vec<i32>`.
 
-## ⌨️ Rank V: The Senses (Input & Drivers) 🟡
+## ⌨️ Rank V: The Senses (Input & Drivers) ✅
 
 *Focus: Interacting with the user.*
 
 - [x] [037] **Port IO:** Implement `inb` and `outb` wrappers for x86 port communication.
-- [ ] [038] **PS/2 Controller:** Read the status register of the PS/2 port.
-- [ ] [039] **Key Down:** Receive a raw scancode when a key is pressed.
-- [ ] [040] **Decoder:** Create a match statement to convert Scancodes to ASCII characters.
-- [ ] [041] **The Echo:** Type on the keyboard and see letters appear on the MinimalOS screen.
-- [ ] [042] **Backspace:** Implement backspace logic in the `kprint!` buffer.
+- [x] [038] **PS/2 Controller:** Read the status register of the PS/2 port.
+- [x] [039] **Key Down:** Receive a raw scancode when a key is pressed.
+- [x] [040] **Decoder:** Create a match statement to convert Scancodes to ASCII characters.
+- [x] [041] **The Echo:** Type on the keyboard and see letters appear on the MinimalOS screen.
+- [x] [042] **Backspace:** Implement backspace logic in the `kprint!` buffer.
 - [x] [043] **Serial Killer:** Implement a driver for the COM1 Serial Port (logging to host).
