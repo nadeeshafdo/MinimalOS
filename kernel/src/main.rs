@@ -138,6 +138,10 @@ unsafe extern "C" fn _start() -> ! {
             kdisplay::kprintln!();
             kdisplay::kprintln!("Kernel initialized successfully.");
             klog::info!("[017] Formatted output rendered");
+
+            // [025] Tick Tock - Print heartbeat label (dots come from timer handler)
+            kdisplay::kprintln!();
+            kdisplay::kprint!("[025] Heartbeat: ");
         }
     } else {
         klog::warn!("No framebuffer available");
