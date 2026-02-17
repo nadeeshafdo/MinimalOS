@@ -1,5 +1,6 @@
 //! Physical and virtual memory management.
 
+pub mod heap;
 pub mod paging;
 pub mod pmm;
 
