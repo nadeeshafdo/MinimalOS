@@ -90,6 +90,19 @@ unsafe extern "C" fn _start() -> ! {
     let apic_id = khal::apic::init(hhdm_offset);
     klog::info!("[023] Local APIC enabled (ID: {})", apic_id);
 
+    // [024] The Heartbeat - Enable the Local APIC Timer
+    klog::debug!("Enabling APIC timer...");
+    khal::apic::enable_timer(
+        khal::apic::TIMER_VECTOR,
+        0x0020_0000,              // Initial count (~2M, moderate frequency)
+        khal::apic::TimerDivide::By16,
+    );
+    klog::info!("[024] APIC Timer enabled (vector {}, periodic mode)", khal::apic::TIMER_VECTOR);
+
+    // Enable CPU interrupts so the timer (and other APIC interrupts) can fire
+    core::arch::asm!("sti", options(nomem, nostack));
+    klog::debug!("Interrupts enabled (STI)");
+
     // [020] Trap Card - Test breakpoint exception
     klog::debug!("Testing breakpoint exception...");
     unsafe {
