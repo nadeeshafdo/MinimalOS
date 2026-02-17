@@ -8,7 +8,7 @@ mod task;
 mod traps;
 
 use limine::BaseRevision;
-use limine::request::{FramebufferRequest, RequestsStartMarker, RequestsEndMarker};
+use limine::request::{FramebufferRequest, HhdmRequest, RequestsStartMarker, RequestsEndMarker};
 
 /// Limine requests start marker.
 #[used]
@@ -24,6 +24,11 @@ static BASE_REVISION: BaseRevision = BaseRevision::new();
 #[used]
 #[unsafe(link_section = ".requests")]
 static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
+
+/// Request the Higher Half Direct Map offset.
+#[used]
+#[unsafe(link_section = ".requests")]
+static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
 
 /// Limine requests end marker.
 #[used]
@@ -58,6 +63,32 @@ unsafe extern "C" fn _start() -> ! {
 
     traps::init_idt();
     klog::info!("[019] IDT loaded successfully");
+
+    // [023] Modern Times - Enable the Local APIC
+    klog::debug!("Enabling Local APIC...");
+    let hhdm_offset = HHDM_REQUEST.get_response()
+        .expect("HHDM response not available")
+        .offset();
+    klog::debug!("HHDM offset: {:#x}", hhdm_offset);
+
+    // Read APIC physical base from MSR
+    let apic_low: u32;
+    let apic_high: u32;
+    core::arch::asm!(
+        "rdmsr",
+        in("ecx") 0x1Bu32,
+        out("eax") apic_low,
+        out("edx") apic_high,
+        options(nomem, nostack, preserves_flags)
+    );
+    let apic_phys = ((apic_high as u64) << 32 | apic_low as u64) & 0xFFFF_FFFF_FFFF_F000;
+    klog::debug!("APIC phys base: {:#x}", apic_phys);
+
+    // Map the APIC MMIO page into the HHDM virtual address space
+    memory::map_apic_mmio(hhdm_offset, apic_phys);
+
+    let apic_id = khal::apic::init(hhdm_offset);
+    klog::info!("[023] Local APIC enabled (ID: {})", apic_id);
 
     // [020] Trap Card - Test breakpoint exception
     klog::debug!("Testing breakpoint exception...");
