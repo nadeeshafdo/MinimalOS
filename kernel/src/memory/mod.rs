@@ -1,5 +1,7 @@
 //! Physical and virtual memory management.
 
+pub mod pmm;
+
 use core::ptr;
 use limine::memory_map::{Entry, EntryType};
 
