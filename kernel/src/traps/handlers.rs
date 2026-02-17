@@ -37,6 +37,25 @@ pub extern "x86-interrupt" fn double_fault_handler(
     }
 }
 
+/// Timer interrupt handler (vector 32).
+///
+/// Fired periodically by the Local APIC Timer. This is the kernel's
+/// heartbeat — it drives preemptive scheduling and timekeeping.
+/// An EOI must be sent to the APIC at the end of every timer interrupt.
+pub extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
+    static TICK_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+    let tick = TICK_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+
+    // Log the first tick to confirm the timer is working
+    if tick == 0 {
+        klog::info!("[024] APIC Timer tick #0 — heartbeat started!");
+    }
+
+    // Send End of Interrupt to the APIC
+    khal::apic::eoi();
+}
+
 /// Spurious interrupt handler (vector 0xFF).
 ///
 /// The APIC may deliver spurious interrupts when the interrupt condition
