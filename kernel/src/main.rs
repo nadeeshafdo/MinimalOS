@@ -103,6 +103,27 @@ unsafe extern "C" fn _start() -> ! {
         frame, free_after, free_restored,
     );
 
+    // [031] Higher Plane - Initialize the paging subsystem
+    memory::paging::init(hhdm_offset);
+
+    // [032] The Mapper + [033] The Translator - Map a page and translate it back
+    let test_virt: u64 = 0xFFFF_9000_0000_0000; // a virtual address in upper-half
+    let test_phys = memory::pmm::alloc_frame().expect("alloc for map_page test");
+    memory::paging::map_page(test_virt, test_phys, memory::paging::PageFlags::KERNEL_RW);
+    let translated = memory::paging::translate(test_virt)
+        .expect("translate returned None after map_page");
+    assert_eq!(translated, test_phys, "virt_to_phys mismatch!");
+    klog::info!(
+        "[032] map_page({:#x} -> {:#x}) OK",
+        test_virt, test_phys,
+    );
+    klog::info!(
+        "[033] translate({:#x}) = {:#x} \u{2714}",
+        test_virt, translated,
+    );
+    // Clean up: free the test frame
+    memory::pmm::free_frame(test_phys);
+
     // Read APIC physical base from MSR
     let apic_low: u32;
     let apic_high: u32;
