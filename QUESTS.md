@@ -1,6 +1,6 @@
 # MinimalOS Quest Tracker
 
-> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.21`**
+> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.22`**
 >
 > Start: `v0.0.0` → Goal: `v1.0.0` (~100 micro-tasks)
 >
@@ -42,7 +42,7 @@
 
 - [x] [018] **The Gatekeeper:** Define the IDT (Interrupt Descriptor Table) struct.
 - [x] [019] **The Loader:** Load the IDT using the `lidt` assembly instruction.
-- [ ] [020] **Trap Card:** Create a handler for "Breakpoint" (Int 3) and trigger it successfully.
+- [x] [020] **Trap Card:** Create a handler for "Breakpoint" (Int 3) and trigger it successfully.
 - [ ] [021] **Safety Net:** Create a "Double Fault" handler with a separate stack (IST).
 - [ ] [022] **Silence the Old:** Remap and disable the legacy 8259 PIC.
 - [ ] [023] **Modern Times:** Enable the APIC (Advanced Programmable Interrupt Controller).

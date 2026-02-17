@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "minimalos_kernel"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "kdisplay",
  "khal",
