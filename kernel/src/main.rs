@@ -83,6 +83,9 @@ unsafe extern "C" fn _start() -> ! {
         .expect("Memory map response not available");
     let (_total_ram, _usable_ram) = memory::census(mmap_response.entries());
 
+    // [028] The Accountant - Initialize the bitmap physical memory manager
+    memory::pmm::init(hhdm_offset, mmap_response.entries());
+
     // Read APIC physical base from MSR
     let apic_low: u32;
     let apic_high: u32;
