@@ -2,6 +2,7 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
+extern crate alloc;
 mod arch;
 mod memory;
 mod task;
@@ -123,6 +124,25 @@ unsafe extern "C" fn _start() -> ! {
     );
     // Clean up: free the test frame
     memory::pmm::free_frame(test_phys);
+
+    // [034] The Heap - Initialize kernel heap allocator
+    memory::heap::init();
+
+    // [035] Dynamic Power - Test Box::new
+    let boxed = alloc::boxed::Box::new(42u64);
+    assert_eq!(*boxed, 42);
+    klog::info!("[035] Box::new(42) = {} at {:p} \u{2714}", *boxed, &*boxed);
+    drop(boxed);
+
+    // [036] Vectorization - Test Vec
+    let mut v = alloc::vec::Vec::new();
+    v.push(1i32);
+    v.push(2);
+    v.push(3);
+    assert_eq!(v.len(), 3);
+    assert_eq!(v[0] + v[1] + v[2], 6);
+    klog::info!("[036] Vec<i32> = {:?}, sum = {} \u{2714}", v.as_slice(), v.iter().sum::<i32>());
+    drop(v);
 
     // Read APIC physical base from MSR
     let apic_low: u32;
