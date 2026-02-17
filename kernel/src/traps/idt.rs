@@ -64,6 +64,24 @@ pub fn init_idt() {
         = handlers::double_fault_handler;
     idt.set_handler(8, df_handler as usize, cs, double_fault_options);
 
+    // [023] Register spurious interrupt handler (vector 0xFF)
+    let spurious_options = EntryOptions::new()
+        .set_present(true)
+        .set_gate_type(GateType::Interrupt);
+
+    let spur_handler: extern "x86-interrupt" fn(x86_64::structures::idt::InterruptStackFrame)
+        = handlers::spurious_handler;
+    idt.set_handler(0xFF, spur_handler as usize, cs, spurious_options);
+
+    // Register page fault handler (INT 14) for diagnostics
+    let page_fault_options = EntryOptions::new()
+        .set_present(true)
+        .set_gate_type(GateType::Interrupt);
+
+    let pf_handler: extern "x86-interrupt" fn(x86_64::structures::idt::InterruptStackFrame, x86_64::structures::idt::PageFaultErrorCode)
+        = handlers::page_fault_handler;
+    idt.set_handler(14, pf_handler as usize, cs, page_fault_options);
+
     // Load IDT
     let idt_ref = IDT.call_once(|| idt);
     idt_ref.load();
