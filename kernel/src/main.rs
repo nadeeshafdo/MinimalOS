@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![feature(abi_x86_interrupt)]
 
 mod arch;
 mod memory;
@@ -51,6 +52,13 @@ unsafe extern "C" fn _start() -> ! {
     klog::debug!("Initializing IDT...");
     traps::init_idt();
     klog::info!("[019] IDT loaded successfully");
+
+    // [020] Trap Card - Test breakpoint exception
+    klog::debug!("Testing breakpoint exception...");
+    unsafe {
+        core::arch::asm!("int3", options(nomem, nostack));
+    }
+    klog::info!("[020] Breakpoint handler executed successfully");
 
     if let Some(framebuffer_response) = FRAMEBUFFER_REQUEST.get_response() {
         let fb_count = framebuffer_response.framebuffers().count();
