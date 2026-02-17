@@ -1,6 +1,6 @@
 # MinimalOS Quest Tracker
 
-> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.34`**
+> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.37`**
 >
 > Start: `v0.0.0` → Goal: `v1.0.0` (~100 micro-tasks)
 >
@@ -50,7 +50,7 @@
 - [x] [025] **Tick Tock:** Print a dot `.` to the screen every time the timer fires (e.g., 100Hz).
 - [x] [026] **No Red Zone:** Verify compilation flags disable the "Red Zone" (critical for interrupt safety).
 
-## 🧠 Rank IV: The Mind (Memory Management)
+## 🧠 Rank IV: The Mind (Memory Management) ✅
 
 *Focus: Moving from raw addresses to managed memory.*
 
@@ -61,9 +61,9 @@
 - [x] [031] **Higher Plane:** Create the recursive Page Table structure.
 - [x] [032] **The Mapper:** Write `map_page(virt, phys, flags)`.
 - [x] [033] **The Translator:** Write `virt_to_phys(addr)`.
-- [ ] [034] **The Heap:** Initialize the `GlobalAlloc` trait.
-- [ ] [035] **Dynamic Power:** Successfully use `Box::new(10)` inside the kernel.
-- [ ] [036] **Vectorization:** Successfully push an item to a `Vec<i32>`.
+- [x] [034] **The Heap:** Initialize the `GlobalAlloc` trait.
+- [x] [035] **Dynamic Power:** Successfully use `Box::new(10)` inside the kernel.
+- [x] [036] **Vectorization:** Successfully push an item to a `Vec<i32>`.
 
 ## ⌨️ Rank V: The Senses (Input & Drivers) 🟡
 
