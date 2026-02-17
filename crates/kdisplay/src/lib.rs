@@ -467,6 +467,20 @@ pub fn console_write_fmt(args: fmt::Arguments) {
     }
 }
 
+/// Write a formatted string to the framebuffer console (interrupt-safe).
+///
+/// Uses `try_lock` instead of `lock` to avoid deadlocking when called
+/// from an interrupt handler while the main thread holds the console lock.
+/// Silently drops the output if the lock is not available.
+pub fn console_try_write_fmt(args: fmt::Arguments) {
+    use fmt::Write;
+    if let Some(ref mut guard) = CONSOLE.try_lock() {
+        if let Some(ref mut console) = **guard {
+            let _ = console.write_fmt(args);
+        }
+    }
+}
+
 /// Print to the framebuffer console.
 #[macro_export]
 macro_rules! kprint {
