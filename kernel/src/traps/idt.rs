@@ -91,6 +91,15 @@ pub fn init_idt() {
         = handlers::page_fault_handler;
     idt.set_handler(14, pf_handler as usize, cs, page_fault_options);
 
+    // [039] Register keyboard interrupt handler (IRQ1 = vector 33)
+    let keyboard_options = EntryOptions::new()
+        .set_present(true)
+        .set_gate_type(GateType::Interrupt);
+
+    let kb_handler: extern "x86-interrupt" fn(x86_64::structures::idt::InterruptStackFrame)
+        = handlers::keyboard_handler;
+    idt.set_handler(khal::keyboard::KEYBOARD_VECTOR, kb_handler as usize, cs, keyboard_options);
+
     // Load IDT
     let idt_ref = IDT.call_once(|| idt);
     idt_ref.load();
