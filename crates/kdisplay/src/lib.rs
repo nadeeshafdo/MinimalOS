@@ -323,6 +323,13 @@ impl Console {
     /// Write a single character at the current cursor position.
     pub fn put_char(&mut self, ch: char) {
         match ch {
+            '\x08' => {
+                // [042] Backspace: move cursor back and erase the character
+                if self.cursor_x >= self.char_width {
+                    self.cursor_x -= self.char_width;
+                    self.draw_glyph(self.cursor_x, self.cursor_y, ' ');
+                }
+            }
             '\n' => {
                 self.cursor_x = 0;
                 self.cursor_y += self.char_height;
@@ -477,6 +484,18 @@ pub fn console_try_write_fmt(args: fmt::Arguments) {
     if let Some(ref mut guard) = CONSOLE.try_lock() {
         if let Some(ref mut console) = **guard {
             let _ = console.write_fmt(args);
+        }
+    }
+}
+
+/// Handle a single keyboard character (interrupt-safe).
+///
+/// Prints printable characters and handles backspace.
+/// Uses `try_lock` to avoid deadlock from interrupt context.
+pub fn console_try_put_char(ch: char) {
+    if let Some(ref mut guard) = CONSOLE.try_lock() {
+        if let Some(ref mut console) = **guard {
+            console.put_char(ch);
         }
     }
 }
