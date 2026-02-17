@@ -47,6 +47,11 @@ unsafe extern "C" fn _start() -> ! {
 
     klog::info!("Limine base revision OK");
 
+    // [019] The Loader - Initialize and load the IDT
+    klog::debug!("Initializing IDT...");
+    traps::init_idt();
+    klog::info!("[019] IDT loaded successfully");
+
     if let Some(framebuffer_response) = FRAMEBUFFER_REQUEST.get_response() {
         let fb_count = framebuffer_response.framebuffers().count();
         klog::info!("Framebuffer available: {} framebuffer(s)", fb_count);
