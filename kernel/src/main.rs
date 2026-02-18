@@ -270,7 +270,10 @@ unsafe extern "C" fn _start() -> ! {
         rd_base, rd_size, rd_size / 512,
     );
 
-    let ramdisk = unsafe { khal::ramdisk::RamDisk::new(rd_base, rd_size) };
+    // Store ramdisk globally so sys_spawn can access it later.
+    fs::ramdisk::init(rd_base, rd_size);
+
+    let ramdisk = fs::ramdisk::get().expect("ramdisk not stored");
 
     // ── [054] The Block — Read a raw sector ────────────────────
     if let Some(sector0) = ramdisk.read_sector(0) {
@@ -285,7 +288,7 @@ unsafe extern "C" fn _start() -> ! {
     // ── [055] The Structure — TAR filesystem parser ────────────
     klog::info!("[055] Parsing USTAR tar archive...");
     let mut entry_count = 0usize;
-    let iter = unsafe { fs::tar::TarIter::new(&ramdisk) };
+    let iter = unsafe { fs::tar::TarIter::new(ramdisk) };
     for entry in iter {
         klog::info!(
             "[055]   entry: name={:?} size={} type={}",
@@ -299,7 +302,7 @@ unsafe extern "C" fn _start() -> ! {
 
     // ── [056] The Listing — ls /  ──────────────────────────────
     klog::info!("[056] ls /:");
-    let iter = unsafe { fs::tar::TarIter::new(&ramdisk) };
+    let iter = unsafe { fs::tar::TarIter::new(ramdisk) };
     for entry in iter {
         let name = entry.name.strip_prefix("./").unwrap_or(entry.name);
         if name.is_empty() {
@@ -311,7 +314,7 @@ unsafe extern "C" fn _start() -> ! {
 
     // ── [057] The Reader — cat hello.txt ───────────────────────
     klog::info!("[057] cat hello.txt:");
-    if let Some(entry) = fs::tar::find_file(&ramdisk, "hello.txt") {
+    if let Some(entry) = fs::tar::find_file(ramdisk, "hello.txt") {
         if let Ok(text) = core::str::from_utf8(entry.data) {
             for line in text.lines() {
                 klog::info!("[057]   {}", line);
@@ -329,9 +332,9 @@ unsafe extern "C" fn _start() -> ! {
     // 2. Parse the ELF header and program headers.
     // 3. Map PT_LOAD segments into user address space.
     // 4. Allocate a user stack.
-    // 5. Jump to Ring 3 at the ELF entry point.
+    // 5. Create a Process and push it to the scheduler.
 
-    let elf_entry = fs::tar::find_file(&ramdisk, "init.elf")
+    let elf_entry = fs::tar::find_file(ramdisk, "init.elf")
         .expect("[058] init.elf not found in ramdisk");
     klog::info!("[058] Found init.elf in ramdisk ({} bytes)", elf_entry.size);
 
@@ -405,20 +408,46 @@ unsafe extern "C" fn _start() -> ! {
     let user_rsp = user_stack_virt + 4096;
 
     let entry_point = elf.entry;
-    klog::info!("[049] iretq frame: RIP={:#x}, CS=0x23, SS=0x1b, RSP={:#x}",
-        entry_point, user_rsp);
-    klog::info!("[050] Dropping to Ring 3...");
+    klog::info!("[058] ELF entry={:#x}, user RSP={:#x}", entry_point, user_rsp);
 
-    // Build the iretq frame and jump!
-    let frame = task::usermode::IretqFrame::new(
-        entry_point,
-        0x23,   // user CS
-        0x1b,   // user SS
-        user_rsp,
-    );
+    // ── [061]-[063] Create init process via scheduler ───────────
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
 
+    let mut init_proc = task::process::Process::new("init", cr3, entry_point, user_rsp);
+    init_proc.prepare_initial_stack();
+    klog::info!("[061] PCB created: PID={}, name=\"init\"", init_proc.pid);
+    klog::info!("[062] Context switch assembly ready");
+
+    // Create a "kernel idle" process that represents the current kernel
+    // thread.  The scheduler needs a "current" to switch away from.
+    let mut idle = task::process::Process::new("idle", cr3, 0, 0);
+    idle.state = task::process::ProcessState::Running;
+
+    {
+        let mut sched = task::process::SCHEDULER.lock();
+        sched.set_current(idle);
+        sched.push(init_proc);
+        klog::info!("[063] Scheduler ready: {} task(s)", sched.task_count());
+    }
+
+    // Perform the first schedule — this will context-switch from idle
+    // into init's prepared kernel stack, which returns to the
+    // task_entry_trampoline and then iretqs to Ring 3.
+    klog::info!("[064] Starting scheduler...");
     unsafe {
-        task::usermode::jump_to_ring3(&frame);
+        task::process::do_schedule();
+    }
+
+    // If we return here (all tasks exited), idle loop.
+    klog::info!("All tasks completed — entering idle loop");
+    loop {
+        // The context switch may return with IF=0 (e.g. from a timer
+        // interrupt context).  We must re-enable interrupts before HLT,
+        // otherwise the timer can never fire and we halt forever.
+        // "sti; hlt" is idiomatic on x86 — the instruction boundary
+        // between STI and HLT allows exactly one interrupt to arrive.
+        core::arch::asm!("sti; hlt", options(nomem, nostack));
     }
 }
 
