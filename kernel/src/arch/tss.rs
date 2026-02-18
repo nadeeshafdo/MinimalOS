@@ -80,4 +80,22 @@ impl Tss {
             KERNEL_STACK.as_ptr().add(KERNEL_STACK_SIZE) as u64
         }
     }
+
+    /// Update TSS RSP0 at runtime (used during context switch).
+    ///
+    /// When switching tasks, RSP0 must point to the top of the new
+    /// task's kernel stack so that Ring 3→0 transitions land on the
+    /// correct stack.
+    ///
+    /// # Safety
+    /// `tss` must be a valid pointer to the live TSS.
+    pub unsafe fn set_rsp0(tss: *mut Tss, rsp0: u64) {
+        unsafe {
+            // TSS is #[repr(C, packed)], so rsp[0] is at byte offset 4
+            // (after reserved0: u32). Use write_unaligned to avoid
+            // alignment issues.
+            let rsp0_ptr = (tss as *mut u8).add(4) as *mut u64;
+            rsp0_ptr.write_unaligned(rsp0);
+        }
+    }
 }
