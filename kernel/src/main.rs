@@ -5,13 +5,16 @@
 
 extern crate alloc;
 mod arch;
+mod fs;
 mod memory;
 mod task;
 mod traps;
 
 use limine::BaseRevision;
+use limine::modules::InternalModule;
 use limine::request::{
-    FramebufferRequest, HhdmRequest, MemoryMapRequest, RequestsStartMarker, RequestsEndMarker,
+    FramebufferRequest, HhdmRequest, MemoryMapRequest, ModuleRequest,
+    RequestsStartMarker, RequestsEndMarker,
 };
 
 /// Limine requests start marker.
@@ -38,6 +41,16 @@ static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
 #[used]
 #[unsafe(link_section = ".requests")]
 static MEMORY_MAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
+
+/// Internal module: the RAMDisk tar archive.
+static RAMDISK_MODULE: InternalModule =
+    InternalModule::new().with_path(c"/boot/ramdisk.tar");
+
+/// Request the bootloader to load the ramdisk module.
+#[used]
+#[unsafe(link_section = ".requests")]
+static MODULE_REQUEST: ModuleRequest =
+    ModuleRequest::new().with_internal_modules(&[&RAMDISK_MODULE]);
 
 /// Limine requests end marker.
 #[used]
@@ -239,41 +252,144 @@ unsafe extern "C" fn _start() -> ! {
 
     klog::info!("Kernel initialized successfully");
 
-    // ── [049][050][051] Drop to Ring 3 and syscall back ─────────
+    // ── [053] The Disk — Detect the RAMDisk module ─────────────
+    let module_response = MODULE_REQUEST.get_response()
+        .expect("Limine module response not available");
+    let modules = module_response.modules();
+    klog::info!("[053] Limine modules loaded: {} module(s)", modules.len());
+
+    let ramdisk_file = modules.first()
+        .expect("No modules loaded — ramdisk.tar missing from ISO");
+    let rd_base = ramdisk_file.addr();
+    let rd_size = ramdisk_file.size() as usize;
+    klog::info!(
+        "[053] RAMDisk detected: base={:p}, size={} bytes ({} sectors)",
+        rd_base, rd_size, rd_size / 512,
+    );
+
+    let ramdisk = unsafe { khal::ramdisk::RamDisk::new(rd_base, rd_size) };
+
+    // ── [054] The Block — Read a raw sector ────────────────────
+    if let Some(sector0) = ramdisk.read_sector(0) {
+        klog::info!(
+            "[054] Sector 0 read OK — first 16 bytes: {:02x?}",
+            &sector0[..16],
+        );
+    } else {
+        klog::error!("[054] Failed to read sector 0!");
+    }
+
+    // ── [055] The Structure — TAR filesystem parser ────────────
+    klog::info!("[055] Parsing USTAR tar archive...");
+    let mut entry_count = 0usize;
+    let iter = unsafe { fs::tar::TarIter::new(&ramdisk) };
+    for entry in iter {
+        klog::info!(
+            "[055]   entry: name={:?} size={} type={}",
+            entry.name,
+            entry.size,
+            entry.typeflag as char,
+        );
+        entry_count += 1;
+    }
+    klog::info!("[055] TAR archive contains {} entries", entry_count);
+
+    // ── [056] The Listing — ls /  ──────────────────────────────
+    klog::info!("[056] ls /:");
+    let iter = unsafe { fs::tar::TarIter::new(&ramdisk) };
+    for entry in iter {
+        let name = entry.name.strip_prefix("./").unwrap_or(entry.name);
+        if name.is_empty() {
+            continue; // skip the root "./" entry
+        }
+        let kind = if entry.typeflag == b'5' { "DIR " } else { "FILE" };
+        klog::info!("[056]   {} {:>6} {}", kind, entry.size, name);
+    }
+
+    // ── [057] The Reader — cat hello.txt ───────────────────────
+    klog::info!("[057] cat hello.txt:");
+    if let Some(entry) = fs::tar::find_file(&ramdisk, "hello.txt") {
+        if let Ok(text) = core::str::from_utf8(entry.data) {
+            for line in text.lines() {
+                klog::info!("[057]   {}", line);
+            }
+        } else {
+            klog::error!("[057] hello.txt: not valid UTF-8");
+        }
+    } else {
+        klog::error!("[057] hello.txt: file not found");
+    }
+
+    // ── [058] The Loader — Load ELF from ramdisk ────────────────
     //
-    // 1. Allocate user-code pages and a user-stack page.
-    // 2. Copy the compiled user-mode init binary into user-code pages.
-    // 3. Craft the iretq frame and jump.
+    // 1. Find init.elf in the tar archive.
+    // 2. Parse the ELF header and program headers.
+    // 3. Map PT_LOAD segments into user address space.
+    // 4. Allocate a user stack.
+    // 5. Jump to Ring 3 at the ELF entry point.
 
-    let user_code_virt: u64 = 0x40_0000;   // 4 MiB — canonical low-half
-    let user_stack_virt: u64 = 0x80_0000;  // 8 MiB
+    let elf_entry = fs::tar::find_file(&ramdisk, "init.elf")
+        .expect("[058] init.elf not found in ramdisk");
+    klog::info!("[058] Found init.elf in ramdisk ({} bytes)", elf_entry.size);
 
-    // [052] Load the compiled init binary from an embedded blob
-    let init_bin: &[u8] = include_bytes!("../../build/dist/init.bin");
-    klog::info!("[052] User binary 'init' loaded ({} bytes)", init_bin.len());
+    let elf = fs::elf::parse(elf_entry.data)
+        .expect("[058] Failed to parse init.elf");
+    klog::info!("[058] ELF entry point: {:#x}", elf.entry);
 
-    // Allocate and map enough user-code pages for the binary
-    let code_pages = (init_bin.len() + 4095) / 4096;
-    for i in 0..code_pages {
-        let phys = memory::pmm::alloc_frame()
-            .expect("alloc user code page");
-        memory::paging::map_page(
-            user_code_virt + (i as u64) * 4096,
-            phys,
-            memory::paging::PageFlags::USER_RW,
+    // Map each PT_LOAD segment into user space.
+    for phdr in elf.phdrs {
+        if !phdr.is_load() {
+            continue;
+        }
+
+        let vaddr = phdr.p_vaddr;
+        let memsz = phdr.p_memsz as usize;
+        let filesz = phdr.p_filesz as usize;
+        let offset = phdr.p_offset as usize;
+        let flags = phdr.p_flags;
+
+        klog::info!(
+            "[058]   PT_LOAD: vaddr={:#x} filesz={} memsz={} flags={:#x}",
+            vaddr, filesz, memsz, flags,
         );
+
+        // Allocate and map pages for this segment.
+        let page_start = vaddr & !0xFFF;
+        let page_end = (vaddr + memsz as u64 + 0xFFF) & !0xFFF;
+        let num_pages = ((page_end - page_start) / 4096) as usize;
+
+        for i in 0..num_pages {
+            let page_virt = page_start + (i as u64) * 4096;
+            // Only allocate if this page isn't already mapped (segments may share pages).
+            if memory::paging::translate(page_virt).is_none() {
+                let phys = memory::pmm::alloc_frame()
+                    .expect("alloc user ELF page");
+                memory::paging::map_page(
+                    page_virt,
+                    phys,
+                    memory::paging::PageFlags::USER_RW,
+                );
+                // Zero the page first (for BSS / partial pages).
+                unsafe {
+                    core::ptr::write_bytes(page_virt as *mut u8, 0, 4096);
+                }
+            }
+        }
+
+        // Copy file data into the mapped pages.
+        if filesz > 0 {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    elf.data.as_ptr().add(offset),
+                    vaddr as *mut u8,
+                    filesz,
+                );
+            }
+        }
     }
 
-    // Copy the binary to user-code pages
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            init_bin.as_ptr(),
-            user_code_virt as *mut u8,
-            init_bin.len(),
-        );
-    }
-
-    // Allocate and map user stack page
+    // Allocate and map user stack page.
+    let user_stack_virt: u64 = 0x80_0000; // 8 MiB
     let user_stack_phys = memory::pmm::alloc_frame()
         .expect("alloc user stack page");
     memory::paging::map_page(
@@ -282,11 +398,10 @@ unsafe extern "C" fn _start() -> ! {
         memory::paging::PageFlags::USER_RW,
     );
 
-    // User stack grows downward — point to top of the page
+    // User stack grows downward — point to top of the page.
     let user_rsp = user_stack_virt + 4096;
 
-    // Entry point is the start of the binary (linked at 0x400000)
-    let entry_point = user_code_virt;
+    let entry_point = elf.entry;
     klog::info!("[049] iretq frame: RIP={:#x}, CS=0x23, SS=0x1b, RSP={:#x}",
         entry_point, user_rsp);
     klog::info!("[050] Dropping to Ring 3...");
