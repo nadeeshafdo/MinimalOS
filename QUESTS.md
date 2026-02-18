@@ -1,6 +1,6 @@
 # MinimalOS Quest Tracker
 
-> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.60`**
+> **Versioning:** `v0.0.{AchievementCount}` — current: **`v0.0.69`**
 >
 > Start: `v0.0.0` → Goal: `v1.0.0` (~100 micro-tasks)
 >
@@ -108,19 +108,19 @@
 
 ---
 
-## 🚦 Rank VIII: The Conductor (Multitasking & IPC) 🟡
+## 🚦 Rank VIII: The Conductor (Multitasking & IPC) ✅
 
 *Focus: Running multiple things at once and letting them talk.*
 
-- [ ] [061] **The Context:** Define a `ProcessControlBlock` (PCB) to store register state (RIP, RSP, CR3).
-- [ ] [062] **The Switch:** Implement `context_switch(old_rsp, new_rsp)` in assembly.
-- [ ] [063] **The Scheduler:** Create a Round-Robin scheduler list (VecDeque of Tasks).
-- [ ] [064] **The Slice:** Hook the APIC Timer interrupt to call `schedule()`.
-- [ ] [065] **The Yield:** Implement `sys_yield()` so a process can give up CPU voluntarily.
-- [ ] [066] **The Spawn:** Implement `sys_spawn(path)` to launch a *second* process from the first.
-- [ ] [067] **The Exit:** Implement `sys_exit()` to clean up resources (zombie processes).
-- [ ] [068] **The Keyboard:** Buffer keyboard input in the kernel and implement `sys_read(STDIN)`.
-- [ ] [069] **The Shell:** Create `user/shell` that reads keyboard input and spawns programs found on disk.
+- [x] [061] **The Context:** Define a `ProcessControlBlock` (PCB) to store register state (RIP, RSP, CR3).
+- [x] [062] **The Switch:** Implement `context_switch(old_rsp, new_rsp)` in assembly.
+- [x] [063] **The Scheduler:** Create a Round-Robin scheduler list (VecDeque of Tasks).
+- [x] [064] **The Slice:** Hook the APIC Timer interrupt to call `schedule()`.
+- [x] [065] **The Yield:** Implement `sys_yield()` so a process can give up CPU voluntarily.
+- [x] [066] **The Spawn:** Implement `sys_spawn(path)` to launch a *second* process from the first.
+- [x] [067] **The Exit:** Implement `sys_exit()` to clean up resources (zombie processes).
+- [x] [068] **The Keyboard:** Buffer keyboard input in the kernel and implement `sys_read(STDIN)`.
+- [x] [069] **The Shell:** Create `user/shell` that reads keyboard input and spawns programs found on disk.
 
 ## 🕸️ Rank IX: The Network (Data & Buses)
 
