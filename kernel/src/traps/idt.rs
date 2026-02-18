@@ -3,6 +3,7 @@
 use crate::arch::gdt::Gdt;
 use crate::arch::idt::{Idt, EntryOptions, GateType};
 use crate::arch::tss::Tss;
+use core::sync::atomic::{AtomicPtr, Ordering};
 use spin::Once;
 
 use super::handlers;
@@ -15,6 +16,9 @@ static TSS: Once<Tss> = Once::new();
 
 /// Global GDT instance.
 static GDT: Once<Gdt> = Once::new();
+
+/// Raw pointer to the TSS, set after init, for dynamic RSP0 updates.
+static TSS_PTR: AtomicPtr<Tss> = AtomicPtr::new(core::ptr::null_mut());
 
 /// Initialize the GDT, TSS, and IDT.
 ///
@@ -29,6 +33,9 @@ pub fn init_idt() {
         tss.init();
         tss
     });
+
+    // Store raw pointer for dynamic RSP0 updates during context switch.
+    TSS_PTR.store(tss_ref as *const Tss as *mut Tss, Ordering::Relaxed);
 
     // [021] Initialize GDT with TSS descriptor
     let (gdt, selectors) = Gdt::new(tss_ref);
@@ -112,4 +119,9 @@ pub fn init_idt() {
 #[allow(dead_code)]
 pub fn get_idt() -> Option<&'static Idt> {
     IDT.get()
+}
+
+/// Get a raw mutable pointer to the TSS (for dynamic RSP0 updates).
+pub fn tss_ptr() -> *mut Tss {
+    TSS_PTR.load(Ordering::Relaxed)
 }
