@@ -11,6 +11,8 @@ use core::arch::asm;
 // ── Syscall numbers (must match kernel/src/arch/syscall.rs) ─────
 const SYS_LOG: u64 = 0;
 const SYS_EXIT: u64 = 1;
+const SYS_YIELD: u64 = 2;
+const SYS_SPAWN: u64 = 3;
 
 /// Perform a syscall with two arguments.
 #[inline(always)]
@@ -49,6 +51,22 @@ unsafe fn syscall1(nr: u64, a0: u64) -> u64 {
     ret
 }
 
+/// Perform a syscall with no arguments.
+#[inline(always)]
+unsafe fn syscall0(nr: u64) -> u64 {
+    let ret: u64;
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") nr => ret,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    ret
+}
+
 /// Log a message to the kernel serial console.
 fn log(msg: &str) {
     unsafe {
@@ -67,12 +85,36 @@ fn exit(code: u64) -> ! {
     }
 }
 
+/// Yield the CPU.
+fn yield_cpu() {
+    unsafe { syscall0(SYS_YIELD); }
+}
+
+/// Spawn a new process from a file on the ramdisk.
+fn spawn(path: &str) -> u64 {
+    unsafe { syscall2(SYS_SPAWN, path.as_ptr() as u64, path.len() as u64) }
+}
+
 /// Entry point — must be at the very start of the binary.
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    log("User process 'init' started!");
+    log("[059] User process 'init' started!");
     log("Syscall round trip from loaded binary OK");
-    exit(0);
+
+    // [066] Spawn the shell process
+    log("[066] Spawning shell...");
+    let pid = spawn("shell.elf");
+    if pid != u64::MAX {
+        log("[066] Shell spawned successfully");
+    } else {
+        log("[066] Failed to spawn shell");
+    }
+
+    // Yield to let the shell run, then loop yielding.
+    // Init stays alive as PID 1.
+    loop {
+        yield_cpu();
+    }
 }
 
 #[panic_handler]
