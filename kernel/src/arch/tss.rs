@@ -71,4 +71,13 @@ impl Tss {
         };
         self.rsp[0] = rsp0_top;
     }
+
+    /// Return the kernel RSP0 value (top of KERNEL_STACK).
+    ///
+    /// Used by the syscall module to initialise `SYSCALL_KERNEL_RSP`.
+    pub fn kernel_rsp0() -> u64 {
+        unsafe {
+            KERNEL_STACK.as_ptr().add(KERNEL_STACK_SIZE) as u64
+        }
+    }
 }
