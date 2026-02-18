@@ -245,7 +245,10 @@ unsafe extern "C" fn _start() -> ! {
     klog::info!("[038] PS/2 status register: {:#04x} (output_full={})",
         ps2_status, ps2_status & 0x01);
 
-    // [039] Key Down - Enable keyboard IRQ1
+    // [039][040] Initialise keyboard state machine (pc-keyboard crate)
+    khal::keyboard::init();
+
+    // Enable keyboard IRQ1
     khal::keyboard::enable_irq();
     klog::info!("[039] Keyboard IRQ1 enabled (vector {})", khal::keyboard::KEYBOARD_VECTOR);
     klog::info!("[041] Keyboard echo active — type to see characters on screen");
