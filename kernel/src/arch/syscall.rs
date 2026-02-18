@@ -30,7 +30,7 @@ static mut SYSCALL_USER_RSP: u64 = 0;
 /// Kernel stack pointer loaded by the syscall stub.
 /// Set once during `init()` from the TSS RSP0 value.
 #[no_mangle]
-static mut SYSCALL_KERNEL_RSP: u64 = 0;
+pub static mut SYSCALL_KERNEL_RSP: u64 = 0;
 
 // ── MSR helpers ─────────────────────────────────────────────────
 /// Read a Model-Specific Register.
@@ -206,6 +206,12 @@ pub mod nr {
     pub const SYS_LOG: u64 = 0;
     /// `sys_exit(code: u64)` — terminate the current process.
     pub const SYS_EXIT: u64 = 1;
+    /// `sys_yield()` — voluntarily give up the CPU.
+    pub const SYS_YIELD: u64 = 2;
+    /// `sys_spawn(path_ptr: *const u8, path_len: usize)` — launch a new process.
+    pub const SYS_SPAWN: u64 = 3;
+    /// `sys_read(fd: u64, buf_ptr: *mut u8, buf_len: usize)` — read from fd.
+    pub const SYS_READ: u64 = 4;
 }
 
 /// Rust syscall dispatcher — called from the assembly stub.
@@ -236,10 +242,58 @@ unsafe extern "C" fn syscall_dispatch(
         }
         nr::SYS_EXIT => {
             klog::info!("[syscall] SYS_EXIT(code={})", a0);
-            // For now, halt — we have no scheduler to return to.
+            // [067] Mark the current process dead and schedule the next one.
+            {
+                let mut sched = crate::task::process::SCHEDULER.lock();
+                if let Some(current) = sched.current_mut() {
+                    current.state = crate::task::process::ProcessState::Dead;
+                }
+            }
+            // Schedule away from the dead task.
+            unsafe { crate::task::process::do_schedule() };
+            // If we return here, no tasks are left — halt.
+            klog::info!("[067] All tasks exited, halting");
             loop {
                 unsafe { core::arch::asm!("hlt") };
             }
+        }
+        nr::SYS_YIELD => {
+            // [065] Voluntarily yield the CPU to the next ready task.
+            unsafe {
+                crate::task::process::do_schedule();
+            }
+            0
+        }
+        nr::SYS_SPAWN => {
+            // [066] a0 = path pointer, a1 = path length
+            let ptr = a0 as *const u8;
+            let len = a1 as usize;
+            if ptr.is_null() || len == 0 || len > 256 {
+                return u64::MAX;
+            }
+            let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+            let path = match core::str::from_utf8(slice) {
+                Ok(s) => s,
+                Err(_) => return u64::MAX,
+            };
+            klog::info!("[syscall] SYS_SPAWN(\"{}\")", path);
+            match crate::task::process::spawn_from_ramdisk(path) {
+                Ok(pid) => pid,
+                Err(e) => {
+                    klog::warn!("[syscall] SYS_SPAWN failed: {}", e);
+                    u64::MAX
+                }
+            }
+        }
+        nr::SYS_READ => {
+            // [068] a0 = fd (0 = STDIN), a1 = buf_ptr, a2 = buf_len
+            let fd = a0;
+            if fd != 0 {
+                return u64::MAX; // only STDIN supported
+            }
+            // Non-blocking: return one byte if available, 0 if not.
+            let ch = crate::task::input::pop_char();
+            ch as u64
         }
         _ => {
             klog::warn!("[syscall] unknown syscall nr={}", nr);
