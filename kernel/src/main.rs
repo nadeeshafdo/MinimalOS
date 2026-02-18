@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(abi_x86_interrupt)]
+#![feature(naked_functions)]
 
 extern crate alloc;
 mod arch;
@@ -71,6 +72,9 @@ unsafe extern "C" fn _start() -> ! {
 
     traps::init_idt();
     klog::info!("[019] IDT loaded successfully");
+
+    // [046] The Hotline — Enable syscall/sysret via MSRs
+    arch::syscall::init(arch::tss::Tss::kernel_rsp0());
 
     // [023] Modern Times - Enable the Local APIC
     klog::debug!("Enabling Local APIC...");
