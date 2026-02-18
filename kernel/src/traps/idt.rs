@@ -40,6 +40,9 @@ pub fn init_idt() {
     }
     klog::debug!("GDT loaded (CS=0x{:04x}, DS=0x{:04x}, TSS=0x{:04x})",
         selectors.kernel_code, selectors.kernel_data, selectors.tss);
+    klog::info!("[044] User segments defined (User CS=0x{:04x}, User DS=0x{:04x})",
+        selectors.user_code, selectors.user_data);
+    klog::info!("[045] RSP0 set in TSS for Ring 3 -> Ring 0 transitions");
 
     // Create IDT
     let mut idt = Idt::new();
