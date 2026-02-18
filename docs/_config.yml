@@ -1,0 +1,21 @@
+title: MinimalOS
+description: A 64-bit x86_64 operating system kernel written in Rust from scratch
+remote_theme: pages-themes/minimal@v0.2.0
+plugins:
+  - jekyll-remote-theme
+
+logo: /docs/assets/logo.svg
+
+show_downloads: false
+
+exclude:
+  - Makefile
+  - Cargo.toml
+  - kernel/
+  - crates/
+  - sdk/
+  - user/
+  - build/
+  - target/
+  - limine/
+  - ramdisk/

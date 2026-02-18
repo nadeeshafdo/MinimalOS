@@ -1,85 +1,152 @@
+---
+layout: default
+title: Kernel Architecture
+---
+
 # Kernel Architecture
 
 ## Overview
 
 MinimalOS is a 64-bit x86_64 operating system kernel written in Rust. It boots via the
 [Limine bootloader](https://github.com/limine-bootloader/limine) (v8.x protocol) and
-runs in the higher-half of virtual address space at `0xFFFFFFFF80000000`.
+runs in the higher half of the virtual address space at `0xFFFF_FFFF_8000_0000`.
 
-The project is structured as a Cargo workspace with a central kernel binary and several
-supporting crates.
+The project is structured as a Cargo workspace with a central kernel binary, several
+kernel-space library crates, an SDK crate for shared types, and user-space program
+crates.
 
 ## Boot Flow
 
-1. **Limine bootloader** loads the kernel ELF from the ISO (`boot:///kernel`).
-2. The bootloader sets up long mode (64-bit), page tables with a higher-half direct
-   map, and passes control to the kernel entry point `_start`.
-3. `_start` (in `kernel/src/main.rs`) verifies that the Limine base revision is
-   supported.
-4. The kernel requests a framebuffer from the bootloader via `FramebufferRequest`.
-5. Currently the kernel halts after framebuffer acquisition (`hlt` loop).
+```
+Limine (BIOS/UEFI)
+  │
+  ├─ Sets up Long Mode (64-bit)
+  ├─ Creates Higher-Half Direct Map page tables
+  ├─ Loads kernel ELF at 0xFFFFFFFF80000000
+  ├─ Loads ramdisk.tar module
+  └─ Jumps to _start
+        │
+        ├─ klog::init()            — Serial COM1 output
+        ├─ PIC disable             — Mask all legacy 8259 IRQs
+        ├─ IDT init                — 256 entries, IST for Double Fault
+        ├─ syscall::init()         — EFER.SCE, LSTAR, STAR, SFMASK
+        ├─ Memory census           — Walk Limine memory map
+        ├─ PMM init                — Bitmap frame allocator
+        ├─ Paging init             — Read CR3, set HHDM offset
+        ├─ APIC MMIO map           — Map Local APIC page
+        ├─ Heap init               — Linked-list allocator (64 KiB → 16 MiB)
+        ├─ APIC enable             — Local APIC + periodic timer
+        ├─ STI                     — Enable interrupts
+        ├─ Framebuffer console     — kdisplay init
+        ├─ Keyboard init           — PS/2 + IRQ1
+        ├─ RAMDisk detect          — Limine module → global storage
+        ├─ TAR parse + ELF load    — Load init.elf into user pages
+        ├─ Scheduler init          — Create idle + init processes
+        └─ do_schedule()           — Context switch to init (Ring 3)
+              │
+              └─ Idle loop: sti; hlt
+```
 
 ## Memory Layout
 
-The linker script (`build/linker.ld`) places the kernel in the higher half:
+### Virtual Address Space
 
-| Section              | Description                            |
-|----------------------|----------------------------------------|
-| `.limine_requests`   | Limine protocol request structures     |
-| `.text`              | Executable code                        |
-| `.rodata`            | Read-only data                         |
-| `.data` / `.bss`     | Mutable and zero-initialised data      |
+| Range | Description |
+|-------|-------------|
+| `0x0000_0000_0040_0000` | User program: `init.elf` (PT_LOAD) |
+| `0x0000_0000_0050_0000` | User program: `shell.elf` (PT_LOAD) |
+| `0x0000_0000_0080_0000` | User stacks (per-PID: `0x800000 + pid * 0x10000`) |
+| `0xFFFF_8000_0000_0000` | Higher-Half Direct Map (HHDM) base |
+| `0xFFFF_9000_0000_0000` | Test / dynamic kernel mappings |
+| `0xFFFF_A000_0000_0000` | Kernel heap (64 KiB initial, grows to 16 MiB) |
+| `0xFFFF_FFFF_8000_0000` | Kernel `.text`, `.rodata`, `.data`, `.bss` |
 
-Symbols `__kernel_start` and `__kernel_end` delimit the kernel image.
+### Linker Script Sections
 
-All sections are page-aligned (`MAXPAGESIZE`).
+The kernel linker script (`build/linker.ld`) places code at `0xFFFF_FFFF_8000_0000`:
 
-## Custom Target
+| Section | Description |
+|---------|-------------|
+| `.limine_requests` | Limine protocol request structures |
+| `.text` | Executable code |
+| `.rodata` | Read-only data (fonts, strings) |
+| `.data` / `.bss` | Mutable and zero-initialised data |
 
-The kernel is compiled against a custom target specification
-(`build/target-kernel.json`):
+Symbols `__kernel_start` and `__kernel_end` delimit the kernel image. All sections are
+page-aligned.
 
-- **LLVM target**: `x86_64-unknown-none-elf`
-- **Code model**: `kernel` (suitable for higher-half addresses)
-- **Linker**: `rust-lld` (GNU-LLD flavour)
-- **Panic strategy**: `abort` (no unwinding)
-- **Red zone**: disabled (required for interrupt safety)
-- **SIMD/FPU**: disabled (`-mmx,-sse,-sse2,…,+soft-float`)
+A separate linker script (`build/linker-shell.ld`) places the shell binary at
+`0x0000_0000_0050_0000` to avoid collision with init at `0x0000_0000_0040_0000`.
 
-A separate user-space target (`build/target-user.json`) exists for future user-mode
-binaries. It differs in that the red zone is **not** disabled and no restricted feature
-flags are set.
+## GDT Layout
+
+The Global Descriptor Table contains 7 entries in a specific order required by
+`syscall`/`sysret`:
+
+| Index | Selector | Segment | Ring | Notes |
+|-------|----------|---------|------|-------|
+| 0 | `0x00` | Null | — | Required null descriptor |
+| 1 | `0x08` | Kernel Code | 0 | 64-bit code segment |
+| 2 | `0x10` | Kernel Data | 0 | Data segment |
+| 3 | `0x18` | User Data | 3 | Must precede User Code for STAR |
+| 4 | `0x20` | User Code | 3 | 64-bit code segment |
+| 5–6 | `0x28` | TSS | 0 | 16-byte TSS descriptor |
+
+The STAR MSR is configured as `0x0010_0008_0000_0000`:
+- `sysret` CS = `0x10 | 3` = User Data at `0x18`, User Code at `0x20`
+- `syscall` CS = `0x08` → Kernel Code
+
+## TSS (Task State Segment)
+
+The TSS provides:
+
+- **RSP0**: Kernel stack pointer for Ring 3 → Ring 0 transitions. Dynamically
+  updated on each context switch via `write_unaligned` (the TSS struct is `#[repr(packed)]`).
+- **IST1**: Dedicated stack for Double Fault exceptions, preventing stack overflow
+  from cascading into a triple fault.
+
+The TSS pointer is stored in an `AtomicPtr` for safe access from interrupt handlers.
 
 ## Kernel Modules
 
-The kernel source is organised into four submodules under `kernel/src/`:
+| Module | Path | Contents |
+|--------|------|----------|
+| `arch` | `kernel/src/arch/` | `gdt.rs`, `idt.rs`, `tss.rs`, `syscall.rs` |
+| `memory` | `kernel/src/memory/` | `pmm.rs`, `paging.rs`, `heap.rs`, census, APIC MMIO |
+| `task` | `kernel/src/task/` | `process.rs`, `input.rs`, `usermode.rs` |
+| `traps` | `kernel/src/traps/` | `idt.rs`, `handlers.rs` |
+| `fs` | `kernel/src/fs/` | `tar.rs`, `elf.rs`, `ramdisk.rs` |
 
-| Module     | File                          | Purpose                              |
-|------------|-------------------------------|--------------------------------------|
-| `arch`     | `kernel/src/arch/mod.rs`      | x86_64-specific code (CPU, GDT, etc)|
-| `memory`   | `kernel/src/memory/mod.rs`    | Physical and virtual memory managers |
-| `task`     | `kernel/src/task/mod.rs`      | Task scheduler and process control   |
-| `traps`    | `kernel/src/traps/mod.rs`     | Interrupt and exception handling     |
+## Custom Target
 
-All four modules are currently stubs awaiting implementation.
+The kernel compiles against `build/target-kernel.json`:
+
+| Property | Value | Reason |
+|----------|-------|--------|
+| LLVM target | `x86_64-unknown-none-elf` | Freestanding binary |
+| Code model | `kernel` | Higher-half addresses |
+| Linker | `rust-lld` (GNU-LLD) | Cross-platform linking |
+| Panic strategy | `abort` | No unwinding support |
+| Red zone | **disabled** | Interrupt safety |
+| SIMD/FPU | disabled (`+soft-float`) | No SSE in kernel |
+
+User-space programs use `build/target-user.json` which keeps the red zone enabled
+and uses a small code model.
 
 ## External Dependencies
 
-| Crate    | Version | Purpose                                   |
-|----------|---------|-------------------------------------------|
-| `limine` | 0.5     | Limine boot protocol request/response API |
-| `x86_64` | 0.15    | CPU structures (GDT, IDT, paging, I/O)    |
-| `spin`   | 0.9     | Spinlock-based synchronisation primitives  |
-
-## Build Script
-
-`kernel/build.rs` tells Cargo to:
-
-1. Add `build/` to the native library search path.
-2. Pass `-Tlinker.ld` to the linker so the custom linker script is used.
-3. Rebuild when `build/linker.ld` changes.
+| Crate | Version | Purpose |
+|-------|---------|---------|
+| `limine` | 0.5 | Boot protocol request/response API |
+| `x86_64` | 0.15 | CPU structures (GDT, IDT, paging, port I/O) |
+| `spin` | 0.9 | Spinlock synchronisation (`Mutex`, `Once`) |
+| `pc-keyboard` | 0.7 | PS/2 scancode decoding (layouts, modifiers) |
+| `klog` | local | Kernel logging via serial COM1 |
+| `kdisplay` | local | Framebuffer graphics and text console |
+| `khal` | local | Hardware Abstraction Layer |
 
 ## Panic Handler
 
-A minimal panic handler is provided that halts the CPU in an infinite loop. There is
-no unwinding support.
+The panic handler logs the panic message via serial, then enters a tight `cli; hlt`
+loop to prevent further execution. There is no unwinding — the kernel is compiled
+with `panic = abort`.

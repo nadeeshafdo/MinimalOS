@@ -1,0 +1,99 @@
+---
+---
+
+@import "{{ site.theme }}";
+
+/* ── MinimalOS Branding ── */
+
+:root {
+  --accent: #6366f1;
+  --accent-light: #818cf8;
+  --text: #24292e;
+  --text-muted: #586069;
+  --border: #e1e4e8;
+  --bg-code: #f6f8fa;
+}
+
+/* Header / logo area */
+header {
+  text-align: center;
+}
+
+header img[alt="logo"] {
+  width: 60px;
+}
+
+/* Links */
+a {
+  color: var(--accent);
+}
+
+a:hover {
+  color: var(--accent-light);
+}
+
+/* Code blocks */
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+}
+
+code {
+  background: var(--bg-code);
+  border-radius: 3px;
+  padding: 0.15em 0.35em;
+  font-size: 0.9em;
+}
+
+pre code {
+  padding: 0;
+  background: none;
+}
+
+/* Tables */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+}
+
+th {
+  background: var(--bg-code);
+  font-weight: 600;
+  text-align: left;
+}
+
+th, td {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+/* Headings */
+h1 { font-size: 1.75rem; border-bottom: 2px solid var(--accent); padding-bottom: 0.3rem; }
+h2 { font-size: 1.35rem; margin-top: 2rem; }
+h3 { font-size: 1.1rem; margin-top: 1.5rem; }
+
+/* Wrapper width */
+.wrapper {
+  max-width: 860px;
+}
+
+/* Navigation breadcrumb */
+.nav-back {
+  display: inline-block;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.nav-back a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.nav-back a:hover {
+  text-decoration: underline;
+}
