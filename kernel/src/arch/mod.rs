@@ -2,4 +2,5 @@
 
 pub mod gdt;
 pub mod idt;
+pub mod syscall;
 pub mod tss;
