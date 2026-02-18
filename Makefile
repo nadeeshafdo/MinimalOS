@@ -12,21 +12,35 @@ ISODIR := $(BUILDDIR)/iso
 # Rust target and output
 RUST_TARGET := build/target-kernel.json
 RUST_KERNEL_BIN := target/target-kernel/debug/minimalos_kernel
+USER_INIT_ELF := target/target-user/debug/init
+USER_INIT_BIN := build/dist/init.bin
 ISO := $(DISTDIR)/minimalos.iso
 
 # Limine paths
 LIMINE_DIR := limine
 LIMINE_BRANCH := v8.x-binary
 
-# Phony targets
-.PHONY: all kernel clean iso qemu qemu-bios qemu-uefi run limine help distclean
+# LLVM tools from the Rust toolchain
+LLVM_OBJCOPY := $(shell find "$$HOME/.rustup/toolchains" -name llvm-objcopy -path '*/nightly-2025-01-01*' | head -1)
+
+.PHONY: all kernel clean iso qemu qemu-bios qemu-uefi run limine help distclean user-init
 
 # Default target
 all: kernel
 
 # Build Rust kernel via Cargo
-kernel:
+kernel: user-init
 	cargo build --package minimalos_kernel --target $(RUST_TARGET)
+
+# Build user-mode init binary
+user-init:
+	cargo build --package init --target build/target-user.json \
+		-Z build-std=core \
+		-Z build-std-features=compiler-builtins-mem
+	@mkdir -p $(DISTDIR)
+	$(LLVM_OBJCOPY) -O binary --binary-architecture=x86-64 \
+		$(USER_INIT_ELF) $(USER_INIT_BIN)
+	@echo "User init binary: $$(wc -c < $(USER_INIT_BIN)) bytes"
 
 # Clone/update Limine
 limine:
