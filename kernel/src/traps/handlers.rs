@@ -43,12 +43,20 @@ pub extern "x86-interrupt" fn double_fault_handler(
 /// heartbeat — it drives preemptive scheduling and timekeeping.
 /// An EOI must be sent to the APIC at the end of every timer interrupt.
 pub extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
-    // [025] Tick Tock - Print a dot to the screen on every timer tick.
-    // Uses try_lock to avoid deadlock if main thread holds the console lock.
-    kdisplay::console_try_write_fmt(format_args!("."));
-
-    // Send End of Interrupt to the APIC
+    // Send End of Interrupt to the APIC *first*, so the timer can
+    // continue firing even if schedule() switches to a different task.
     khal::apic::eoi();
+
+    // [064] The Slice — preemptive scheduling on timer tick.
+    // Use try_lock to avoid deadlock if the scheduler is already held
+    // (e.g. inside sys_yield or sys_spawn).
+    if let Some(sched) = crate::task::process::SCHEDULER.try_lock() {
+        let count = sched.task_count();
+        drop(sched); // Release lock before context switch
+        if count > 1 {
+            unsafe { crate::task::process::do_schedule() };
+        }
+    }
 }
 
 /// Spurious interrupt handler (vector 0xFF).
@@ -89,8 +97,8 @@ pub extern "x86-interrupt" fn page_fault_handler(
 /// Keyboard interrupt handler (IRQ1 = vector 33).
 ///
 /// Reads the scancode from the PS/2 data port, feeds it through the
-/// `pc-keyboard` state machine, and prints the resulting character
-/// to the framebuffer console.
+/// `pc-keyboard` state machine, echoes the character to the console,
+/// and pushes it into the kernel input buffer for `sys_read`.
 pub extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {
     let status = khal::keyboard::read_status();
     if status & 0x01 != 0 {
@@ -101,6 +109,8 @@ pub extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame
         if let Some(ch) = khal::keyboard::handle_scancode(scancode) {
             // [041] Echo + [042] Backspace
             kdisplay::console_try_put_char(ch);
+            // [068] Push into kernel input ring buffer for sys_read(STDIN)
+            crate::task::input::push_char(ch);
         }
     }
 
