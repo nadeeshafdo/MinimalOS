@@ -13,6 +13,7 @@ ISODIR := $(BUILDDIR)/iso
 RUST_TARGET := build/target-kernel.json
 RUST_KERNEL_BIN := target/target-kernel/debug/minimalos_kernel
 USER_INIT_ELF := target/target-user/debug/init
+USER_SHELL_ELF := target/target-user/debug/shell
 USER_INIT_BIN := build/dist/init.bin
 ISO := $(DISTDIR)/minimalos.iso
 RAMDISK := $(DISTDIR)/ramdisk.tar
@@ -24,13 +25,13 @@ LIMINE_BRANCH := v8.x-binary
 # LLVM tools from the Rust toolchain
 LLVM_OBJCOPY := $(shell find "$$HOME/.rustup/toolchains" -name llvm-objcopy -path '*/nightly-2025-01-01*' | head -1)
 
-.PHONY: all kernel clean iso qemu qemu-bios qemu-uefi run limine help distclean user-init ramdisk
+.PHONY: all kernel clean iso qemu qemu-bios qemu-uefi run limine help distclean user-init user-shell ramdisk
 
 # Default target
 all: kernel
 
 # Build Rust kernel via Cargo
-kernel: user-init
+kernel: user-init user-shell
 	cargo build --package minimalos_kernel --target $(RUST_TARGET)
 
 # Build user-mode init binary
@@ -43,10 +44,17 @@ user-init:
 		$(USER_INIT_ELF) $(USER_INIT_BIN)
 	@echo "User init binary: $$(wc -c < $(USER_INIT_BIN)) bytes"
 
+# Build user-mode shell binary
+user-shell:
+	cargo build --package shell --target build/target-user.json \
+		-Z build-std=core \
+		-Z build-std-features=compiler-builtins-mem
+
 # Build ramdisk tar archive from ramdisk/ directory
-ramdisk: user-init
+ramdisk: user-init user-shell
 	@mkdir -p $(DISTDIR)
 	@cp $(USER_INIT_ELF) ramdisk/init.elf
+	@cp $(USER_SHELL_ELF) ramdisk/shell.elf
 	tar cf $(RAMDISK) -C ramdisk .
 	@echo "RAMDisk: $$(wc -c < $(RAMDISK)) bytes"
 
