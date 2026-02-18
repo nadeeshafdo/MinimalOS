@@ -7,8 +7,14 @@
 /// Size of each IST stack in bytes (16 KiB).
 const IST_STACK_SIZE: usize = 4096 * 4;
 
+/// Size of the kernel stack used when transitioning from Ring 3 to Ring 0.
+const KERNEL_STACK_SIZE: usize = 4096 * 4;
+
 /// Stack storage for IST entry 1 (used by Double Fault handler).
 static mut DOUBLE_FAULT_STACK: [u8; IST_STACK_SIZE] = [0; IST_STACK_SIZE];
+
+/// Kernel stack for Ring 3 → Ring 0 transitions (RSP0).
+static mut KERNEL_STACK: [u8; KERNEL_STACK_SIZE] = [0; KERNEL_STACK_SIZE];
 
 /// The 64-bit Task State Segment.
 ///
@@ -47,15 +53,22 @@ impl Tss {
         }
     }
 
-    /// Initialize the TSS with IST stacks.
+    /// Initialize the TSS with IST stacks and RSP0.
     ///
-    /// Sets up IST1 with a dedicated stack for Double Fault handling.
+    /// Sets up:
+    /// - IST1: dedicated stack for Double Fault handling
+    /// - RSP0: kernel stack for Ring 3 → Ring 0 transitions
     pub fn init(&mut self) {
         // IST1: Double Fault handler stack
-        // Stack grows downward, so we set the pointer to the top of the allocation.
-        let stack_top = unsafe {
+        let ist1_top = unsafe {
             DOUBLE_FAULT_STACK.as_ptr().add(IST_STACK_SIZE) as u64
         };
-        self.ist[0] = stack_top; // IST index 1 is stored at ist[0]
+        self.ist[0] = ist1_top; // IST index 1 is stored at ist[0]
+
+        // [045] RSP0: kernel stack for privilege transitions (Ring 3 → Ring 0)
+        let rsp0_top = unsafe {
+            KERNEL_STACK.as_ptr().add(KERNEL_STACK_SIZE) as u64
+        };
+        self.rsp[0] = rsp0_top;
     }
 }
