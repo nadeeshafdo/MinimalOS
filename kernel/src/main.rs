@@ -241,22 +241,37 @@ unsafe extern "C" fn _start() -> ! {
 
     // ── [049][050][051] Drop to Ring 3 and syscall back ─────────
     //
-    // 1. Allocate a user-code page and a user-stack page.
-    // 2. Write a tiny program: nop; mov rax,0; lea rdi,[msg]; mov rsi,len; syscall
-    //                          mov rax,1; xor rdi,rdi; syscall
+    // 1. Allocate user-code pages and a user-stack page.
+    // 2. Copy the compiled user-mode init binary into user-code pages.
     // 3. Craft the iretq frame and jump.
 
     let user_code_virt: u64 = 0x40_0000;   // 4 MiB — canonical low-half
     let user_stack_virt: u64 = 0x80_0000;  // 8 MiB
 
-    // Allocate and map user code page (Present + Writable + User)
-    let user_code_phys = memory::pmm::alloc_frame()
-        .expect("alloc user code page");
-    memory::paging::map_page(
-        user_code_virt,
-        user_code_phys,
-        memory::paging::PageFlags::USER_RW,
-    );
+    // [052] Load the compiled init binary from an embedded blob
+    let init_bin: &[u8] = include_bytes!("../../build/dist/init.bin");
+    klog::info!("[052] User binary 'init' loaded ({} bytes)", init_bin.len());
+
+    // Allocate and map enough user-code pages for the binary
+    let code_pages = (init_bin.len() + 4095) / 4096;
+    for i in 0..code_pages {
+        let phys = memory::pmm::alloc_frame()
+            .expect("alloc user code page");
+        memory::paging::map_page(
+            user_code_virt + (i as u64) * 4096,
+            phys,
+            memory::paging::PageFlags::USER_RW,
+        );
+    }
+
+    // Copy the binary to user-code pages
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            init_bin.as_ptr(),
+            user_code_virt as *mut u8,
+            init_bin.len(),
+        );
+    }
 
     // Allocate and map user stack page
     let user_stack_phys = memory::pmm::alloc_frame()
@@ -270,75 +285,8 @@ unsafe extern "C" fn _start() -> ! {
     // User stack grows downward — point to top of the page
     let user_rsp = user_stack_virt + 4096;
 
-    // Write the user-mode program into the code page.
-    // Layout at user_code_virt:
-    //   +0x00: message bytes  "Hello from Ring 3!\0"
-    //   +0x20: code begins
-    let msg = b"Hello from Ring 3!";
-    let msg_offset: u64 = 0x00;
-    let code_offset: u64 = 0x20;
-
-    let code_ptr = user_code_virt as *mut u8;
-
-    // Copy message
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            msg.as_ptr(),
-            code_ptr.add(msg_offset as usize),
-            msg.len(),
-        );
-    }
-
-    // Build machine code at +0x20
-    // We encode the instructions manually.
-    let mut mc: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
-
-    // nop  (0x90)  — [050] prove we execute in Ring 3
-    mc.push(0x90);
-
-    // lea rdi, [rip - (current_pos + 7) + msg_offset]
-    // Actually, let's use absolute address in rdi with movabs:
-    // movabs rdi, user_code_virt + msg_offset
-    //   48 BF <8-byte imm>
-    mc.extend_from_slice(&[0x48, 0xBF]);
-    mc.extend_from_slice(&(user_code_virt + msg_offset).to_le_bytes());
-
-    // mov rsi, msg.len()
-    //   48 BE <8-byte imm>  (movabs rsi, imm64)
-    // Actually, shorter: mov esi, imm32 (since len fits in 32 bits)
-    //   BE <4-byte imm>
-    mc.push(0xBE);
-    mc.extend_from_slice(&(msg.len() as u32).to_le_bytes());
-
-    // xor eax, eax  (syscall nr = SYS_LOG = 0)
-    //   31 C0
-    mc.extend_from_slice(&[0x31, 0xC0]);
-
-    // syscall  (0F 05)
-    mc.extend_from_slice(&[0x0F, 0x05]);
-
-    // ── SYS_EXIT(0) ──
-    // mov eax, 1
-    //   B8 01 00 00 00
-    mc.extend_from_slice(&[0xB8, 0x01, 0x00, 0x00, 0x00]);
-
-    // xor edi, edi
-    //   31 FF
-    mc.extend_from_slice(&[0x31, 0xFF]);
-
-    // syscall  (0F 05)
-    mc.extend_from_slice(&[0x0F, 0x05]);
-
-    // Copy machine code to the user code page
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            mc.as_ptr(),
-            code_ptr.add(code_offset as usize),
-            mc.len(),
-        );
-    }
-
-    let entry_point = user_code_virt + code_offset;
+    // Entry point is the start of the binary (linked at 0x400000)
+    let entry_point = user_code_virt;
     klog::info!("[049] iretq frame: RIP={:#x}, CS=0x23, SS=0x1b, RSP={:#x}",
         entry_point, user_rsp);
     klog::info!("[050] Dropping to Ring 3...");
