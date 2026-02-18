@@ -27,6 +27,9 @@ impl PageFlags {
     /// Convenience: kernel read-write page (Present + Writable).
     pub const KERNEL_RW: Self = Self(Self::PRESENT.0 | Self::WRITABLE.0);
 
+    /// Convenience: user read-write page (Present + Writable + User).
+    pub const USER_RW: Self = Self(Self::PRESENT.0 | Self::WRITABLE.0 | Self::USER.0);
+
     #[inline]
     pub const fn bits(self) -> u64 {
         self.0
@@ -93,9 +96,11 @@ pub unsafe fn map_page(virt: u64, phys: u64, flags: PageFlags) {
     let pt_idx = ((virt >> 12) & 0x1FF) as usize;
 
     // Walk / create: PML4 → PDPT → PD → PT
-    let pdpt_phys = ensure_table(hhdm, pml4_phys, pml4_idx);
-    let pd_phys = ensure_table(hhdm, pdpt_phys, pdpt_idx);
-    let pt_phys = ensure_table(hhdm, pd_phys, pd_idx);
+    // When the leaf page is USER-accessible, intermediate entries
+    // must also have the USER bit set.
+    let pdpt_phys = ensure_table(hhdm, pml4_phys, pml4_idx, flags);
+    let pd_phys = ensure_table(hhdm, pdpt_phys, pdpt_idx, flags);
+    let pt_phys = ensure_table(hhdm, pd_phys, pd_idx, flags);
 
     // Write the final PT entry
     let pt_virt = (hhdm + pt_phys) as *mut u64;
@@ -171,12 +176,21 @@ pub unsafe fn translate(virt: u64) -> Option<u64> {
 /// Ensure `table[index]` points to a valid next-level table.
 /// If the entry is not present, allocate a zeroed frame from the PMM
 /// and install it.  Returns the **physical address** of the next-level table.
-unsafe fn ensure_table(hhdm: u64, table_phys: u64, index: usize) -> u64 {
+///
+/// When `leaf_flags` contains USER, intermediate entries are also
+/// marked USER so that user-mode accesses can traverse the full walk.
+unsafe fn ensure_table(hhdm: u64, table_phys: u64, index: usize, leaf_flags: PageFlags) -> u64 {
     let table_virt = (hhdm + table_phys) as *mut u64;
     let entry = ptr::read_volatile(table_virt.add(index));
 
     if entry & PageFlags::PRESENT.bits() != 0 {
-        // Already present — return the physical address it points to
+        // Already present — ensure USER bit is set if the leaf needs it.
+        if leaf_flags.contains(PageFlags::USER) && (entry & PageFlags::USER.bits() == 0) {
+            ptr::write_volatile(
+                table_virt.add(index),
+                entry | PageFlags::USER.bits(),
+            );
+        }
         return entry & PHYS_ADDR_MASK;
     }
 
@@ -188,9 +202,14 @@ unsafe fn ensure_table(hhdm: u64, table_phys: u64, index: usize) -> u64 {
     let new_frame_virt = (hhdm + new_frame) as *mut u8;
     ptr::write_bytes(new_frame_virt, 0, 4096);
 
-    // Install the entry: Present + Writable (intermediate entries
-    // should be permissive; leaf entry controls final permissions).
-    let new_entry = new_frame | PageFlags::PRESENT.bits() | PageFlags::WRITABLE.bits();
+    // Install the entry: Present + Writable.
+    // If the leaf page will be USER-accessible, set USER here too
+    // so the CPU walk can reach the leaf from Ring 3.
+    let mut flags_bits = PageFlags::PRESENT.bits() | PageFlags::WRITABLE.bits();
+    if leaf_flags.contains(PageFlags::USER) {
+        flags_bits |= PageFlags::USER.bits();
+    }
+    let new_entry = new_frame | flags_bits;
     ptr::write_volatile(table_virt.add(index), new_entry);
 
     new_frame
