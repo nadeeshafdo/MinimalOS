@@ -17,9 +17,9 @@ struct BitmapAllocator {
     /// Virtual address of the bitmap (accessed via HHDM).
     bitmap: *mut u8,
     /// Physical address where the bitmap is stored.
-    bitmap_phys: u64,
+    _bitmap_phys: u64,
     /// Number of 4 KiB frames consumed by the bitmap itself.
-    bitmap_frames: usize,
+    _bitmap_frames: usize,
     /// Total number of page frames tracked by the bitmap.
     total_frames: usize,
     /// Current number of free (allocatable) frames.
@@ -61,14 +61,29 @@ pub unsafe fn init(hhdm_offset: u64, entries: &[&Entry]) {
     );
 
     // ── 2. Find a usable region large enough to hold the bitmap ──
-    let mut bitmap_phys: u64 = 0;
+    //
+    // We must avoid placing the bitmap at physical address 0 (the null
+    // page), so we skip any region that starts at 0 and try the next,
+    // or offset into a 0-based region past the first page.
+    let mut bitmap_phys: Option<u64> = None;
     for entry in entries.iter() {
-        if entry.entry_type == EntryType::USABLE && entry.length >= bitmap_size {
-            bitmap_phys = entry.base;
+        if entry.entry_type != EntryType::USABLE {
+            continue;
+        }
+        // Candidate start: skip the null page if the region starts at 0.
+        let candidate = if entry.base == 0 {
+            FRAME_SIZE // start at 4 KiB instead of 0
+        } else {
+            entry.base
+        };
+        let region_end = entry.base + entry.length;
+        if candidate + bitmap_size <= region_end {
+            bitmap_phys = Some(candidate);
             break;
         }
     }
-    assert!(bitmap_phys != 0, "No usable region large enough for the PMM bitmap");
+    let bitmap_phys = bitmap_phys
+        .expect("No usable region large enough for the PMM bitmap");
 
     let bitmap_ptr = (hhdm_offset + bitmap_phys) as *mut u8;
 
@@ -120,8 +135,8 @@ pub unsafe fn init(hhdm_offset: u64, entries: &[&Entry]) {
 
     *PMM.lock() = Some(BitmapAllocator {
         bitmap: bitmap_ptr,
-        bitmap_phys,
-        bitmap_frames,
+        _bitmap_phys: bitmap_phys,
+        _bitmap_frames: bitmap_frames,
         total_frames,
         free_frames: free_count,
     });

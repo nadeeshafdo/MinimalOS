@@ -22,7 +22,9 @@ const EM_X86_64: u16 = 62;
 const PT_LOAD: u32 = 1;
 
 /// Program header flags.
+#[allow(dead_code)]
 const PF_X: u32 = 1;      // Execute
+#[allow(dead_code)]
 const PF_W: u32 = 2;      // Write
 const _PF_R: u32 = 4;     // Read
 
@@ -138,6 +140,7 @@ pub fn parse(data: &[u8]) -> Result<ElfInfo<'_>, ElfError> {
 /// Convert ELF segment flags to page flags.
 ///
 /// Returns `(user_rw, executable)`.
+#[allow(dead_code)]
 pub fn segment_flags(p_flags: u32) -> (bool, bool) {
     let writable = (p_flags & PF_W) != 0;
     let executable = (p_flags & PF_X) != 0;

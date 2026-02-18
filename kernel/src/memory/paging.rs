@@ -15,6 +15,7 @@ use super::pmm;
 #[derive(Clone, Copy)]
 pub struct PageFlags(u64);
 
+#[allow(dead_code)]
 impl PageFlags {
     pub const PRESENT: Self = Self(1 << 0);
     pub const WRITABLE: Self = Self(1 << 1);

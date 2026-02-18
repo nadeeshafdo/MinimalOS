@@ -12,6 +12,7 @@ use core::arch::asm;
 const SYS_LOG: u64 = 0;
 const SYS_EXIT: u64 = 1;
 const SYS_YIELD: u64 = 2;
+#[allow(dead_code)]
 const SYS_SPAWN: u64 = 3;
 const SYS_READ: u64 = 4;
 
@@ -78,6 +79,7 @@ fn yield_cpu() {
     unsafe { syscall0(SYS_YIELD); }
 }
 
+#[allow(dead_code)]
 fn spawn(path: &str) -> u64 {
     unsafe { syscall2(SYS_SPAWN, path.as_ptr() as u64, path.len() as u64) }
 }
@@ -118,7 +120,7 @@ pub extern "C" fn _start() -> ! {
                     handle_command(cmd);
                     pos = 0;
                 }
-                log("$ ");
+                log("\n$ ");
             }
             // Backspace
             0x08 | 0x7F => {
@@ -159,9 +161,20 @@ fn handle_command(cmd: &str) {
             exit(0);
         }
         _ => {
-            // Try to spawn as a program name (append .elf)
-            log("Unknown command: ");
-            log(cmd);
+            // Unknown command — build message in a small buffer to
+            // avoid multiple separate log calls.
+            let mut msg = [0u8; 160];
+            let prefix = b"Unknown command: ";
+            let cmd_bytes = cmd.as_bytes();
+            let total = prefix.len() + cmd_bytes.len();
+            if total <= msg.len() {
+                msg[..prefix.len()].copy_from_slice(prefix);
+                msg[prefix.len()..total].copy_from_slice(cmd_bytes);
+                let s = unsafe { core::str::from_utf8_unchecked(&msg[..total]) };
+                log(s);
+            } else {
+                log("Unknown command (too long)");
+            }
         }
     }
 }

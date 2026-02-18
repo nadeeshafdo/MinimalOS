@@ -13,6 +13,7 @@ const IDT_ENTRIES: usize = 256;
 /// Privilege level used in segment selectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[allow(dead_code)]
 pub enum PrivilegeLevel {
     /// Ring 0 (kernel mode).
     Ring0 = 0,
@@ -27,6 +28,7 @@ pub enum PrivilegeLevel {
 /// Gate type for IDT entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[allow(dead_code)]
 pub enum GateType {
     /// Interrupt gate - disables interrupts on entry.
     Interrupt = 0b1110,
@@ -39,6 +41,7 @@ pub enum GateType {
 #[repr(transparent)]
 pub struct EntryOptions(u16);
 
+#[allow(dead_code)]
 impl EntryOptions {
     /// Create a new EntryOptions with default values.
     ///
@@ -116,6 +119,7 @@ pub struct IdtEntry {
     reserved: u32,
 }
 
+#[allow(dead_code)]
 impl IdtEntry {
     /// Create a new IDT entry that is not present (disabled).
     #[inline]
@@ -180,6 +184,7 @@ pub struct Idt {
     entries: [IdtEntry; IDT_ENTRIES],
 }
 
+#[allow(dead_code)]
 impl Idt {
     /// Create a new IDT with all entries marked as missing.
     pub const fn new() -> Self {

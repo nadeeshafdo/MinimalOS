@@ -34,6 +34,7 @@ const APIC_REG_LVT_TIMER: u32 = 0x320;
 /// Timer Initial Count Register.
 const APIC_REG_TIMER_INIT: u32 = 0x380;
 /// Timer Current Count Register.
+#[allow(dead_code)]
 const APIC_REG_TIMER_CURRENT: u32 = 0x390;
 /// Timer Divide Configuration Register.
 const APIC_REG_TIMER_DIV: u32 = 0x3E0;

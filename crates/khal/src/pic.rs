@@ -5,7 +5,7 @@
 //! remapped and disabled to prevent spurious interrupts from conflicting
 //! with CPU exceptions (IRQ 0-7 overlap with exceptions 0-7 by default).
 
-use crate::port::{inb, outb};
+use crate::port::outb;
 
 /// I/O port addresses for the master PIC.
 const PIC1_COMMAND: u16 = 0x20;

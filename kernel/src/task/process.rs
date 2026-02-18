@@ -24,6 +24,7 @@ fn alloc_pid() -> u64 {
 
 /// The possible states of a process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum ProcessState {
     /// Ready to be scheduled.
     Ready,
@@ -45,6 +46,7 @@ pub enum ProcessState {
 /// Layout must match the push/pop order in `context_switch_asm`.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
+#[allow(dead_code)]
 pub struct Context {
     pub r15: u64,
     pub r14: u64,
@@ -55,6 +57,7 @@ pub struct Context {
     pub rip: u64,   // return address (pushed by `call`)
 }
 
+#[allow(dead_code)]
 impl Context {
     /// Create a zero-initialised context.
     pub const fn empty() -> Self {
@@ -96,6 +99,7 @@ impl KernelStack {
 
 /// [061] The Process Control Block — stores everything the kernel
 /// needs to manage and schedule a single task.
+#[allow(dead_code)]
 pub struct Process {
     /// Unique process identifier.
     pub pid: u64,
@@ -222,6 +226,7 @@ extern "C" {
 ///
 /// # Safety
 /// Both RSP values must point to valid, correctly laid-out kernel stacks.
+#[allow(dead_code)]
 pub unsafe fn context_switch(old: &mut Process, new: &Process) {
     unsafe {
         context_switch_asm(
@@ -271,6 +276,7 @@ pub struct Scheduler {
     current: Option<Process>,
 }
 
+#[allow(dead_code)]
 impl Scheduler {
     pub const fn new() -> Self {
         Self {
@@ -475,7 +481,7 @@ pub unsafe fn do_schedule() {
         let old_rsp_ptr = if old_is_dead {
             // Task is dead, use dummy so context_switch_asm has
             // somewhere to write the RSP (which we'll never use).
-            unsafe { &raw mut DEAD_RSP }
+            &raw mut DEAD_RSP
         } else {
             &mut sched.tasks.back_mut().unwrap().kernel_rsp as *mut u64
         };

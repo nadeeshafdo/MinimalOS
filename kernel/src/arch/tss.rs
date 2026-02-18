@@ -60,25 +60,20 @@ impl Tss {
     /// - RSP0: kernel stack for Ring 3 → Ring 0 transitions
     pub fn init(&mut self) {
         // IST1: Double Fault handler stack
-        let ist1_top = unsafe {
-            DOUBLE_FAULT_STACK.as_ptr().add(IST_STACK_SIZE) as u64
-        };
-        self.ist[0] = ist1_top; // IST index 1 is stored at ist[0]
+        let ist1_top = core::ptr::addr_of!(DOUBLE_FAULT_STACK) as *const u8;
+        self.ist[0] = ist1_top as u64 + IST_STACK_SIZE as u64;
 
         // [045] RSP0: kernel stack for privilege transitions (Ring 3 → Ring 0)
-        let rsp0_top = unsafe {
-            KERNEL_STACK.as_ptr().add(KERNEL_STACK_SIZE) as u64
-        };
-        self.rsp[0] = rsp0_top;
+        let rsp0_top = core::ptr::addr_of!(KERNEL_STACK) as *const u8;
+        self.rsp[0] = rsp0_top as u64 + KERNEL_STACK_SIZE as u64;
     }
 
     /// Return the kernel RSP0 value (top of KERNEL_STACK).
     ///
     /// Used by the syscall module to initialise `SYSCALL_KERNEL_RSP`.
     pub fn kernel_rsp0() -> u64 {
-        unsafe {
-            KERNEL_STACK.as_ptr().add(KERNEL_STACK_SIZE) as u64
-        }
+        let base = core::ptr::addr_of!(KERNEL_STACK) as *const u8;
+        base as u64 + KERNEL_STACK_SIZE as u64
     }
 
     /// Update TSS RSP0 at runtime (used during context switch).

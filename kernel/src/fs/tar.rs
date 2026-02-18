@@ -45,6 +45,7 @@ impl<'a> TarIter<'a> {
     }
 
     /// Create a TAR iterator directly from a byte slice.
+    #[allow(dead_code)]
     pub fn from_bytes(buf: &'a [u8]) -> Self {
         Self { buf, offset: 0 }
     }

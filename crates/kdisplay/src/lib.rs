@@ -145,7 +145,7 @@ pub unsafe fn fill_screen(fb: &Framebuffer, color: Color) {
     let width = fb.width() as usize;
     let height = fb.height() as usize;
     let pitch = fb.pitch() as usize;
-    let bpp = fb.bpp() as usize / 8;
+    let _bpp = fb.bpp() as usize / 8;
 
     let fb_ptr = fb.addr() as *mut u8;
     

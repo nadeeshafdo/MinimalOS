@@ -46,6 +46,7 @@ impl RingBuffer {
         Some(byte)
     }
 
+    #[allow(dead_code)]
     fn is_empty(&self) -> bool {
         self.count == 0
     }
@@ -69,6 +70,7 @@ pub fn pop_char() -> u8 {
 }
 
 /// Returns true if there is at least one character available.
+#[allow(dead_code)]
 pub fn has_input() -> bool {
     !INPUT.lock().is_empty()
 }
