@@ -15,6 +15,7 @@ RUST_KERNEL_BIN := target/target-kernel/debug/minimalos_kernel
 USER_INIT_ELF := target/target-user/debug/init
 USER_INIT_BIN := build/dist/init.bin
 ISO := $(DISTDIR)/minimalos.iso
+RAMDISK := $(DISTDIR)/ramdisk.tar
 
 # Limine paths
 LIMINE_DIR := limine
@@ -23,7 +24,7 @@ LIMINE_BRANCH := v8.x-binary
 # LLVM tools from the Rust toolchain
 LLVM_OBJCOPY := $(shell find "$$HOME/.rustup/toolchains" -name llvm-objcopy -path '*/nightly-2025-01-01*' | head -1)
 
-.PHONY: all kernel clean iso qemu qemu-bios qemu-uefi run limine help distclean user-init
+.PHONY: all kernel clean iso qemu qemu-bios qemu-uefi run limine help distclean user-init ramdisk
 
 # Default target
 all: kernel
@@ -42,6 +43,13 @@ user-init:
 		$(USER_INIT_ELF) $(USER_INIT_BIN)
 	@echo "User init binary: $$(wc -c < $(USER_INIT_BIN)) bytes"
 
+# Build ramdisk tar archive from ramdisk/ directory
+ramdisk: user-init
+	@mkdir -p $(DISTDIR)
+	@cp $(USER_INIT_ELF) ramdisk/init.elf
+	tar cf $(RAMDISK) -C ramdisk .
+	@echo "RAMDisk: $$(wc -c < $(RAMDISK)) bytes"
+
 # Clone/update Limine
 limine:
 	@if [ ! -d "$(LIMINE_DIR)" ]; then \
@@ -51,7 +59,7 @@ limine:
 	@make -C $(LIMINE_DIR)
 
 # Create bootable ISO (BIOS + UEFI)
-iso: kernel limine
+iso: kernel ramdisk limine
 	@echo "Creating bootable ISO..."
 	@mkdir -p $(ISODIR)/boot/limine
 	@mkdir -p $(ISODIR)/EFI/BOOT
@@ -59,6 +67,9 @@ iso: kernel limine
 	
 	# Copy kernel
 	@cp $(RUST_KERNEL_BIN) $(ISODIR)/boot/kernel
+	
+	# Copy ramdisk
+	@cp $(RAMDISK) $(ISODIR)/boot/ramdisk.tar
 	
 	# Copy Limine configuration
 	@cp limine.conf $(ISODIR)/boot/limine/
