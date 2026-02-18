@@ -76,3 +76,30 @@
 - [x] [041] **The Echo:** Type on the keyboard and see letters appear on the MinimalOS screen.
 - [x] [042] **Backspace:** Implement backspace logic in the `kprint!` buffer.
 - [x] [043] **Serial Killer:** Implement a driver for the COM1 Serial Port (logging to host).
+
+---
+
+## 🔒 Rank VI: The Barrier (User Mode & Syscalls) 🟡
+
+*Focus: Running code that cannot crash the kernel.*
+
+- [ ] [044] **The Partition:** Define GDT User Code (64-bit) and User Data segments (Ring 3).
+- [ ] [045] **The TSS:** Setup the Task State Segment and load the Task Register (TR).
+- [ ] [046] **The Hotline:** Enable the `syscall` instruction via EFER MSR.
+- [ ] [047] **The Handler:** Implement the `syscall_handler` assembly stub (save/restore regs).
+- [ ] [048] **The Bridge:** Write the Rust `handle_syscall()` dispatcher.
+- [ ] [049] **The Drop:** Craft a `TrapFrame` to manually switch CPU ring from 0 to 3.
+- [ ] [050] **First Contact:** Successfully execute a trivial instruction (like `nop`) in Ring 3.
+- [ ] [051] **The Call:** Execute a `syscall` from Ring 3 and return to Ring 3 safely.
+- [ ] [052] **The Payload:** Load a raw binary from memory and run it as a user process.
+
+## 💾 Rank VII: The Vault (Storage & Files)
+
+*Focus: Persistence. We need to read files.*
+
+- [ ] [053] **The Disk:** Detect the hard drive (start with RAMDisk or VirtIO-BLK).
+- [ ] [054] **The Block:** Read a raw sector (512 bytes) from the disk.
+- [ ] [055] **The Structure:** Define a simple TAR or FAT32 filesystem parser.
+- [ ] [056] **The Listing:** Implement `ls` to list files in the root directory.
+- [ ] [057] **The Reader:** Implement `cat` to print file contents to the screen.
+- [ ] [058] **The Loader:** Update the process manager to load ELF files from disk.
