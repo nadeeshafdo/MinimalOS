@@ -61,6 +61,7 @@ impl IretqFrame {
 /// # Safety
 /// * The frame must describe a valid, mapped user-mode environment.
 /// * This function never returns.
+#[allow(dead_code)]
 pub unsafe fn jump_to_ring3(frame: &IretqFrame) -> ! {
     unsafe {
         asm!(
@@ -75,6 +76,32 @@ pub unsafe fn jump_to_ring3(frame: &IretqFrame) -> ! {
             rflags  = in(reg) frame.rflags,
             cs      = in(reg) frame.cs,
             rip     = in(reg) frame.rip,
+            options(noreturn),
+        );
+    }
+}
+
+/// [071] Like `jump_to_ring3`, but also sets RDI and RSI so the
+/// user `_start(arg0, arg1)` receives arguments.
+///
+/// # Safety
+/// Same requirements as `jump_to_ring3`.
+pub unsafe fn jump_to_ring3_with_args(frame: &IretqFrame, arg0: u64, arg1: u64) -> ! {
+    unsafe {
+        asm!(
+            "push {ss}",
+            "push {rsp}",
+            "push {rflags}",
+            "push {cs}",
+            "push {rip}",
+            "iretq",
+            ss      = in(reg) frame.ss,
+            rsp     = in(reg) frame.rsp,
+            rflags  = in(reg) frame.rflags,
+            cs      = in(reg) frame.cs,
+            rip     = in(reg) frame.rip,
+            in("rdi") arg0,
+            in("rsi") arg1,
             options(noreturn),
         );
     }
