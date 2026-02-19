@@ -649,18 +649,23 @@ pub fn spawn_from_ramdisk(path: &str, args: &str) -> Result<u64, &'static str> {
 
 	// Allocate a unique user stack for this process.
 	// Use PID-based offset to avoid collisions: 0x80_0000 + pid * 0x10000
+	// Allocate 8 pages (32 KiB) to support shell structures (History ~4 KiB, etc.)
+	const USER_STACK_PAGES: u64 = 8;
 	let pid_for_stack = NEXT_PID.load(Ordering::Relaxed);
 	let user_stack_base = 0x80_0000u64 + pid_for_stack * 0x1_0000;
-	let user_stack_phys = crate::memory::pmm::alloc_frame()
-		.ok_or("out of physical memory for user stack")?;
-	unsafe {
-		crate::memory::paging::map_page(
-			user_stack_base,
-			user_stack_phys,
-			crate::memory::paging::PageFlags::USER_RW,
-		);
+	for i in 0..USER_STACK_PAGES {
+		let page_virt = user_stack_base + i * 4096;
+		let page_phys = crate::memory::pmm::alloc_frame()
+			.ok_or("out of physical memory for user stack")?;
+		unsafe {
+			crate::memory::paging::map_page(
+				page_virt,
+				page_phys,
+				crate::memory::paging::PageFlags::USER_RW,
+			);
+		}
 	}
-	let user_rsp = user_stack_base + 4096;
+	let user_rsp = user_stack_base + USER_STACK_PAGES * 4096;
 
 	let mut proc = Process::new(path, cr3, elf.entry, user_rsp);
 
