@@ -122,11 +122,53 @@
 - [x] [068] **The Keyboard:** Buffer keyboard input in the kernel and implement `sys_read(STDIN)`.
 - [x] [069] **The Shell:** Create `user/shell` that reads keyboard input and spawns programs found on disk.
 
-## 🕸️ Rank IX: The Network (Data & Buses)
+## ✅ Rank IX: The Network (Data & Buses)
 
 *Focus: Moving data between processes and hardware.*
 
-- [ ] [070] **The Pipe:** Implement an IPC Pipe (one writer, one reader).
-- [ ] [071] **The Arg:** Pass command line arguments (`argv`) to new processes.
-- [ ] [072] **The Clock:** Implement `sys_time()` and `sys_sleep()`.
-- [ ] [073] **The Lock:** Implement user-mode synchronization (Mutex/Futex).
+- [x] [070] **The Pipe:** Implement an IPC Pipe (one writer, one reader).
+- [x] [071] **The Arg:** Pass command line arguments (`argv`) to new processes.
+- [x] [072] **The Clock:** Implement `sys_time()` and `sys_sleep()`.
+- [x] [073] **The Lock:** Implement user-mode synchronization (Mutex/Futex).
+
+---
+
+## 🖱️ Rank X: The Human (Input & Events)
+
+*Focus: You can't use a GUI with just a keyboard.*
+
+- [ ] [074] **The Upgrade:** Rewrite Keyboard driver using `pc-keyboard` (State Machine).
+- [ ] [075] **The Mouse:** Initialize PS/2 Mouse (enable IRQ12).
+- [ ] [076] **The Packet:** Decode the 3-byte Mouse Packet (dx, dy, buttons).
+- [ ] [077] **The Cursor:** Draw a software cursor sprite on the Framebuffer (XOR paint).
+- [ ] [078] **The Event:** Create a kernel `EventBuffer` (Keyboard + Mouse events).
+- [ ] [079] **The Feed:** Implement `sys_read` to let User apps read the EventBuffer.
+
+## 🖼️ Rank XI: The Compositor (Display Server)
+
+*Focus: The visual finish line. Drawing windows.*
+
+- [ ] [080] **The Map:** Implement `sys_mmap` to share Framebuffer memory with User Mode.
+- [ ] [081] **The Blit:** Write a fast memory copy routine (SIMD optimized) for rects.
+- [ ] [082] **The Surface:** Define a `Window` struct (ID, x, y, width, height, buffer).
+- [ ] [083] **The Server:** Create `user/display_server` process.
+- [ ] [084] **The Client:** Create a shared memory protocol (Window creation requests).
+- [ ] [085] **The Loop:** Render multiple windows back-to-front (Painter's Algorithm).
+- [ ] [086] **The Clip:** Implement "Dirty Rectangles" (only redraw what changed).
+- [ ] [087] **The Drag:** Bind Mouse Events to Window coordinates (move windows).
+- [ ] [088] **The End:** Run `display_server` launching two windows: a Terminal and a Clock.
+
+---
+
+## 🔮 Rank XII: The Production (The Long Haul)
+
+*Focus: Making it "Fail-Safe" and "General Purpose".*
+
+- [ ] [089] **The Cores:** Enable SMP (Start up APIC on secondary CPUs).
+- [ ] [090] **The Lock:** Rewrite kernel with Spinlocks/Mutexes for thread safety.
+- [ ] [091] **The Drive:** Write an AHCI or NVMe driver (Real Persistence).
+- [ ] [092] **The Write:** Implement FAT32 or Ext2 Write support.
+- [ ] [093] **The Net:** Write an Intel E1000 or VirtIO-Net driver.
+- [ ] [094] **The Stack:** Port a TCP/IP stack (smoltcp).
+- [ ] [095] **The Lib:** Port a C Library (relibc or newlib).
+- [ ] [096] **The Self:** Compile MinimalOS *inside* MinimalOS (Self-Hosting).
