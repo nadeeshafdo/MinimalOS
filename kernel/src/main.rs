@@ -180,6 +180,11 @@ unsafe extern "C" fn _start() -> ! {
 	let apic_id = khal::apic::init(hhdm_offset);
 	klog::info!("[023] Local APIC enabled (ID: {})", apic_id);
 
+	// Map and initialise the I/O APIC (routes external IRQs to the Local APIC).
+	unsafe { memory::map_apic_mmio(hhdm_offset, khal::ioapic::IOAPIC_PHYS_BASE); }
+	let (ioapic_id, ioapic_pins) = khal::ioapic::init(hhdm_offset);
+	klog::info!("I/O APIC enabled (ID: {}, {} pins)", ioapic_id, ioapic_pins);
+
 	// [024] The Heartbeat - Enable the Local APIC Timer
 	klog::debug!("Enabling APIC timer...");
 	khal::apic::enable_timer(
