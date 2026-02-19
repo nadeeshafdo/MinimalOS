@@ -228,6 +228,10 @@ pub mod nr {
 	pub const SYS_FUTEX: u64 = 11;
 	/// `sys_read_event(buf_ptr)` — read next input event (12 bytes).
 	pub const SYS_READ_EVENT: u64 = 12;
+	/// `sys_list(buf_ptr, buf_len)` — list ramdisk filenames into buffer.
+	pub const SYS_LIST: u64 = 13;
+	/// `sys_print(msg_ptr, msg_len)` — write raw text to serial + framebuffer.
+	pub const SYS_PRINT: u64 = 14;
 }
 
 /// Rust syscall dispatcher — called from the assembly stub.
@@ -409,6 +413,53 @@ unsafe extern "C" fn syscall_dispatch(
 				return u64::MAX;
 			}
 			unsafe { crate::task::events::read_event_to_user(buf_ptr) as u64 }
+		}
+		nr::SYS_LIST => {
+			// a0 = buf_ptr, a1 = buf_len
+			// Write newline-separated ramdisk filenames to user buffer.
+			let buf_ptr = a0 as *mut u8;
+			let buf_len = a1 as usize;
+			if buf_ptr.is_null() || buf_len == 0 || buf_len > 4096 {
+				return u64::MAX;
+			}
+			let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, buf_len) };
+			let ramdisk = match crate::fs::ramdisk::get() {
+				Some(rd) => rd,
+				None => return u64::MAX,
+			};
+			let iter = unsafe { crate::fs::tar::TarIter::new(ramdisk) };
+			let mut pos = 0;
+			for entry in iter {
+				let name = entry.name.strip_prefix("./").unwrap_or(entry.name);
+				if name.is_empty() || name == "." {
+					continue;
+				}
+				let name_bytes = name.as_bytes();
+				let needed = name_bytes.len() + 1;
+				if pos + needed > buf_len {
+					break;
+				}
+				buf[pos..pos + name_bytes.len()].copy_from_slice(name_bytes);
+				pos += name_bytes.len();
+				buf[pos] = b'\n';
+				pos += 1;
+			}
+			pos as u64
+		}
+		nr::SYS_PRINT => {
+			// a0 = pointer to UTF-8 string, a1 = length
+			// Write raw text to serial AND framebuffer (no prefix/formatting).
+			let ptr = a0 as *const u8;
+			let len = a1 as usize;
+			if !ptr.is_null() && len > 0 && len <= 4096 {
+				let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+				if let Ok(msg) = core::str::from_utf8(slice) {
+					khal::serial::write_str(msg);
+					kdisplay::console_write_fmt(format_args!("{}", msg));
+					return 0;
+				}
+			}
+			u64::MAX
 		}
 		_ => {
 			klog::warn!("[syscall] unknown syscall nr={}", nr);
