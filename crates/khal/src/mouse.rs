@@ -16,15 +16,9 @@ const PS2_DATA: u16 = 0x60;
 const PS2_STATUS: u16 = 0x64;
 const PS2_COMMAND: u16 = 0x64;
 
-// ── PIC constants (IRQ12 = mouse) ─────────────────────────────────
-
-const PIC1_DATA: u16 = 0x21;
-const PIC2_DATA: u16 = 0xA1;
-const PIC2_COMMAND: u16 = 0xA0;
-const PIC1_COMMAND: u16 = 0x20;
-const PIC_EOI: u8 = 0x20;
-
-/// IRQ vector for the mouse (PIC2 base 40 + IRQ4 = 44).
+/// IRQ number for the mouse on the I/O APIC.
+pub const MOUSE_IRQ: u8 = 12;
+/// IDT vector for the mouse interrupt (IRQ12 → vector 44).
 pub const MOUSE_VECTOR: u8 = 44;
 
 // ── Mouse button flags ────────────────────────────────────────────
@@ -181,23 +175,12 @@ pub fn init() {
 
 /// Enable IRQ12 in the legacy PIC (unmask PIC2 bit 4 and PIC1 cascade).
 pub fn enable_irq() {
-	unsafe {
-		// Unmask IRQ2 on PIC1 (cascade line to PIC2).
-		let mask1 = inb(PIC1_DATA);
-		outb(PIC1_DATA, mask1 & !0x04);
-
-		// Unmask IRQ12 on PIC2 (IRQ12 = bit 4 of PIC2).
-		let mask2 = inb(PIC2_DATA);
-		outb(PIC2_DATA, mask2 & !0x10);
-	}
+	crate::ioapic::enable_irq(MOUSE_IRQ, MOUSE_VECTOR);
 }
 
 /// Send End-of-Interrupt for IRQ12 (must EOI both PIC2 and PIC1).
 pub fn send_eoi() {
-	unsafe {
-		outb(PIC2_COMMAND, PIC_EOI);
-		outb(PIC1_COMMAND, PIC_EOI);
-	}
+	crate::apic::eoi();
 }
 
 /// Read a byte from the PS/2 data port (for use in the IRQ handler).
