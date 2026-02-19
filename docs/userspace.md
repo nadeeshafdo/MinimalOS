@@ -15,21 +15,21 @@ ramdisk, and loaded by the kernel at boot time or on demand via `sys_spawn`.
 
 ```
 ┌──────────────────────────────────────────────┐
-│                  User Mode (Ring 3)          │
-│                                              │
-│   init.elf          shell.elf                │
-│   (PID 1)           (PID 2)                  │
-│                                              │
-│   0x400000          0x500000                 │
-│   ────────          ────────                 │
-│   Spawns shell,     Interactive prompt,      │
-│   loops yielding    reads keyboard,          │
-│                     spawns programs           │
+│				  User Mode (Ring 3)		  │
+│											  │
+│   init.elf		  shell.elf				│
+│   (PID 1)		   (PID 2)				  │
+│											  │
+│   0x400000		  0x500000				 │
+│   ────────		  ────────				 │
+│   Spawns shell,	 Interactive prompt,	  │
+│   loops yielding	reads keyboard,		  │
+│					 spawns programs		   │
 ├──────────────────────────────────────────────┤
-│              syscall / sysret                │
+│			  syscall / sysret				│
 ├──────────────────────────────────────────────┤
-│               Kernel (Ring 0)                │
-│                                              │
+│			   Kernel (Ring 0)				│
+│											  │
 │   Scheduler · Memory · Filesystem · Drivers  │
 └──────────────────────────────────────────────┘
 ```
@@ -47,9 +47,9 @@ user/
 │   ├── build.rs
 │   └── src/main.rs
 └── shell/
-    ├── Cargo.toml
-    ├── build.rs
-    └── src/main.rs
+	├── Cargo.toml
+	├── build.rs
+	└── src/main.rs
 ```
 
 ### Cargo.toml
@@ -70,8 +70,8 @@ Each user crate has a `build.rs` that configures the linker script:
 
 ```rust
 fn main() {
-    println!("cargo:rustc-link-arg=-Tbuild/linker-shell.ld");
-    println!("cargo:rerun-if-changed=build/linker-shell.ld");
+	println!("cargo:rustc-link-arg=-Tbuild/linker-shell.ld");
+	println!("cargo:rerun-if-changed=build/linker-shell.ld");
 }
 ```
 
@@ -89,9 +89,9 @@ that differs from the kernel target:
 The Makefile builds user programs automatically:
 
 ```bash
-make user-init    # Build init
+make user-init	# Build init
 make user-shell   # Build shell
-make kernel       # Builds both user programs first, then the kernel
+make kernel	   # Builds both user programs first, then the kernel
 ```
 
 ### RAMDisk Packaging
@@ -124,9 +124,9 @@ is minimal:
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    sys_log("[init] Starting...\n");
-    sys_spawn("shell.elf");
-    loop { sys_yield(); }
+	sys_log("[init] Starting...\n");
+	sys_spawn("shell.elf");
+	loop { sys_yield(); }
 }
 ```
 
@@ -160,12 +160,12 @@ The shell uses a polling pattern for keyboard input:
 
 ```rust
 loop {
-    let n = sys_read(0, &mut buf, 1);
-    if n == 0 {
-        sys_yield();  // No input — yield CPU
-        continue;
-    }
-    // Process the character...
+	let n = sys_read(0, &mut buf, 1);
+	if n == 0 {
+		sys_yield();  // No input — yield CPU
+		continue;
+	}
+	// Process the character...
 }
 ```
 
@@ -236,10 +236,10 @@ pub struct TarIter<'a> { ... }
 
 /// A single TAR entry.
 pub struct TarEntry<'a> {
-    pub name: &'a str,
-    pub size: usize,
-    pub typeflag: u8,
-    pub data: &'a [u8],
+	pub name: &'a str,
+	pub size: usize,
+	pub typeflag: u8,
+	pub data: &'a [u8],
 }
 
 /// Find a file by name.
@@ -262,17 +262,17 @@ pub fn get() -> Option<&'static RamDisk>
 
 ```
 0x0000_0000_0040_0000  ┌──────────────────┐
-                       │   init.elf        │  .text, .rodata, .data, .bss
+					   │   init.elf		│  .text, .rodata, .data, .bss
 0x0000_0000_0050_0000  ├──────────────────┤
-                       │   shell.elf       │  .text, .rodata, .data, .bss
-                       ├──────────────────┤
-                       │   (unmapped)      │
+					   │   shell.elf	   │  .text, .rodata, .data, .bss
+					   ├──────────────────┤
+					   │   (unmapped)	  │
 0x0000_0000_0080_0000  ├──────────────────┤
-                       │   User stacks     │  4 KiB per process
-                       │   PID 1: 0x800000 │  (grows downward)
-                       │   PID 2: 0x810000 │
-                       │   ...             │
-                       └──────────────────┘
+					   │   User stacks	 │  4 KiB per process
+					   │   PID 1: 0x800000 │  (grows downward)
+					   │   PID 2: 0x810000 │
+					   │   ...			 │
+					   └──────────────────┘
 ```
 
 ## Writing a New User Program
@@ -296,13 +296,13 @@ pub fn get() -> Option<&'static RamDisk>
 
    #[no_mangle]
    pub extern "C" fn _start() -> ! {
-       // Your code here — use syscalls for I/O
-       loop { /* sys_yield() */ }
+	   // Your code here — use syscalls for I/O
+	   loop { /* sys_yield() */ }
    }
 
    #[panic_handler]
    fn panic(_: &core::panic::PanicInfo) -> ! {
-       loop {}
+	   loop {}
    }
    ```
 

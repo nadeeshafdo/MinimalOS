@@ -7,5 +7,5 @@ build-std-features = ["compiler-builtins-mem"]
 
 [target.'cfg(target_os = "none")']
 rustflags = [
-    "-C", "relocation-model=static",
+	"-C", "relocation-model=static",
 ]

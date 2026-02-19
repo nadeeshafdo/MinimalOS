@@ -5,29 +5,29 @@ ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x500000;
+	. = 0x500000;
 
-    .text : {
-        *(.text._start)   /* _start first */
-        *(.text .text.*)
-    }
+	.text : {
+		*(.text._start)   /* _start first */
+		*(.text .text.*)
+	}
 
-    .rodata : {
-        *(.rodata .rodata.*)
-    }
+	.rodata : {
+		*(.rodata .rodata.*)
+	}
 
-    .data : {
-        *(.data .data.*)
-    }
+	.data : {
+		*(.data .data.*)
+	}
 
-    .bss : {
-        *(.bss .bss.*)
-        *(COMMON)
-    }
+	.bss : {
+		*(.bss .bss.*)
+		*(COMMON)
+	}
 
-    /DISCARD/ : {
-        *(.eh_frame)
-        *(.note .note.*)
-        *(.comment)
-    }
+	/DISCARD/ : {
+		*(.eh_frame)
+		*(.note .note.*)
+		*(.comment)
+	}
 }

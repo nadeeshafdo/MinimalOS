@@ -41,22 +41,22 @@ make run</pre>
 <h2 style="font-size:1.1rem;font-weight:600;margin:2.2em 0 0.7em 0;">Development Roadmap</h2>
 <table style="width:100%;border-collapse:collapse;font-size:0.98em;">
   <thead>
-    <tr style="border-bottom:1px solid var(--border);">
-      <th style="text-align:left;padding:0.3em 0.5em 0.3em 0;">Rank</th>
-      <th style="text-align:left;padding:0.3em 0.5em;">Focus</th>
-      <th style="text-align:left;padding:0.3em 0.5em;">Status</th>
-    </tr>
+	<tr style="border-bottom:1px solid var(--border);">
+	  <th style="text-align:left;padding:0.3em 0.5em 0.3em 0;">Rank</th>
+	  <th style="text-align:left;padding:0.3em 0.5em;">Focus</th>
+	  <th style="text-align:left;padding:0.3em 0.5em;">Status</th>
+	</tr>
   </thead>
   <tbody>
-    <tr><td>I</td><td>The Awakening — Boot & Basics</td><td>Complete</td></tr>
-    <tr><td>II</td><td>The Artist — Graphics & Output</td><td>Complete</td></tr>
-    <tr><td>III</td><td>The Reflexes — Interrupts & CPU</td><td>Complete</td></tr>
-    <tr><td>IV</td><td>The Mind — Memory Management</td><td>Complete</td></tr>
-    <tr><td>V</td><td>The Senses — Input & Drivers</td><td>Complete</td></tr>
-    <tr><td>VI</td><td>The Barrier — User Mode & Syscalls</td><td>Complete</td></tr>
-    <tr><td>VII</td><td>The Vault — Storage & Files</td><td>Complete</td></tr>
-    <tr><td>VIII</td><td>The Conductor — Multitasking & IPC</td><td>Complete</td></tr>
-    <tr><td>IX</td><td>The Network — Data & Buses</td><td>Next</td></tr>
+	<tr><td>I</td><td>The Awakening — Boot & Basics</td><td>Complete</td></tr>
+	<tr><td>II</td><td>The Artist — Graphics & Output</td><td>Complete</td></tr>
+	<tr><td>III</td><td>The Reflexes — Interrupts & CPU</td><td>Complete</td></tr>
+	<tr><td>IV</td><td>The Mind — Memory Management</td><td>Complete</td></tr>
+	<tr><td>V</td><td>The Senses — Input & Drivers</td><td>Complete</td></tr>
+	<tr><td>VI</td><td>The Barrier — User Mode & Syscalls</td><td>Complete</td></tr>
+	<tr><td>VII</td><td>The Vault — Storage & Files</td><td>Complete</td></tr>
+	<tr><td>VIII</td><td>The Conductor — Multitasking & IPC</td><td>Complete</td></tr>
+	<tr><td>IX</td><td>The Network — Data & Buses</td><td>Next</td></tr>
   </tbody>
 </table>
 <div style="font-size:0.93em;color:var(--text-muted);margin:0.7em 0 1.5em 0;">

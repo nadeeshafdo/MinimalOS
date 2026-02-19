@@ -54,20 +54,20 @@ make run
 make iso
   │
   ├─ make user-init
-  │    └─ cargo build --package init --target build/target-user.json
+  │	└─ cargo build --package init --target build/target-user.json
   │
   ├─ make user-shell
-  │    └─ cargo build --package shell --target build/target-user.json
+  │	└─ cargo build --package shell --target build/target-user.json
   │
   ├─ make kernel
-  │    └─ cargo build --package minimalos_kernel --target build/target-kernel.json
+  │	└─ cargo build --package minimalos_kernel --target build/target-kernel.json
   │
   ├─ make ramdisk
-  │    ├─ cp init.elf, shell.elf → ramdisk/
-  │    └─ tar cf ramdisk.tar -C ramdisk .
+  │	├─ cp init.elf, shell.elf → ramdisk/
+  │	└─ tar cf ramdisk.tar -C ramdisk .
   │
   ├─ make limine
-  │    └─ git clone limine (v8.x-binary)
+  │	└─ git clone limine (v8.x-binary)
   │
   └─ xorriso → build/dist/minimalos.iso
 ```
@@ -76,67 +76,67 @@ make iso
 
 ```
 MinimalOS/
-├── Cargo.toml                  # Workspace root
-├── Makefile                    # Build orchestration
-├── limine.conf                 # Bootloader configuration
-├── rust-toolchain.toml         # Pinned Rust nightly toolchain
-├── QUESTS.md                   # Achievement-based development tracker
+├── Cargo.toml				  # Workspace root
+├── Makefile					# Build orchestration
+├── limine.conf				 # Bootloader configuration
+├── rust-toolchain.toml		 # Pinned Rust nightly toolchain
+├── QUESTS.md				   # Achievement-based development tracker
 │
 ├── build/
-│   ├── linker.ld               # Kernel linker script (0xFFFFFFFF80000000)
-│   ├── linker-shell.ld         # Shell linker script (0x500000)
-│   ├── target-kernel.json      # Custom Rust target for kernel
-│   └── target-user.json        # Custom Rust target for userspace
+│   ├── linker.ld			   # Kernel linker script (0xFFFFFFFF80000000)
+│   ├── linker-shell.ld		 # Shell linker script (0x500000)
+│   ├── target-kernel.json	  # Custom Rust target for kernel
+│   └── target-user.json		# Custom Rust target for userspace
 │
-├── kernel/                     # Kernel binary crate
+├── kernel/					 # Kernel binary crate
 │   ├── Cargo.toml
 │   ├── build.rs
 │   └── src/
-│       ├── main.rs             # Entry point (_start), boot sequence
-│       ├── arch/               # x86_64 architecture code
-│       │   ├── mod.rs
-│       │   ├── gdt.rs          # Global Descriptor Table
-│       │   ├── tss.rs          # Task State Segment
-│       │   ├── idt.rs          # IDT structures
-│       │   └── syscall.rs      # syscall/sysret MSR setup, dispatcher
-│       ├── memory/             # Memory management
-│       │   ├── mod.rs          # Census, APIC MMIO mapping
-│       │   ├── pmm.rs          # Bitmap physical frame allocator
-│       │   ├── paging.rs       # 4-level page table management
-│       │   └── heap.rs         # Linked-list kernel heap (GlobalAlloc)
-│       ├── task/               # Process management
-│       │   ├── mod.rs
-│       │   ├── process.rs      # PCB, scheduler, context_switch_asm
-│       │   ├── input.rs        # Keyboard ring buffer (256 bytes)
-│       │   └── usermode.rs     # Ring 3 transition helpers
-│       ├── traps/              # Interrupt handling
-│       │   ├── mod.rs
-│       │   ├── idt.rs          # IDT init, IST configuration
-│       │   └── handlers.rs     # Exception + IRQ handlers
-│       └── fs/                 # Filesystem
-│           ├── mod.rs
-│           ├── tar.rs          # USTAR tar parser
-│           ├── elf.rs          # ELF64 parser + loader
-│           └── ramdisk.rs      # Global ramdisk storage
+│	   ├── main.rs			 # Entry point (_start), boot sequence
+│	   ├── arch/			   # x86_64 architecture code
+│	   │   ├── mod.rs
+│	   │   ├── gdt.rs		  # Global Descriptor Table
+│	   │   ├── tss.rs		  # Task State Segment
+│	   │   ├── idt.rs		  # IDT structures
+│	   │   └── syscall.rs	  # syscall/sysret MSR setup, dispatcher
+│	   ├── memory/			 # Memory management
+│	   │   ├── mod.rs		  # Census, APIC MMIO mapping
+│	   │   ├── pmm.rs		  # Bitmap physical frame allocator
+│	   │   ├── paging.rs	   # 4-level page table management
+│	   │   └── heap.rs		 # Linked-list kernel heap (GlobalAlloc)
+│	   ├── task/			   # Process management
+│	   │   ├── mod.rs
+│	   │   ├── process.rs	  # PCB, scheduler, context_switch_asm
+│	   │   ├── input.rs		# Keyboard ring buffer (256 bytes)
+│	   │   └── usermode.rs	 # Ring 3 transition helpers
+│	   ├── traps/			  # Interrupt handling
+│	   │   ├── mod.rs
+│	   │   ├── idt.rs		  # IDT init, IST configuration
+│	   │   └── handlers.rs	 # Exception + IRQ handlers
+│	   └── fs/				 # Filesystem
+│		   ├── mod.rs
+│		   ├── tar.rs		  # USTAR tar parser
+│		   ├── elf.rs		  # ELF64 parser + loader
+│		   └── ramdisk.rs	  # Global ramdisk storage
 │
-├── crates/                     # Kernel-space libraries (no_std)
-│   ├── kdisplay/               # Framebuffer graphics + text console
-│   ├── khal/                   # HAL: ports, PIC, APIC, keyboard, serial
-│   └── klog/                   # Serial logging (COM1)
+├── crates/					 # Kernel-space libraries (no_std)
+│   ├── kdisplay/			   # Framebuffer graphics + text console
+│   ├── khal/				   # HAL: ports, PIC, APIC, keyboard, serial
+│   └── klog/				   # Serial logging (COM1)
 │
 ├── sdk/
-│   └── sys/                    # Shared types (kernel ↔ userspace)
+│   └── sys/					# Shared types (kernel ↔ userspace)
 │
-├── user/                       # User-mode programs (no_std)
-│   ├── init/                   # First user process (spawns shell)
-│   └── shell/                  # Interactive command shell
+├── user/					   # User-mode programs (no_std)
+│   ├── init/				   # First user process (spawns shell)
+│   └── shell/				  # Interactive command shell
 │
-├── ramdisk/                    # Files packaged into ramdisk.tar
-│   ├── hello.txt               # Test file
-│   ├── init.elf                # (built by make)
-│   └── shell.elf               # (built by make)
+├── ramdisk/					# Files packaged into ramdisk.tar
+│   ├── hello.txt			   # Test file
+│   ├── init.elf				# (built by make)
+│   └── shell.elf			   # (built by make)
 │
-└── docs/                       # Documentation (GitHub Pages)
+└── docs/					   # Documentation (GitHub Pages)
 ```
 
 ## Workspace Crates
@@ -199,11 +199,11 @@ For CI or scripted testing:
 ```bash
 make iso
 timeout 30 qemu-system-x86_64 \
-    -M q35 -m 2G \
-    -cdrom build/dist/minimalos.iso \
-    -serial file:/tmp/serial.log \
-    -display none \
-    -no-reboot
+	-M q35 -m 2G \
+	-cdrom build/dist/minimalos.iso \
+	-serial file:/tmp/serial.log \
+	-display none \
+	-no-reboot
 
 cat /tmp/serial.log
 ```

@@ -81,16 +81,16 @@ should include one if desired.
 
 ```rust
 fn sys_log(msg: &str) {
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 0u64,
-            in("rdi") msg.as_ptr() as u64,
-            in("rsi") msg.len() as u64,
-            out("rcx") _,
-            out("r11") _,
-        );
-    }
+	unsafe {
+		core::arch::asm!(
+			"syscall",
+			in("rax") 0u64,
+			in("rdi") msg.as_ptr() as u64,
+			in("rsi") msg.len() as u64,
+			out("rcx") _,
+			out("r11") _,
+		);
+	}
 }
 
 sys_log("Hello from userspace!\n");
@@ -124,16 +124,16 @@ Does not return.
 
 ```rust
 fn sys_exit(code: u64) -> ! {
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 1u64,
-            in("rdi") code,
-            out("rcx") _,
-            out("r11") _,
-            options(noreturn),
-        );
-    }
+	unsafe {
+		core::arch::asm!(
+			"syscall",
+			in("rax") 1u64,
+			in("rdi") code,
+			out("rcx") _,
+			out("r11") _,
+			options(noreturn),
+		);
+	}
 }
 ```
 
@@ -161,14 +161,14 @@ re-scheduled.
 
 ```rust
 fn sys_yield() {
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 2u64,
-            out("rcx") _,
-            out("r11") _,
-        );
-    }
+	unsafe {
+		core::arch::asm!(
+			"syscall",
+			in("rax") 2u64,
+			out("rcx") _,
+			out("r11") _,
+		);
+	}
 }
 ```
 
@@ -207,19 +207,19 @@ fn sys_yield() {
 
 ```rust
 fn sys_spawn(name: &str) -> u64 {
-    let pid: u64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 3u64,
-            in("rdi") name.as_ptr() as u64,
-            in("rsi") name.len() as u64,
-            lateout("rax") pid,
-            out("rcx") _,
-            out("r11") _,
-        );
-    }
-    pid
+	let pid: u64;
+	unsafe {
+		core::arch::asm!(
+			"syscall",
+			in("rax") 3u64,
+			in("rdi") name.as_ptr() as u64,
+			in("rsi") name.len() as u64,
+			lateout("rax") pid,
+			out("rcx") _,
+			out("r11") _,
+		);
+	}
+	pid
 }
 ```
 
@@ -261,20 +261,20 @@ wait for keyboard input without busy-waiting.
 
 ```rust
 fn sys_read(fd: u64, buf: &mut [u8]) -> u64 {
-    let count: u64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 4u64,
-            in("rdi") fd,
-            in("rsi") buf.as_mut_ptr() as u64,
-            in("rdx") buf.len() as u64,
-            lateout("rax") count,
-            out("rcx") _,
-            out("r11") _,
-        );
-    }
-    count
+	let count: u64;
+	unsafe {
+		core::arch::asm!(
+			"syscall",
+			in("rax") 4u64,
+			in("rdi") fd,
+			in("rsi") buf.as_mut_ptr() as u64,
+			in("rdx") buf.len() as u64,
+			lateout("rax") count,
+			out("rcx") _,
+			out("r11") _,
+		);
+	}
+	count
 }
 ```
 
@@ -287,8 +287,8 @@ fn sys_read(fd: u64, buf: &mut [u8]) -> u64 {
 The kernel maintains a 256-byte ring buffer for keyboard input:
 
 ```rust
-pub fn push(byte: u8)           // Called from keyboard IRQ handler
-pub fn pop() -> Option<u8>      // Called from SYS_READ handler
+pub fn push(byte: u8)		   // Called from keyboard IRQ handler
+pub fn pop() -> Option<u8>	  // Called from SYS_READ handler
 ```
 
 The buffer uses `head` and `tail` indices protected by a spinlock.

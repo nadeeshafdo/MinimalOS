@@ -14,13 +14,13 @@ static RAMDISK: Once<RamDisk> = Once::new();
 /// # Safety
 /// The `base` pointer must remain valid for the kernel's lifetime.
 pub unsafe fn init(base: *const u8, size: usize) {
-    RAMDISK.call_once(|| unsafe { RamDisk::new(base, size) });
-    klog::debug!("Global ramdisk stored ({} bytes)", size);
+	RAMDISK.call_once(|| unsafe { RamDisk::new(base, size) });
+	klog::debug!("Global ramdisk stored ({} bytes)", size);
 }
 
 /// Get a reference to the global ramdisk.
 ///
 /// Returns `None` if `init()` has not been called yet.
 pub fn get() -> Option<&'static RamDisk> {
-    RAMDISK.get()
+	RAMDISK.get()
 }

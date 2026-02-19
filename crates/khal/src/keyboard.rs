@@ -33,43 +33,43 @@ pub const KEYBOARD_VECTOR: u8 = 33;
 /// Whether a key was pressed or released.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyState {
-    Pressed,
-    Released,
+	Pressed,
+	Released,
 }
 
 /// A decoded key — either a Unicode character or a raw keycode.
 #[derive(Debug, Clone, Copy)]
 pub enum KeyKind {
-    /// Printable character (affected by Shift / CapsLock).
-    Char(char),
-    /// Non-printable key (arrows, F-keys, modifiers, etc.).
-    Raw(KeyCode),
+	/// Printable character (affected by Shift / CapsLock).
+	Char(char),
+	/// Non-printable key (arrows, F-keys, modifiers, etc.).
+	Raw(KeyCode),
 }
 
 /// [074] A structured keyboard event carrying press/release state,
 /// the decoded key, and the originating scancode byte.
 #[derive(Debug, Clone, Copy)]
 pub struct KeyEvent {
-    pub state: KeyState,
-    pub key: KeyKind,
-    pub scancode: u8,
+	pub state: KeyState,
+	pub key: KeyKind,
+	pub scancode: u8,
 }
 
 // ── Global keyboard state machine ─────────────────────────────────
 
 static KEYBOARD: Mutex<Option<Keyboard<layouts::Us104Key, ScancodeSet1>>> =
-    Mutex::new(None);
+	Mutex::new(None);
 
 /// Initialise the keyboard state machine.
 ///
 /// Must be called once before [`handle_scancode()`].
 pub fn init() {
-    let kb = Keyboard::new(
-        ScancodeSet1::new(),
-        layouts::Us104Key,
-        HandleControl::MapLettersToUnicode,
-    );
-    *KEYBOARD.lock() = Some(kb);
+	let kb = Keyboard::new(
+		ScancodeSet1::new(),
+		layouts::Us104Key,
+		HandleControl::MapLettersToUnicode,
+	);
+	*KEYBOARD.lock() = Some(kb);
 }
 
 /// [074] Feed a raw scancode and return a structured `KeyEvent`.
@@ -78,38 +78,38 @@ pub fn init() {
 /// the state machine can decode.  This is richer than [`handle_scancode`]
 /// which only returns characters on press.
 pub fn handle_scancode_event(scancode: u8) -> Option<KeyEvent> {
-    let mut guard = KEYBOARD.lock();
-    let kb = guard.as_mut()?;
+	let mut guard = KEYBOARD.lock();
+	let kb = guard.as_mut()?;
 
-    if let Ok(Some(event)) = kb.add_byte(scancode) {
-        let state = match event.state {
-            pc_keyboard::KeyState::Down => KeyState::Pressed,
-            pc_keyboard::KeyState::Up => KeyState::Released,
-            _ => return None,
-        };
+	if let Ok(Some(event)) = kb.add_byte(scancode) {
+		let state = match event.state {
+			pc_keyboard::KeyState::Down => KeyState::Pressed,
+			pc_keyboard::KeyState::Up => KeyState::Released,
+			_ => return None,
+		};
 
-        // Save the raw keycode before consuming the event.
-        let raw_code = event.code;
+		// Save the raw keycode before consuming the event.
+		let raw_code = event.code;
 
-        // Try to decode to a character via layout.
-        if let Some(decoded) = kb.process_keyevent(event) {
-            let key = match decoded {
-                DecodedKey::Unicode(ch) => KeyKind::Char(ch),
-                DecodedKey::RawKey(code) => KeyKind::Raw(code),
-            };
-            return Some(KeyEvent { state, key, scancode });
-        }
+		// Try to decode to a character via layout.
+		if let Some(decoded) = kb.process_keyevent(event) {
+			let key = match decoded {
+				DecodedKey::Unicode(ch) => KeyKind::Char(ch),
+				DecodedKey::RawKey(code) => KeyKind::Raw(code),
+			};
+			return Some(KeyEvent { state, key, scancode });
+		}
 
-        // Modifier-only press/release (Shift, Ctrl, etc.) —
-        // process_keyevent returns None, but we still have a code.
-        return Some(KeyEvent {
-            state,
-            key: KeyKind::Raw(raw_code),
-            scancode,
-        });
-    }
+		// Modifier-only press/release (Shift, Ctrl, etc.) —
+		// process_keyevent returns None, but we still have a code.
+		return Some(KeyEvent {
+			state,
+			key: KeyKind::Raw(raw_code),
+			scancode,
+		});
+	}
 
-    None
+	None
 }
 
 /// Feed a raw scancode byte into the state machine.
@@ -121,19 +121,19 @@ pub fn handle_scancode_event(scancode: u8) -> Option<KeyEvent> {
 /// This is the simple API kept for backward compatibility; prefer
 /// [`handle_scancode_event()`] for full event information.
 pub fn handle_scancode(scancode: u8) -> Option<char> {
-    let mut guard = KEYBOARD.lock();
-    let kb = guard.as_mut()?;
+	let mut guard = KEYBOARD.lock();
+	let kb = guard.as_mut()?;
 
-    if let Ok(Some(event)) = kb.add_byte(scancode) {
-        if let Some(key) = kb.process_keyevent(event) {
-            match key {
-                DecodedKey::Unicode(ch) => return Some(ch),
-                DecodedKey::RawKey(_) => return None,
-            }
-        }
-    }
+	if let Ok(Some(event)) = kb.add_byte(scancode) {
+		if let Some(key) = kb.process_keyevent(event) {
+			match key {
+				DecodedKey::Unicode(ch) => return Some(ch),
+				DecodedKey::RawKey(_) => return None,
+			}
+		}
+	}
 
-    None
+	None
 }
 
 // ── Low-level port helpers ────────────────────────────────────────
@@ -142,12 +142,12 @@ pub fn read_status() -> u8 { unsafe { inb(PS2_STATUS) } }
 pub fn read_scancode() -> u8 { unsafe { inb(PS2_DATA) } }
 
 pub fn enable_irq() {
-    unsafe {
-        let mask = inb(PIC1_DATA);
-        outb(PIC1_DATA, mask & !0x02);
-    }
+	unsafe {
+		let mask = inb(PIC1_DATA);
+		outb(PIC1_DATA, mask & !0x02);
+	}
 }
 
 pub fn send_eoi() {
-    unsafe { outb(PIC1_COMMAND, PIC_EOI); }
+	unsafe { outb(PIC1_COMMAND, PIC_EOI); }
 }

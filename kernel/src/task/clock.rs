@@ -11,11 +11,11 @@ static TICKS: AtomicU64 = AtomicU64::new(0);
 /// Called by the timer interrupt handler on every tick.
 #[inline]
 pub fn tick() {
-    TICKS.fetch_add(1, Ordering::Relaxed);
+	TICKS.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Return the current tick count.
 #[inline]
 pub fn now() -> u64 {
-    TICKS.load(Ordering::Relaxed)
+	TICKS.load(Ordering::Relaxed)
 }

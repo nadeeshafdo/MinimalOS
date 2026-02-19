@@ -110,9 +110,9 @@ pub fn translate(virt: u64) -> Option<u64>
 pub struct PageFlags(u64);
 
 impl PageFlags {
-    pub const KERNEL_RW: Self;   // Present + Writable
-    pub const USER_RW: Self;     // Present + Writable + User
-    pub const USER_RX: Self;     // Present + User (no write)
+	pub const KERNEL_RW: Self;   // Present + Writable
+	pub const USER_RW: Self;	 // Present + Writable + User
+	pub const USER_RX: Self;	 // Present + User (no write)
 }
 ```
 
@@ -187,8 +187,8 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-let b = Box::new(42u64);        // Heap-allocated integer
-let mut v = Vec::new();          // Dynamically-growing vector
+let b = Box::new(42u64);		// Heap-allocated integer
+let mut v = Vec::new();		  // Dynamically-growing vector
 v.push(1);
 ```
 
@@ -198,11 +198,11 @@ A typical QEMU run with 2 GiB RAM shows:
 
 ```
 Limine Memory Map:
-  Usable:          0x00000000 - 0x0009FFFF  (640 KiB)
-  Usable:          0x00100000 - 0x7FFDFFFF  (~2 GiB)
+  Usable:		  0x00000000 - 0x0009FFFF  (640 KiB)
+  Usable:		  0x00100000 - 0x7FFDFFFF  (~2 GiB)
   Reserved/ACPI:   (various)
-  Framebuffer:     (mapped by bootloader)
-  Kernel:          0xFFFFFFFF80000000+
+  Framebuffer:	 (mapped by bootloader)
+  Kernel:		  0xFFFFFFFF80000000+
 
 Total RAM:  ~2048 MiB
 Usable RAM: ~2047 MiB

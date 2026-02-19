@@ -31,9 +31,9 @@ const PIC2_OFFSET: u8 = 40;
 /// Some old hardware requires a delay between PIC commands.
 #[inline]
 fn io_wait() {
-    unsafe {
-        outb(0x80, 0);
-    }
+	unsafe {
+		outb(0x80, 0);
+	}
 }
 
 /// Remap the 8259 PIC interrupt vectors and then mask all IRQs.
@@ -45,34 +45,34 @@ fn io_wait() {
 ///
 /// This is required before enabling the APIC.
 pub fn disable() {
-    unsafe {
-        // ICW1: Begin initialization (cascade mode, ICW4 needed)
-        outb(PIC1_COMMAND, ICW1_INIT | ICW1_ICW4);
-        io_wait();
-        outb(PIC2_COMMAND, ICW1_INIT | ICW1_ICW4);
-        io_wait();
+	unsafe {
+		// ICW1: Begin initialization (cascade mode, ICW4 needed)
+		outb(PIC1_COMMAND, ICW1_INIT | ICW1_ICW4);
+		io_wait();
+		outb(PIC2_COMMAND, ICW1_INIT | ICW1_ICW4);
+		io_wait();
 
-        // ICW2: Set vector offsets
-        outb(PIC1_DATA, PIC1_OFFSET);
-        io_wait();
-        outb(PIC2_DATA, PIC2_OFFSET);
-        io_wait();
+		// ICW2: Set vector offsets
+		outb(PIC1_DATA, PIC1_OFFSET);
+		io_wait();
+		outb(PIC2_DATA, PIC2_OFFSET);
+		io_wait();
 
-        // ICW3: Tell master PIC there is a slave PIC at IRQ2 (bit 2)
-        outb(PIC1_DATA, 4);
-        io_wait();
-        // ICW3: Tell slave PIC its cascade identity (IRQ2 = 2)
-        outb(PIC2_DATA, 2);
-        io_wait();
+		// ICW3: Tell master PIC there is a slave PIC at IRQ2 (bit 2)
+		outb(PIC1_DATA, 4);
+		io_wait();
+		// ICW3: Tell slave PIC its cascade identity (IRQ2 = 2)
+		outb(PIC2_DATA, 2);
+		io_wait();
 
-        // ICW4: Set 8086 mode
-        outb(PIC1_DATA, ICW4_8086);
-        io_wait();
-        outb(PIC2_DATA, ICW4_8086);
-        io_wait();
+		// ICW4: Set 8086 mode
+		outb(PIC1_DATA, ICW4_8086);
+		io_wait();
+		outb(PIC2_DATA, ICW4_8086);
+		io_wait();
 
-        // Mask ALL IRQs on both PICs (0xFF = all bits set = all masked)
-        outb(PIC1_DATA, 0xFF);
-        outb(PIC2_DATA, 0xFF);
-    }
+		// Mask ALL IRQs on both PICs (0xFF = all bits set = all masked)
+		outb(PIC1_DATA, 0xFF);
+		outb(PIC2_DATA, 0xFF);
+	}
 }

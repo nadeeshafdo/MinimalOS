@@ -20,7 +20,7 @@ make
 
 ```bash
 make iso
-make run        # or: make qemu-bios / make qemu-uefi
+make run		# or: make qemu-bios / make qemu-uefi
 ```
 
 For full, up‑to‑date instructions see the GitHub Pages documentation linked above.

@@ -23,31 +23,31 @@ Each process is represented by a `Process` struct:
 
 ```rust
 pub struct Process {
-    pub pid: u64,
-    pub name: &'static str,
-    pub state: ProcessState,
-    pub cr3: u64,               // Page table root
-    pub kernel_rsp: u64,        // Saved kernel stack pointer
-    pub kernel_stack: Box<KernelStack>,  // 32 KiB kernel stack
-    pub entry_point: u64,       // User-mode RIP
-    pub user_rsp: u64,          // User-mode stack pointer
+	pub pid: u64,
+	pub name: &'static str,
+	pub state: ProcessState,
+	pub cr3: u64,			   // Page table root
+	pub kernel_rsp: u64,		// Saved kernel stack pointer
+	pub kernel_stack: Box<KernelStack>,  // 32 KiB kernel stack
+	pub entry_point: u64,	   // User-mode RIP
+	pub user_rsp: u64,		  // User-mode stack pointer
 }
 ```
 
 ### Process States
 
 ```
-    ┌──────────┐
-    │  Ready   │◄──────────────────┐
-    └────┬─────┘                   │
-         │ schedule()              │ preempt / yield
-    ┌────▼─────┐                   │
-    │ Running  │───────────────────┘
-    └────┬─────┘
-         │ sys_exit()
-    ┌────▼──────┐
-    │ Terminated│
-    └───────────┘
+	┌──────────┐
+	│  Ready   │◄──────────────────┐
+	└────┬─────┘				   │
+		 │ schedule()			  │ preempt / yield
+	┌────▼─────┐				   │
+	│ Running  │───────────────────┘
+	└────┬─────┘
+		 │ sys_exit()
+	┌────▼──────┐
+	│ Terminated│
+	└───────────┘
 ```
 
 | State | Description |
@@ -75,30 +75,30 @@ The context switch is implemented in inline assembly:
 
 ```nasm
 context_switch_asm(old_rsp_ptr: *mut u64, new_rsp: u64)
-    ; Save callee-saved registers on current stack
-    push rbp
-    push rbx
-    push r12
-    push r13
-    push r14
-    push r15
+	; Save callee-saved registers on current stack
+	push rbp
+	push rbx
+	push r12
+	push r13
+	push r14
+	push r15
 
-    ; Save current RSP into old process's PCB
-    mov [rdi], rsp
+	; Save current RSP into old process's PCB
+	mov [rdi], rsp
 
-    ; Load new process's saved RSP
-    mov rsp, rsi
+	; Load new process's saved RSP
+	mov rsp, rsi
 
-    ; Restore callee-saved registers from new stack
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    pop rbp
+	; Restore callee-saved registers from new stack
+	pop r15
+	pop r14
+	pop r13
+	pop r12
+	pop rbx
+	pop rbp
 
-    ; Return — pops RIP from the new stack
-    ret
+	; Return — pops RIP from the new stack
+	ret
 ```
 
 This approach saves only callee-saved registers (the C ABI guarantees
@@ -115,12 +115,12 @@ frame so that the first `context_switch_asm` returns to a trampoline function:
 Top of kernel stack:
   ┌──────────────┐
   │ trampoline   │ ← return address for ret
-  │ rbp = 0      │
-  │ rbx = 0      │
-  │ r12 = 0      │
-  │ r13 = 0      │
-  │ r14 = 0      │
-  │ r15 = 0      │
+  │ rbp = 0	  │
+  │ rbx = 0	  │
+  │ r12 = 0	  │
+  │ r13 = 0	  │
+  │ r14 = 0	  │
+  │ r15 = 0	  │
   └──────────────┘ ← kernel_rsp
 ```
 
@@ -139,8 +139,8 @@ the RSP0 field is at byte offset 4 (not 8-byte aligned):
 
 ```rust
 pub fn set_rsp0(tss: *mut Tss, rsp0: u64) {
-    let ptr = (tss as *mut u8).add(4) as *mut u64;
-    ptr.write_unaligned(rsp0);
+	let ptr = (tss as *mut u8).add(4) as *mut u64;
+	ptr.write_unaligned(rsp0);
 }
 ```
 
@@ -153,8 +153,8 @@ separate `current` process slot:
 
 ```rust
 pub struct Scheduler {
-    queue: VecDeque<Process>,
-    current: Option<Process>,
+	queue: VecDeque<Process>,
+	current: Option<Process>,
 }
 ```
 
@@ -218,7 +218,7 @@ thread. When all user processes terminate, execution returns to the idle loop:
 
 ```rust
 loop {
-    asm!("sti; hlt");
+	asm!("sti; hlt");
 }
 ```
 

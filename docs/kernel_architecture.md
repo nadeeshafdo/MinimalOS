@@ -25,26 +25,26 @@ Limine (BIOS/UEFI)
   ├─ Loads kernel ELF at 0xFFFFFFFF80000000
   ├─ Loads ramdisk.tar module
   └─ Jumps to _start
-        │
-        ├─ klog::init()            — Serial COM1 output
-        ├─ PIC disable             — Mask all legacy 8259 IRQs
-        ├─ IDT init                — 256 entries, IST for Double Fault
-        ├─ syscall::init()         — EFER.SCE, LSTAR, STAR, SFMASK
-        ├─ Memory census           — Walk Limine memory map
-        ├─ PMM init                — Bitmap frame allocator
-        ├─ Paging init             — Read CR3, set HHDM offset
-        ├─ APIC MMIO map           — Map Local APIC page
-        ├─ Heap init               — Linked-list allocator (64 KiB → 16 MiB)
-        ├─ APIC enable             — Local APIC + periodic timer
-        ├─ STI                     — Enable interrupts
-        ├─ Framebuffer console     — kdisplay init
-        ├─ Keyboard init           — PS/2 + IRQ1
-        ├─ RAMDisk detect          — Limine module → global storage
-        ├─ TAR parse + ELF load    — Load init.elf into user pages
-        ├─ Scheduler init          — Create idle + init processes
-        └─ do_schedule()           — Context switch to init (Ring 3)
-              │
-              └─ Idle loop: sti; hlt
+		│
+		├─ klog::init()			— Serial COM1 output
+		├─ PIC disable			 — Mask all legacy 8259 IRQs
+		├─ IDT init				— 256 entries, IST for Double Fault
+		├─ syscall::init()		 — EFER.SCE, LSTAR, STAR, SFMASK
+		├─ Memory census		   — Walk Limine memory map
+		├─ PMM init				— Bitmap frame allocator
+		├─ Paging init			 — Read CR3, set HHDM offset
+		├─ APIC MMIO map		   — Map Local APIC page
+		├─ Heap init			   — Linked-list allocator (64 KiB → 16 MiB)
+		├─ APIC enable			 — Local APIC + periodic timer
+		├─ STI					 — Enable interrupts
+		├─ Framebuffer console	 — kdisplay init
+		├─ Keyboard init		   — PS/2 + IRQ1
+		├─ RAMDisk detect		  — Limine module → global storage
+		├─ TAR parse + ELF load	— Load init.elf into user pages
+		├─ Scheduler init		  — Create idle + init processes
+		└─ do_schedule()		   — Context switch to init (Ring 3)
+			  │
+			  └─ Idle loop: sti; hlt
 ```
 
 ## Memory Layout

@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "kernel",
-    "crates/*",
-    "sdk/*",
-    "user/*",
+	"kernel",
+	"crates/*",
+	"sdk/*",
+	"user/*",
 ]
 
 [profile.dev]

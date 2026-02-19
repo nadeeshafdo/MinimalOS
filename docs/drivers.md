@@ -74,9 +74,9 @@ The legacy dual-PIC is remapped to vectors 32–47 and then fully masked
 ### APIC (Advanced Programmable Interrupt Controller)
 
 ```rust
-pub fn init(hhdm_offset: u64) -> u32        // Returns APIC ID
+pub fn init(hhdm_offset: u64) -> u32		// Returns APIC ID
 pub fn enable_timer(vector: u8, count: u32, divide: TimerDivide)
-pub fn eoi()                                 // End-of-interrupt
+pub fn eoi()								 // End-of-interrupt
 ```
 
 The Local APIC is accessed via MMIO registers mapped through the HHDM.
@@ -94,9 +94,9 @@ generating interrupts at approximately 100 Hz (count = `0x0020_0000`).
 ### PS/2 Keyboard
 
 ```rust
-pub fn read_status() -> u8          // Read PS/2 status register (port 0x64)
-pub fn init()                       // Initialise pc-keyboard decoder
-pub fn enable_irq()                 // Unmask IRQ1 in the APIC
+pub fn read_status() -> u8		  // Read PS/2 status register (port 0x64)
+pub fn init()					   // Initialise pc-keyboard decoder
+pub fn enable_irq()				 // Unmask IRQ1 in the APIC
 pub fn handle_scancode() -> Option<DecodedKey>  // Process one scancode
 ```
 
@@ -114,9 +114,9 @@ them into `DecodedKey::Unicode(char)` or `DecodedKey::RawKey(KeyCode)` events.
 ### Serial Port (COM1)
 
 ```rust
-pub fn init()                       // Initialise COM1 at 115200 baud
-pub fn write_byte(b: u8)           // Transmit one byte
-pub fn write_str(s: &str)          // Transmit a string
+pub fn init()					   // Initialise COM1 at 115200 baud
+pub fn write_byte(b: u8)		   // Transmit one byte
+pub fn write_str(s: &str)		  // Transmit a string
 ```
 
 The serial driver is used by the `klog` crate for debug output. It configures
