@@ -8,7 +8,7 @@
 //! [074] Exposes structured `KeyEvent` with press/release state,
 //! decoded key, and raw scancode — used by the kernel EventBuffer.
 
-use crate::port::{inb, outb};
+use crate::port::inb;
 use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, Keyboard, ScancodeSet1};
 use spin::Mutex;
 
@@ -19,13 +19,9 @@ const PS2_DATA: u16 = 0x60;
 /// Status / command port.
 const PS2_STATUS: u16 = 0x64;
 
-// ── PIC constants (IRQ1 = keyboard, remapped to vector 33) ────────
-
-const PIC1_DATA: u16 = 0x21;
-const PIC1_COMMAND: u16 = 0x20;
-const PIC_EOI: u8 = 0x20;
-
-/// IRQ vector for the keyboard (PIC1 base 32 + IRQ1).
+/// IRQ number for the keyboard on the I/O APIC.
+pub const KEYBOARD_IRQ: u8 = 1;
+/// IDT vector for the keyboard interrupt (IRQ1 → vector 33).
 pub const KEYBOARD_VECTOR: u8 = 33;
 
 // ── [074] Structured key event ────────────────────────────────────
@@ -63,7 +59,18 @@ static KEYBOARD: Mutex<Option<Keyboard<layouts::Us104Key, ScancodeSet1>>> =
 /// Initialise the keyboard state machine.
 ///
 /// Must be called once before [`handle_scancode()`].
+/// Flushes any stale bytes left in the PS/2 controller output buffer
+/// (common with UEFI firmware) before the IRQ is enabled.
 pub fn init() {
+	// Drain any pending data the firmware left in the controller.
+	// Bit 0 of the status register = "output buffer full".
+	let mut flushed = 0u32;
+	while unsafe { inb(PS2_STATUS) } & 0x01 != 0 {
+		let _ = unsafe { inb(PS2_DATA) }; // discard
+		flushed += 1;
+		if flushed > 64 { break; } // safety valve
+	}
+
 	let kb = Keyboard::new(
 		ScancodeSet1::new(),
 		layouts::Us104Key,
@@ -142,12 +149,9 @@ pub fn read_status() -> u8 { unsafe { inb(PS2_STATUS) } }
 pub fn read_scancode() -> u8 { unsafe { inb(PS2_DATA) } }
 
 pub fn enable_irq() {
-	unsafe {
-		let mask = inb(PIC1_DATA);
-		outb(PIC1_DATA, mask & !0x02);
-	}
+	crate::ioapic::enable_irq(KEYBOARD_IRQ, KEYBOARD_VECTOR);
 }
 
 pub fn send_eoi() {
-	unsafe { outb(PIC1_COMMAND, PIC_EOI); }
+	crate::apic::eoi();
 }
