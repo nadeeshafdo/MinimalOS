@@ -212,6 +212,20 @@ pub mod nr {
     pub const SYS_SPAWN: u64 = 3;
     /// `sys_read(fd: u64, buf_ptr: *mut u8, buf_len: usize)` — read from fd.
     pub const SYS_READ: u64 = 4;
+    /// `sys_pipe_create()` — create an IPC pipe, returns pipe_id.
+    pub const SYS_PIPE_CREATE: u64 = 5;
+    /// `sys_pipe_write(pipe_id, buf_ptr, buf_len)` — write to a pipe.
+    pub const SYS_PIPE_WRITE: u64 = 6;
+    /// `sys_pipe_read(pipe_id, buf_ptr, buf_len)` — read from a pipe.
+    pub const SYS_PIPE_READ: u64 = 7;
+    /// `sys_pipe_close(pipe_id)` — close/destroy a pipe.
+    pub const SYS_PIPE_CLOSE: u64 = 8;
+    /// `sys_time()` — return the current kernel tick count.
+    pub const SYS_TIME: u64 = 9;
+    /// `sys_sleep(ticks: u64)` — sleep for at least `ticks` timer ticks.
+    pub const SYS_SLEEP: u64 = 10;
+    /// `sys_futex(addr, op, val)` — futex wait/wake.
+    pub const SYS_FUTEX: u64 = 11;
 }
 
 /// Rust syscall dispatcher — called from the assembly stub.
@@ -222,8 +236,8 @@ unsafe extern "C" fn syscall_dispatch(
     nr: u64,
     a0: u64,
     a1: u64,
-    _a2: u64,
-    _a3: u64,
+    a2: u64,
+    a3: u64,
     _a4: u64,
 ) -> u64 {
     match nr {
@@ -266,6 +280,7 @@ unsafe extern "C" fn syscall_dispatch(
         }
         nr::SYS_SPAWN => {
             // [066] a0 = path pointer, a1 = path length
+            // [071] a2 = args pointer (0 = none), a3 = args length
             let ptr = a0 as *const u8;
             let len = a1 as usize;
             if ptr.is_null() || len == 0 || len > 256 {
@@ -276,8 +291,17 @@ unsafe extern "C" fn syscall_dispatch(
                 Ok(s) => s,
                 Err(_) => return u64::MAX,
             };
-            klog::info!("[syscall] SYS_SPAWN(\"{}\")", path);
-            match crate::task::process::spawn_from_ramdisk(path) {
+            // Extract optional args
+            let args_ptr = a2 as *const u8;
+            let args_len = a3 as usize;
+            let args = if !args_ptr.is_null() && args_len > 0 && args_len <= 256 {
+                let args_slice = unsafe { core::slice::from_raw_parts(args_ptr, args_len) };
+                core::str::from_utf8(args_slice).unwrap_or("")
+            } else {
+                ""
+            };
+            klog::info!("[syscall] SYS_SPAWN(\"{}\", args=\"{}\")", path, args);
+            match crate::task::process::spawn_from_ramdisk(path, args) {
                 Ok(pid) => pid,
                 Err(e) => {
                     klog::warn!("[syscall] SYS_SPAWN failed: {}", e);
@@ -294,6 +318,87 @@ unsafe extern "C" fn syscall_dispatch(
             // Non-blocking: return one byte if available, 0 if not.
             let ch = crate::task::input::pop_char();
             ch as u64
+        }
+        nr::SYS_PIPE_CREATE => {
+            // [070] Create a new IPC pipe.
+            match crate::task::pipe::create() {
+                Some(id) => {
+                    klog::info!("[syscall] SYS_PIPE_CREATE -> pipe_id={}", id);
+                    id as u64
+                }
+                None => {
+                    klog::warn!("[syscall] SYS_PIPE_CREATE: pipe table full");
+                    u64::MAX
+                }
+            }
+        }
+        nr::SYS_PIPE_WRITE => {
+            // [070] a0 = pipe_id, a1 = buf_ptr, a2 = buf_len
+            let pipe_id = a0 as usize;
+            let ptr = a1 as *const u8;
+            let len = a2 as usize;
+            if ptr.is_null() || len == 0 || len > 4096 {
+                return u64::MAX;
+            }
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) };
+            crate::task::pipe::write(pipe_id, data) as u64
+        }
+        nr::SYS_PIPE_READ => {
+            // [070] a0 = pipe_id, a1 = buf_ptr, a2 = buf_len
+            let pipe_id = a0 as usize;
+            let ptr = a1 as *mut u8;
+            let len = a2 as usize;
+            if ptr.is_null() || len == 0 || len > 4096 {
+                return u64::MAX;
+            }
+            let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+            crate::task::pipe::read(pipe_id, buf) as u64
+        }
+        nr::SYS_PIPE_CLOSE => {
+            // [070] a0 = pipe_id
+            crate::task::pipe::close(a0 as usize);
+            klog::info!("[syscall] SYS_PIPE_CLOSE({})", a0);
+            0
+        }
+        nr::SYS_TIME => {
+            // [072] Return the current tick count.
+            crate::task::clock::now()
+        }
+        nr::SYS_SLEEP => {
+            // [072] a0 = number of ticks to sleep.
+            let ticks = a0;
+            if ticks == 0 {
+                return 0;
+            }
+            let wake_at = crate::task::clock::now() + ticks;
+            {
+                let mut sched = crate::task::process::SCHEDULER.lock();
+                if let Some(current) = sched.current_mut() {
+                    current.state = crate::task::process::ProcessState::Sleeping;
+                    current.wake_tick = wake_at;
+                }
+            }
+            // Yield to the scheduler so we stop running immediately.
+            unsafe { crate::task::process::do_schedule() };
+            0
+        }
+        nr::SYS_FUTEX => {
+            // [073] a0 = address, a1 = operation, a2 = value
+            let addr = a0;
+            let op = a1;
+            let val = a2;
+            match op {
+                crate::task::futex::FUTEX_WAIT => {
+                    unsafe { crate::task::futex::futex_wait(addr, val) }
+                }
+                crate::task::futex::FUTEX_WAKE => {
+                    crate::task::futex::futex_wake(addr, val)
+                }
+                _ => {
+                    klog::warn!("[syscall] SYS_FUTEX: unknown op={}", op);
+                    u64::MAX
+                }
+            }
         }
         _ => {
             klog::warn!("[syscall] unknown syscall nr={}", nr);
