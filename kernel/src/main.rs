@@ -252,6 +252,16 @@ unsafe extern "C" fn _start() -> ! {
     khal::keyboard::enable_irq();
     klog::info!("[039] Keyboard IRQ1 enabled (vector {})", khal::keyboard::KEYBOARD_VECTOR);
     klog::info!("[041] Keyboard echo active — type to see characters on screen");
+    // \u{2500}\u{2500} [075] PS/2 Mouse init \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
+    khal::mouse::init();
+    khal::mouse::enable_irq();
+    klog::info!("[075] PS/2 Mouse initialised (IRQ12, vector {})", khal::mouse::MOUSE_VECTOR);
+
+    // [077] Initialise software cursor (after framebuffer + mouse).
+    if let Some(fb) = FRAMEBUFFER_REQUEST.get_response().and_then(|r| r.framebuffers().next()) {
+        unsafe { kdisplay::init_cursor(&fb); }
+        klog::info!("[077] Software cursor initialised (XOR sprite, 12x19)");
+    }
 
     klog::info!("Kernel initialized successfully");
 
