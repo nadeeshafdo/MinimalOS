@@ -107,16 +107,49 @@ pub extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame
     if status & 0x01 != 0 {
         let scancode = khal::keyboard::read_scancode();
 
-        // Feed through the pc-keyboard state machine (handles Shift,
-        // CapsLock, extended keys, key-release, etc.)
-        if let Some(ch) = khal::keyboard::handle_scancode(scancode) {
-            // [041] Echo + [042] Backspace
-            kdisplay::console_try_put_char(ch);
-            // [068] Push into kernel input ring buffer for sys_read(STDIN)
-            crate::task::input::push_char(ch);
+        // [074] Feed through the upgraded state machine.
+        if let Some(event) = khal::keyboard::handle_scancode_event(scancode) {
+            // [078] Push structured event into the EventBuffer.
+            let ch = match event.key {
+                khal::keyboard::KeyKind::Char(c) => c as u32,
+                khal::keyboard::KeyKind::Raw(_) => 0,
+            };
+            let press = event.state == khal::keyboard::KeyState::Pressed;
+            crate::task::events::push_key(press, scancode, ch);
+
+            // Legacy: echo printable chars to console + input buffer.
+            if press {
+                if let khal::keyboard::KeyKind::Char(c) = event.key {
+                    kdisplay::console_try_put_char(c);
+                    crate::task::input::push_char(c);
+                }
+            }
         }
     }
 
     // Send EOI to PIC1
     khal::keyboard::send_eoi();
+}
+
+/// [075] Mouse interrupt handler (IRQ12 = vector 44).
+///
+/// Reads the raw byte from the PS/2 data port, feeds it through the
+/// 3-byte packet decoder, and moves the software cursor.
+pub extern "x86-interrupt" fn mouse_handler(_stack_frame: InterruptStackFrame) {
+    if khal::mouse::is_mouse_data() {
+        let byte = khal::mouse::read_data();
+        if let Some(packet) = khal::mouse::handle_byte(byte) {
+            // [077] Move software cursor on screen.
+            kdisplay::cursor_move(packet.dx, packet.dy);
+
+            // [078] Push mouse event into EventBuffer.
+            let (ax, ay) = kdisplay::cursor_position();
+            crate::task::events::push_mouse(
+                packet.dx, packet.dy, packet.buttons,
+                ax as i16, ay as i16,
+            );
+        }
+    }
+
+    khal::mouse::send_eoi();
 }
