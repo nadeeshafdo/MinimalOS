@@ -121,13 +121,21 @@ pub extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame
 			if press {
 				if let khal::keyboard::KeyKind::Char(c) = event.key {
 					kdisplay::console_try_put_char(c);
+					// Echo to serial for complete terminal experience.
+					if c == '\x08' {
+						khal::serial::write_str("\x08 \x08");
+					} else {
+						let mut utf8 = [0u8; 4];
+						let s = c.encode_utf8(&mut utf8);
+						khal::serial::write_str(s);
+					}
 					crate::task::input::push_char(c);
 				}
 			}
 		}
 	}
 
-	// Send EOI to PIC1
+	// Send EOI via Local APIC (I/O APIC routes the interrupt).
 	khal::keyboard::send_eoi();
 }
 
