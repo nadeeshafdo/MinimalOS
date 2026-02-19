@@ -1,12 +1,15 @@
-//! PS/2 keyboard driver — [038]-[042].
+//! PS/2 keyboard driver — [038]-[042], [074].
 //!
 //! Uses the `pc-keyboard` crate for proper scancode decoding via a
 //! three-layer state machine: scancode decoder → modifier tracker →
 //! layout mapper.  Handles Shift, CapsLock, extended keys (arrows),
 //! and key-release events correctly.
+//!
+//! [074] Exposes structured `KeyEvent` with press/release state,
+//! decoded key, and raw scancode — used by the kernel EventBuffer.
 
 use crate::port::{inb, outb};
-use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
+use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, Keyboard, ScancodeSet1};
 use spin::Mutex;
 
 // ── PS/2 controller ports ─────────────────────────────────────────
@@ -25,11 +28,35 @@ const PIC_EOI: u8 = 0x20;
 /// IRQ vector for the keyboard (PIC1 base 32 + IRQ1).
 pub const KEYBOARD_VECTOR: u8 = 33;
 
+// ── [074] Structured key event ────────────────────────────────────
+
+/// Whether a key was pressed or released.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyState {
+    Pressed,
+    Released,
+}
+
+/// A decoded key — either a Unicode character or a raw keycode.
+#[derive(Debug, Clone, Copy)]
+pub enum KeyKind {
+    /// Printable character (affected by Shift / CapsLock).
+    Char(char),
+    /// Non-printable key (arrows, F-keys, modifiers, etc.).
+    Raw(KeyCode),
+}
+
+/// [074] A structured keyboard event carrying press/release state,
+/// the decoded key, and the originating scancode byte.
+#[derive(Debug, Clone, Copy)]
+pub struct KeyEvent {
+    pub state: KeyState,
+    pub key: KeyKind,
+    pub scancode: u8,
+}
+
 // ── Global keyboard state machine ─────────────────────────────────
 
-/// The `pc-keyboard` state machine: decodes raw scancodes into key
-/// events, tracks Shift / Ctrl / Alt / CapsLock state, and maps keys
-/// through the US-104 QWERTY layout.
 static KEYBOARD: Mutex<Option<Keyboard<layouts::Us104Key, ScancodeSet1>>> =
     Mutex::new(None);
 
@@ -45,26 +72,63 @@ pub fn init() {
     *KEYBOARD.lock() = Some(kb);
 }
 
+/// [074] Feed a raw scancode and return a structured `KeyEvent`.
+///
+/// Returns `Some(KeyEvent)` for every key press *and* release that
+/// the state machine can decode.  This is richer than [`handle_scancode`]
+/// which only returns characters on press.
+pub fn handle_scancode_event(scancode: u8) -> Option<KeyEvent> {
+    let mut guard = KEYBOARD.lock();
+    let kb = guard.as_mut()?;
+
+    if let Ok(Some(event)) = kb.add_byte(scancode) {
+        let state = match event.state {
+            pc_keyboard::KeyState::Down => KeyState::Pressed,
+            pc_keyboard::KeyState::Up => KeyState::Released,
+            _ => return None,
+        };
+
+        // Save the raw keycode before consuming the event.
+        let raw_code = event.code;
+
+        // Try to decode to a character via layout.
+        if let Some(decoded) = kb.process_keyevent(event) {
+            let key = match decoded {
+                DecodedKey::Unicode(ch) => KeyKind::Char(ch),
+                DecodedKey::RawKey(code) => KeyKind::Raw(code),
+            };
+            return Some(KeyEvent { state, key, scancode });
+        }
+
+        // Modifier-only press/release (Shift, Ctrl, etc.) —
+        // process_keyevent returns None, but we still have a code.
+        return Some(KeyEvent {
+            state,
+            key: KeyKind::Raw(raw_code),
+            scancode,
+        });
+    }
+
+    None
+}
+
 /// Feed a raw scancode byte into the state machine.
 ///
 /// Returns `Some(char)` when the scancode resolves to a printable
-/// Unicode character (including Shift / CapsLock variants).
-/// Returns `None` for key-release events, modifier-only presses,
-/// and special keys (arrows, F-keys, etc.).
+/// Unicode character on *press*.  Returns `None` for releases,
+/// modifier-only presses, and special keys.
+///
+/// This is the simple API kept for backward compatibility; prefer
+/// [`handle_scancode_event()`] for full event information.
 pub fn handle_scancode(scancode: u8) -> Option<char> {
     let mut guard = KEYBOARD.lock();
     let kb = guard.as_mut()?;
 
-    // Layer 1: Scancode decoder — handles multi-byte sequences (0xE0 prefix).
     if let Ok(Some(event)) = kb.add_byte(scancode) {
-        // Layer 2+3: Modifier tracker + layout mapper.
         if let Some(key) = kb.process_keyevent(event) {
             match key {
                 DecodedKey::Unicode(ch) => return Some(ch),
-                DecodedKey::RawKey(_key_code) => {
-                    // TODO: handle arrows / F-keys for the shell
-                    return None;
-                }
+                DecodedKey::RawKey(_) => return None,
             }
         }
     }
@@ -74,35 +138,16 @@ pub fn handle_scancode(scancode: u8) -> Option<char> {
 
 // ── Low-level port helpers ────────────────────────────────────────
 
-/// Read the PS/2 controller status register.
-///
-/// Returns the raw status byte; bit 0 = output buffer full (data ready).
-pub fn read_status() -> u8 {
-    unsafe { inb(PS2_STATUS) }
-}
+pub fn read_status() -> u8 { unsafe { inb(PS2_STATUS) } }
+pub fn read_scancode() -> u8 { unsafe { inb(PS2_DATA) } }
 
-/// Read a scancode from the PS/2 data port.
-///
-/// Should only be called when [`read_status()`] indicates data is ready
-/// (bit 0 set).
-pub fn read_scancode() -> u8 {
-    unsafe { inb(PS2_DATA) }
-}
-
-/// Enable the keyboard IRQ by unmasking IRQ1 in the legacy PIC.
-///
-/// The PIC was remapped (IRQ0-7 → vectors 32-39) but fully masked.
-/// We unmask only bit 1 (IRQ1 = keyboard) on PIC1.
 pub fn enable_irq() {
     unsafe {
         let mask = inb(PIC1_DATA);
-        outb(PIC1_DATA, mask & !0x02); // clear bit 1 = unmask IRQ1
+        outb(PIC1_DATA, mask & !0x02);
     }
 }
 
-/// Send End-of-Interrupt to PIC1 for IRQ1.
 pub fn send_eoi() {
-    unsafe {
-        outb(PIC1_COMMAND, PIC_EOI);
-    }
+    unsafe { outb(PIC1_COMMAND, PIC_EOI); }
 }
