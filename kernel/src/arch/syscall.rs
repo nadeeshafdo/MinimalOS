@@ -226,6 +226,8 @@ pub mod nr {
     pub const SYS_SLEEP: u64 = 10;
     /// `sys_futex(addr, op, val)` — futex wait/wake.
     pub const SYS_FUTEX: u64 = 11;
+    /// `sys_read_event(buf_ptr)` — read next input event (12 bytes).
+    pub const SYS_READ_EVENT: u64 = 12;
 }
 
 /// Rust syscall dispatcher — called from the assembly stub.
@@ -399,6 +401,14 @@ unsafe extern "C" fn syscall_dispatch(
                     u64::MAX
                 }
             }
+        }
+        nr::SYS_READ_EVENT => {
+            // [079] a0 = pointer to 12-byte buffer in user space.
+            let buf_ptr = a0 as *mut u8;
+            if buf_ptr.is_null() {
+                return u64::MAX;
+            }
+            unsafe { crate::task::events::read_event_to_user(buf_ptr) as u64 }
         }
         _ => {
             klog::warn!("[syscall] unknown syscall nr={}", nr);
