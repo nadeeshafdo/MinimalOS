@@ -133,16 +133,16 @@
 
 ---
 
-## 🖱️ Rank X: The Human (Input & Events)
+## ✅ Rank X: The Human (Input & Events)
 
 *Focus: You can't use a GUI with just a keyboard.*
 
-- [ ] [074] **The Upgrade:** Rewrite Keyboard driver using `pc-keyboard` (State Machine).
-- [ ] [075] **The Mouse:** Initialize PS/2 Mouse (enable IRQ12).
-- [ ] [076] **The Packet:** Decode the 3-byte Mouse Packet (dx, dy, buttons).
-- [ ] [077] **The Cursor:** Draw a software cursor sprite on the Framebuffer (XOR paint).
-- [ ] [078] **The Event:** Create a kernel `EventBuffer` (Keyboard + Mouse events).
-- [ ] [079] **The Feed:** Implement `sys_read` to let User apps read the EventBuffer.
+- [x] [074] **The Upgrade:** Rewrite Keyboard driver using `pc-keyboard` (State Machine).
+- [x] [075] **The Mouse:** Initialize PS/2 Mouse (enable IRQ12).
+- [x] [076] **The Packet:** Decode the 3-byte Mouse Packet (dx, dy, buttons).
+- [x] [077] **The Cursor:** Draw a software cursor sprite on the Framebuffer (XOR paint).
+- [x] [078] **The Event:** Create a kernel `EventBuffer` (Keyboard + Mouse events).
+- [x] [079] **The Feed:** Implement `sys_read` to let User apps read the EventBuffer.
 
 ## 🖼️ Rank XI: The Compositor (Display Server)
 
