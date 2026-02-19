@@ -2,6 +2,7 @@
 #![no_std]
 
 pub mod apic;
+pub mod ioapic;
 pub mod keyboard;
 pub mod mouse;
 pub mod pic;
