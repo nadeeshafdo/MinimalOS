@@ -512,3 +512,146 @@ macro_rules! kprintln {
     () => ($crate::kprint!("\n"));
     ($($arg:tt)*) => ($crate::kprint!("{}\n", format_args!($($arg)*)));
 }
+
+// ========================================
+// [077] Software cursor (XOR sprite)
+// ========================================
+
+/// Framebuffer info stored for cursor drawing (set once during init).
+static CURSOR_FB: spin::Mutex<Option<CursorFb>> = spin::Mutex::new(None);
+
+/// Mouse position and visibility state.
+static CURSOR_STATE: spin::Mutex<CursorState> = spin::Mutex::new(CursorState::new());
+
+/// Minimal framebuffer info needed for cursor drawing.
+struct CursorFb {
+    addr: usize,
+    width: usize,
+    height: usize,
+    pitch: usize,
+}
+
+/// Mouse cursor state.
+struct CursorState {
+    x: i32,
+    y: i32,
+    visible: bool,
+}
+
+impl CursorState {
+    const fn new() -> Self {
+        Self { x: 0, y: 0, visible: false }
+    }
+}
+
+/// 12×19 arrow cursor bitmap (1 = white, 0 = transparent).
+/// Classic Windows-style arrow pointer.
+const CURSOR_W: usize = 12;
+const CURSOR_H: usize = 19;
+static CURSOR_BITMAP: [u16; CURSOR_H] = [
+    0b1000_0000_0000_0000,
+    0b1100_0000_0000_0000,
+    0b1110_0000_0000_0000,
+    0b1111_0000_0000_0000,
+    0b1111_1000_0000_0000,
+    0b1111_1100_0000_0000,
+    0b1111_1110_0000_0000,
+    0b1111_1111_0000_0000,
+    0b1111_1111_1000_0000,
+    0b1111_1111_1100_0000,
+    0b1111_1111_1110_0000,
+    0b1111_1111_1111_0000,
+    0b1111_1111_0000_0000,
+    0b1111_1100_0000_0000,
+    0b1111_1100_0000_0000,
+    0b1100_0110_0000_0000,
+    0b0000_0110_0000_0000,
+    0b0000_0011_0000_0000,
+    0b0000_0011_0000_0000,
+];
+
+/// XOR mask colour — white XOR gives good contrast on most backgrounds.
+const XOR_MASK: u32 = 0x00FF_FFFF;
+
+/// Initialise the cursor subsystem with framebuffer info.
+///
+/// # Safety
+/// Must be called after framebuffer is available.
+pub unsafe fn init_cursor(fb: &Framebuffer) {
+    *CURSOR_FB.lock() = Some(CursorFb {
+        addr: fb.addr() as usize,
+        width: fb.width() as usize,
+        height: fb.height() as usize,
+        pitch: fb.pitch() as usize,
+    });
+
+    let mut state = CURSOR_STATE.lock();
+    state.x = fb.width() as i32 / 2;
+    state.y = fb.height() as i32 / 2;
+}
+
+/// Draw or erase the cursor at its current position using XOR.
+///
+/// Because XOR is its own inverse, calling this twice at the same
+/// position erases the cursor.
+fn xor_cursor(fb: &CursorFb, x: i32, y: i32) {
+    for row in 0..CURSOR_H {
+        let py = y + row as i32;
+        if py < 0 || py >= fb.height as i32 {
+            continue;
+        }
+        let bits = CURSOR_BITMAP[row];
+        for col in 0..CURSOR_W {
+            let px = x + col as i32;
+            if px < 0 || px >= fb.width as i32 {
+                continue;
+            }
+            if bits & (1 << (15 - col)) != 0 {
+                let offset = py as usize * fb.pitch + px as usize * 4;
+                let ptr = (fb.addr + offset) as *mut u32;
+                unsafe {
+                    let old = ptr.read_volatile();
+                    ptr.write_volatile(old ^ XOR_MASK);
+                }
+            }
+        }
+    }
+}
+
+/// Move the cursor by a relative delta and redraw.
+///
+/// Erases the cursor at the old position, clamps the new position to
+/// the screen bounds, and redraws.  Safe to call from interrupt context
+/// (uses `try_lock`).
+pub fn cursor_move(dx: i16, dy: i16) {
+    let fb_guard = CURSOR_FB.try_lock();
+    let fb = match fb_guard.as_ref().and_then(|g| g.as_ref()) {
+        Some(f) => f,
+        None => return,
+    };
+
+    let mut state = match CURSOR_STATE.try_lock() {
+        Some(s) => s,
+        None => return,
+    };
+
+    // Erase old cursor.
+    if state.visible {
+        xor_cursor(fb, state.x, state.y);
+    }
+
+    // Update position with clamping.
+    state.x = (state.x + dx as i32).clamp(0, fb.width as i32 - 1);
+    // PS/2 dy is positive=up, screen y is positive=down, so subtract.
+    state.y = (state.y - dy as i32).clamp(0, fb.height as i32 - 1);
+
+    // Redraw at new position.
+    state.visible = true;
+    xor_cursor(fb, state.x, state.y);
+}
+
+/// Get the current cursor position.
+pub fn cursor_position() -> (i32, i32) {
+    let state = CURSOR_STATE.lock();
+    (state.x, state.y)
+}
