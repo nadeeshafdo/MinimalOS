@@ -22,6 +22,7 @@ const SYS_PIPE_CLOSE: u64 = 8;
 const SYS_TIME: u64 = 9;
 const SYS_SLEEP: u64 = 10;
 const SYS_FUTEX: u64 = 11;
+const SYS_READ_EVENT: u64 = 12;
 
 const FUTEX_WAIT: u64 = 0;
 const FUTEX_WAKE: u64 = 1;
@@ -157,6 +158,12 @@ fn futex_wake(addr: *const u64, count: u64) -> u64 {
     unsafe { syscall3(SYS_FUTEX, addr as u64, FUTEX_WAKE, count) }
 }
 
+/// [079] Read the next input event into a 12-byte buffer.
+/// Returns 12 on success, 0 if no event available.
+fn read_event(buf: &mut [u8; 12]) -> u64 {
+    unsafe { syscall1(SYS_READ_EVENT, buf.as_mut_ptr() as u64) }
+}
+
 // ── Shell implementation ────────────────────────────────────────
 
 const MAX_LINE: usize = 128;
@@ -241,6 +248,7 @@ fn handle_command(cmd: &str) {
             log("  time        — show kernel tick count");
             log("  sleep       — sleep for ~500 ticks");
             log("  futex       — test futex wait/wake");
+            log("  events      — read input events (5s)");
             log("  exit        — exit the shell");
         }
         "hello" => {
@@ -306,6 +314,45 @@ fn handle_command(cmd: &str) {
             pos += suffix.len();
             let s = unsafe { core::str::from_utf8_unchecked(&out[..pos]) };
             log(s);
+        }
+        "events" => {
+            // [079] Read input events for ~5 seconds (500 ticks).
+            log("Reading events for 5s... move mouse or press keys.");
+            let t0 = time();
+            let mut count: u64 = 0;
+            loop {
+                let now = time();
+                if now - t0 > 500 {
+                    break;
+                }
+                let mut buf = [0u8; 12];
+                let n = read_event(&mut buf);
+                if n == 12 {
+                    count += 1;
+                    let kind = buf[0];
+                    // Show first few events only to avoid flooding
+                    if count <= 5 {
+                        let mut out = [0u8; 60];
+                        let prefix = b"  event: kind=";
+                        let mut pos = prefix.len();
+                        out[..pos].copy_from_slice(prefix);
+                        pos += fmt_u64(kind as u64, &mut out[pos..]);
+                        let mid = b" code=";
+                        out[pos..pos + mid.len()].copy_from_slice(mid);
+                        pos += mid.len();
+                        pos += fmt_u64(buf[1] as u64, &mut out[pos..]);
+                        log(unsafe { core::str::from_utf8_unchecked(&out[..pos]) });
+                    }
+                } else {
+                    yield_cpu();
+                }
+            }
+            let mut out = [0u8; 50];
+            let prefix = b"[079] Total events: ";
+            let mut pos = prefix.len();
+            out[..pos].copy_from_slice(prefix);
+            pos += fmt_u64(count, &mut out[pos..]);
+            log(unsafe { core::str::from_utf8_unchecked(&out[..pos]) });
         }
         "futex" => {
             // [073] Futex round-trip test (single-process)
