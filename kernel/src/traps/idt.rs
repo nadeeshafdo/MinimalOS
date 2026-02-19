@@ -110,6 +110,15 @@ pub fn init_idt() {
         = handlers::keyboard_handler;
     idt.set_handler(khal::keyboard::KEYBOARD_VECTOR, kb_handler as usize, cs, keyboard_options);
 
+    // [075] Register mouse interrupt handler (IRQ12 = vector 44)
+    let mouse_options = EntryOptions::new()
+        .set_present(true)
+        .set_gate_type(GateType::Interrupt);
+
+    let mouse_handler: extern "x86-interrupt" fn(x86_64::structures::idt::InterruptStackFrame)
+        = handlers::mouse_handler;
+    idt.set_handler(khal::mouse::MOUSE_VECTOR, mouse_handler as usize, cs, mouse_options);
+
     // Load IDT
     let idt_ref = IDT.call_once(|| idt);
     idt_ref.load();
