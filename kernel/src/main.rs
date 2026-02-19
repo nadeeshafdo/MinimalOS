@@ -209,9 +209,14 @@ unsafe extern "C" fn _start() -> ! {
 			klog::debug!("  Pitch: {}", fb.pitch());
 			klog::debug!("  BPP: {}", fb.bpp());
 
+			// Following commented block of code was written as part of `QUESTS.md`
+			// to demonstrate basic framebuffer output before the console was implemented.
+			// It's left here as a reference for how to use the framebuffer directly,
+			// and to show some early debug output before the console was available.
+
 			// [011] The Screen Wipe - Fill entire screen with blue
-			kdisplay::fill_screen(&fb, kdisplay::Color::BLUE);
-			klog::info!("[011] Screen filled with blue");
+			// kdisplay::fill_screen(&fb, kdisplay::Color::BLUE);
+			// klog::info!("[011] Screen filled with blue");
 
 			// [015] Initialize framebuffer console
 			kdisplay::init_console(&fb, kdisplay::Color::WHITE, kdisplay::Color::ASH);
