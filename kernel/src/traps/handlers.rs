@@ -47,6 +47,9 @@ pub extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     // continue firing even if schedule() switches to a different task.
     khal::apic::eoi();
 
+    // [072] Increment the global tick counter.
+    crate::task::clock::tick();
+
     // [064] The Slice — preemptive scheduling on timer tick.
     // Use try_lock to avoid deadlock if the scheduler is already held
     // (e.g. inside sys_yield or sys_spawn).
