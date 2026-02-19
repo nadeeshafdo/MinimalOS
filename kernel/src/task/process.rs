@@ -32,6 +32,8 @@ pub enum ProcessState {
     Running,
     /// Blocked waiting for I/O or an event.
     Blocked,
+    /// Sleeping until a specific tick — [072].
+    Sleeping,
     /// Terminated, awaiting cleanup.
     Dead,
 }
@@ -116,6 +118,14 @@ pub struct Process {
     pub entry_point: u64,
     /// User-mode stack pointer.
     pub user_rsp: u64,
+    /// Pointer to argument string on user stack (0 if none).
+    pub args_ptr: u64,
+    /// Length of argument string in bytes.
+    pub args_len: u64,
+    /// [072] Tick at which a Sleeping process should be woken.
+    pub wake_tick: u64,
+    /// [073] Virtual address this process is blocked on (futex WAIT).
+    pub wait_addr: u64,
     /// Kernel stack for this process (heap-allocated).
     pub kernel_stack: Box<KernelStack>,
 }
@@ -147,6 +157,10 @@ impl Process {
             cr3,
             entry_point,
             user_rsp,
+            args_ptr: 0,
+            args_len: 0,
+            wake_tick: 0,
+            wait_addr: 0,
             kernel_stack,
         }
     }
@@ -245,10 +259,10 @@ pub unsafe fn context_switch(old: &mut Process, new: &Process) {
 /// the global scheduler, then drops to Ring 3 via `iretq`.
 extern "C" fn task_entry_trampoline() {
     // Read the current task's user-mode parameters from the scheduler.
-    let (entry, user_rsp) = {
+    let (entry, user_rsp, args_ptr, args_len) = {
         let sched = SCHEDULER.lock();
         let current = sched.current().expect("trampoline: no current task");
-        (current.entry_point, current.user_rsp)
+        (current.entry_point, current.user_rsp, current.args_ptr, current.args_len)
     };
 
     klog::info!("[064] Entering user mode: RIP={:#x} RSP={:#x}", entry, user_rsp);
@@ -256,7 +270,8 @@ extern "C" fn task_entry_trampoline() {
     // User CS = 0x20 | 3 = 0x23, User SS = 0x18 | 3 = 0x1b
     let frame = super::usermode::IretqFrame::new(entry, 0x23, 0x1b, user_rsp);
     unsafe {
-        super::usermode::jump_to_ring3(&frame);
+        // [071] Pass args_ptr in RDI and args_len in RSI.
+        super::usermode::jump_to_ring3_with_args(&frame, args_ptr, args_len);
     }
 }
 
@@ -320,6 +335,20 @@ impl Scheduler {
         self.tasks.retain(|t| t.state != ProcessState::Dead);
     }
 
+    /// [073] Mutable iterator over the ready queue (for futex wake).
+    pub fn tasks_iter_mut(&mut self) -> impl Iterator<Item = &mut Process> {
+        self.tasks.iter_mut()
+    }
+
+    /// [072] Wake any sleeping tasks whose wake_tick has passed.
+    pub fn wake_sleeping(&mut self, now: u64) {
+        for task in self.tasks.iter_mut() {
+            if task.state == ProcessState::Sleeping && now >= task.wake_tick {
+                task.state = ProcessState::Ready;
+            }
+        }
+    }
+
     /// Remove a dead current task (called by sys_exit).
     pub fn reap_current(&mut self) {
         if let Some(ref cur) = self.current {
@@ -342,23 +371,47 @@ impl Scheduler {
             return;
         }
 
+        // [072] Wake sleeping tasks before picking the next one.
+        self.wake_sleeping(super::clock::now());
+
         // Take the current task out.
         let mut old = match self.current.take() {
             Some(t) => t,
             None => {
-                // No current — just pop the next one and enter it.
-                let mut new = self.tasks.pop_front().unwrap();
-                new.state = ProcessState::Running;
-                self.current = Some(new);
+                // No current — find the next Ready one.
+                let queue_len = self.tasks.len();
+                for _ in 0..queue_len {
+                    if let Some(t) = self.tasks.pop_front() {
+                        if t.state == ProcessState::Ready {
+                            let mut new = t;
+                            new.state = ProcessState::Running;
+                            self.current = Some(new);
+                            return;
+                        }
+                        self.tasks.push_back(t);
+                    }
+                }
                 return;
             }
         };
 
-        // Pop the next ready task.
-        let new = match self.tasks.pop_front() {
+        // Pop the next *ready* task via round-robin.
+        let queue_len = self.tasks.len();
+        let mut new_task: Option<Process> = None;
+        for _ in 0..queue_len {
+            if let Some(t) = self.tasks.pop_front() {
+                if t.state == ProcessState::Ready {
+                    new_task = Some(t);
+                    break;
+                }
+                self.tasks.push_back(t);
+            }
+        }
+
+        let new = match new_task {
             Some(t) => t,
             None => {
-                // Put old back — it's the only task.
+                // No ready tasks — put old back.
                 self.current = Some(old);
                 return;
             }
@@ -366,7 +419,9 @@ impl Scheduler {
 
         // Move old to the back of the ready queue (unless it's dead).
         if old.state != ProcessState::Dead {
-            old.state = ProcessState::Ready;
+            if old.state != ProcessState::Sleeping {
+                old.state = ProcessState::Ready;
+            }
             self.tasks.push_back(old);
         }
 
@@ -437,14 +492,33 @@ pub unsafe fn do_schedule() {
             return;
         }
 
+        // [072] Wake any sleeping tasks whose wake_tick has passed.
+        sched.wake_sleeping(super::clock::now());
+
         let old = match sched.current.take() {
             Some(t) => t,
             None => return,
         };
 
-        let new = match sched.tasks.pop_front() {
+        // Find the next Ready task using round-robin: pop from front,
+        // skip non-Ready tasks by pushing them to the back.
+        let queue_len = sched.tasks.len();
+        let mut new_task: Option<Process> = None;
+        for _ in 0..queue_len {
+            if let Some(t) = sched.tasks.pop_front() {
+                if t.state == ProcessState::Ready {
+                    new_task = Some(t);
+                    break;
+                }
+                // Not ready (Sleeping/Blocked) — push to back
+                sched.tasks.push_back(t);
+            }
+        }
+
+        let new = match new_task {
             Some(t) => t,
             None => {
+                // No ready tasks — put old back.
                 sched.current = Some(old);
                 return;
             }
@@ -454,7 +528,10 @@ pub unsafe fn do_schedule() {
 
         if !old_is_dead {
             let mut old = old;
-            old.state = ProcessState::Ready;
+            // Preserve Sleeping state; otherwise mark Ready.
+            if old.state != ProcessState::Sleeping {
+                old.state = ProcessState::Ready;
+            }
             sched.tasks.push_back(old);
         }
         // else: drop old — it's dead
@@ -509,7 +586,7 @@ pub unsafe fn do_schedule() {
 /// into the scheduler.
 ///
 /// Returns the new PID on success, or an error message on failure.
-pub fn spawn_from_ramdisk(path: &str) -> Result<u64, &'static str> {
+pub fn spawn_from_ramdisk(path: &str, args: &str) -> Result<u64, &'static str> {
     let ramdisk = crate::fs::ramdisk::get()
         .ok_or("ramdisk not initialised")?;
 
@@ -586,6 +663,21 @@ pub fn spawn_from_ramdisk(path: &str) -> Result<u64, &'static str> {
     let user_rsp = user_stack_base + 4096;
 
     let mut proc = Process::new(path, cr3, elf.entry, user_rsp);
+
+    // [071] Copy arguments to the start of the user stack page.
+    if !args.is_empty() {
+        let copy_len = args.len().min(256);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                args.as_ptr(),
+                user_stack_base as *mut u8,
+                copy_len,
+            );
+        }
+        proc.args_ptr = user_stack_base;
+        proc.args_len = copy_len as u64;
+    }
+
     proc.prepare_initial_stack();
     let pid = proc.pid;
 
