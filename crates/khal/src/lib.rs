@@ -3,6 +3,7 @@
 
 pub mod apic;
 pub mod keyboard;
+pub mod mouse;
 pub mod pic;
 pub mod port;
 pub mod ramdisk;
