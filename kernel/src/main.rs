@@ -214,6 +214,18 @@ unsafe extern "C" fn _start() -> ! {
 			klog::debug!("  Pitch: {}", fb.pitch());
 			klog::debug!("  BPP: {}", fb.bpp());
 
+			// [080] Store framebuffer info for SYS_FB_INFO / SYS_MMAP.
+			// fb.addr() is the HHDM-mapped virtual address; derive physical.
+			let fb_phys = fb.addr() as u64 - hhdm_offset;
+			task::window::set_fb_info(
+				fb_phys,
+				fb.width() as u32,
+				fb.height() as u32,
+				fb.pitch() as u32,
+				fb.bpp() as u32,
+			);
+			klog::info!("[080] Framebuffer info stored: phys={:#x} {}x{}", fb_phys, fb.width(), fb.height());
+
 			// Following commented block of code was written as part of `QUESTS.md`
 			// to demonstrate basic framebuffer output before the console was implemented.
 			// It's left here as a reference for how to use the framebuffer directly,

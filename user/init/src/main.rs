@@ -139,7 +139,16 @@ pub extern "C" fn _start() -> ! {
 		log("[066] Failed to spawn shell");
 	}
 
-	// Yield to let the shell run, then loop yielding.
+	// [083] Spawn the display server.
+	log("[083] Spawning display_server...");
+	let ds_pid = spawn("display_server.elf", "");
+	if ds_pid != u64::MAX {
+		log("[083] Display server spawned successfully");
+	} else {
+		log("[083] Failed to spawn display_server");
+	}
+
+	// Yield to let child processes run, then loop yielding.
 	// Init stays alive as PID 1.
 	loop {
 		yield_cpu();

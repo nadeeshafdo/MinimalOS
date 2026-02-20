@@ -48,8 +48,13 @@ struct LockedHeap(Mutex<Heap>);
 unsafe impl GlobalAlloc for LockedHeap {
 	unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
 		let mut heap = self.0.lock();
-		let size = layout.size().max(core::mem::size_of::<FreeNode>());
-		let align = layout.align();
+		// Round up to FreeNode alignment (8) so block splits always land on
+		// 8-byte boundaries, avoiding misaligned FreeNode pointers.
+		let size = align_up(
+			layout.size().max(core::mem::size_of::<FreeNode>()) as u64,
+			core::mem::align_of::<FreeNode>() as u64,
+		) as usize;
+		let align = layout.align().max(core::mem::align_of::<FreeNode>());
 
 		// ── 1. Try to find a suitable block in the free list ──
 		if let Some(ptr) = find_free_block(&mut heap.head, size, align) {
@@ -86,7 +91,10 @@ unsafe impl GlobalAlloc for LockedHeap {
 
 	unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
 		let mut heap = self.0.lock();
-		let size = layout.size().max(core::mem::size_of::<FreeNode>());
+		let size = align_up(
+			layout.size().max(core::mem::size_of::<FreeNode>()) as u64,
+			core::mem::align_of::<FreeNode>() as u64,
+		) as usize;
 
 		// Push the freed block onto the free list
 		let node = ptr as *mut FreeNode;

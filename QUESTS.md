@@ -148,15 +148,15 @@
 
 *Focus: The visual finish line. Drawing windows.*
 
-- [ ] [080] **The Map:** Implement `sys_mmap` to share Framebuffer memory with User Mode.
-- [ ] [081] **The Blit:** Write a fast memory copy routine (SIMD optimized) for rects.
-- [ ] [082] **The Surface:** Define a `Window` struct (ID, x, y, width, height, buffer).
-- [ ] [083] **The Server:** Create `user/display_server` process.
-- [ ] [084] **The Client:** Create a shared memory protocol (Window creation requests).
-- [ ] [085] **The Loop:** Render multiple windows back-to-front (Painter's Algorithm).
-- [ ] [086] **The Clip:** Implement "Dirty Rectangles" (only redraw what changed).
-- [ ] [087] **The Drag:** Bind Mouse Events to Window coordinates (move windows).
-- [ ] [088] **The End:** Run `display_server` launching two windows: a Terminal and a Clock.
+- [x] [080] **The Map:** Implement `sys_mmap` to share Framebuffer memory with User Mode.
+- [x] [081] **The Blit:** Write a fast memory copy routine (SIMD optimized) for rects.
+- [x] [082] **The Surface:** Define a `Window` struct (ID, x, y, width, height, buffer).
+- [x] [083] **The Server:** Create `user/display_server` process.
+- [x] [084] **The Client:** Create a shared memory protocol (Window creation requests).
+- [x] [085] **The Loop:** Render multiple windows back-to-front (Painter's Algorithm).
+- [x] [086] **The Clip:** Implement "Dirty Rectangles" (only redraw what changed).
+- [x] [087] **The Drag:** Bind Mouse Events to Window coordinates (move windows).
+- [x] [088] **The End:** Run `display_server` launching two windows: a Terminal and a Clock.
 
 ---
 

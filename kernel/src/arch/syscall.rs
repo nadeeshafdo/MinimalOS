@@ -232,6 +232,18 @@ pub mod nr {
 	pub const SYS_LIST: u64 = 13;
 	/// `sys_print(msg_ptr, msg_len)` — write raw text to serial + framebuffer.
 	pub const SYS_PRINT: u64 = 14;
+	/// `sys_fb_info(buf_ptr)` — fill buffer with framebuffer info.
+	pub const SYS_FB_INFO: u64 = 15;
+	/// `sys_mmap(vaddr, num_pages, phys_addr)` — map pages into user space.
+	pub const SYS_MMAP: u64 = 16;
+	/// `sys_win_create(result_ptr, xy_packed, wh_packed, title_ptr)` — create window.
+	pub const SYS_WIN_CREATE: u64 = 17;
+	/// `sys_win_update(win_id)` — mark a window as dirty.
+	pub const SYS_WIN_UPDATE: u64 = 18;
+	/// `sys_win_list(buf_ptr, max_count)` — list windows into buffer.
+	pub const SYS_WIN_LIST: u64 = 19;
+	/// `sys_win_move(win_id, xy_packed)` — move a window.
+	pub const SYS_WIN_MOVE: u64 = 20;
 }
 
 /// Rust syscall dispatcher — called from the assembly stub.
@@ -460,6 +472,123 @@ unsafe extern "C" fn syscall_dispatch(
 				}
 			}
 			u64::MAX
+		}
+		nr::SYS_FB_INFO => {
+			// [080] a0 = pointer to FbInfo struct (24 bytes) in user space.
+			let buf_ptr = a0 as *mut crate::task::window::FbInfo;
+			if buf_ptr.is_null() {
+				return u64::MAX;
+			}
+			match crate::task::window::get_fb_info() {
+				Some(info) => {
+					unsafe { core::ptr::write(buf_ptr, info); }
+					0
+				}
+				None => u64::MAX,
+			}
+		}
+		nr::SYS_MMAP => {
+			// [080] a0 = user vaddr, a1 = number of 4KiB pages, a2 = phys addr (0 = alloc fresh)
+			let vaddr = a0;
+			let num_pages = a1 as usize;
+			let phys_start = a2;
+
+			if num_pages == 0 || num_pages > 4096 {
+				return u64::MAX; // Sanity limit: max 16 MiB per mmap
+			}
+			if vaddr & 0xFFF != 0 {
+				return u64::MAX; // Must be page-aligned
+			}
+
+			for i in 0..num_pages {
+				let page_vaddr = vaddr + (i as u64) * 4096;
+				let page_phys = if phys_start != 0 {
+					phys_start + (i as u64) * 4096
+				} else {
+					match crate::memory::pmm::alloc_frame() {
+						Some(f) => f,
+						None => return u64::MAX,
+					}
+				};
+				unsafe {
+					crate::memory::paging::map_page(
+						page_vaddr,
+						page_phys,
+						crate::memory::paging::PageFlags::USER_RW,
+					);
+					// Zero fresh pages (not framebuffer mappings).
+					if phys_start == 0 {
+						core::ptr::write_bytes(page_vaddr as *mut u8, 0, 4096);
+					}
+				}
+			}
+			klog::info!("[080] mmap: {:#x} → {} pages (phys={:#x})", vaddr, num_pages, phys_start);
+			0
+		}
+		nr::SYS_WIN_CREATE => {
+			// [084] a0 = result_ptr (&mut [u64; 2]), a1 = xy_packed, a2 = wh_packed, a3 = title_ptr
+			let result_ptr = a0 as *mut u64;
+			let x = a1 as i32;
+			let y = (a1 >> 32) as i32;
+			let w = a2 as u32;
+			let h = (a2 >> 32) as u32;
+			let title_ptr = a3 as *const u8;
+
+			if result_ptr.is_null() || w == 0 || h == 0 || w > 2048 || h > 2048 {
+				return u64::MAX;
+			}
+
+			// Read title (up to 31 bytes).
+			let title = if !title_ptr.is_null() {
+				// Find NUL or limit to 31 chars.
+				let mut len = 0usize;
+				while len < 31 {
+					let b = unsafe { core::ptr::read(title_ptr.add(len)) };
+					if b == 0 { break; }
+					len += 1;
+				}
+				if len > 0 {
+					let slice = unsafe { core::slice::from_raw_parts(title_ptr, len) };
+					core::str::from_utf8(slice).unwrap_or("?")
+				} else {
+					"Window"
+				}
+			} else {
+				"Window"
+			};
+
+			match crate::task::window::create_window(x, y, w, h, title) {
+				Some((id, buf_vaddr)) => {
+					unsafe {
+						core::ptr::write(result_ptr, id as u64);
+						core::ptr::write(result_ptr.add(1), buf_vaddr);
+					}
+					0
+				}
+				None => u64::MAX,
+			}
+		}
+		nr::SYS_WIN_UPDATE => {
+			// [086] a0 = window id
+			crate::task::window::mark_dirty(a0 as u32);
+			0
+		}
+		nr::SYS_WIN_LIST => {
+			// [084] a0 = buf_ptr (array of WindowInfo), a1 = max_count
+			let buf_ptr = a0 as *mut crate::task::window::WindowInfo;
+			let max_count = a1 as usize;
+			if buf_ptr.is_null() || max_count == 0 {
+				return u64::MAX;
+			}
+			unsafe { crate::task::window::list_windows(buf_ptr, max_count) as u64 }
+		}
+		nr::SYS_WIN_MOVE => {
+			// [087] a0 = window id, a1 = xy_packed (x in low 32, y in high 32)
+			let win_id = a0 as u32;
+			let new_x = a1 as i32;
+			let new_y = (a1 >> 32) as i32;
+			crate::task::window::move_window(win_id, new_x, new_y);
+			0
 		}
 		_ => {
 			klog::warn!("[syscall] unknown syscall nr={}", nr);
