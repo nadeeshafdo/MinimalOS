@@ -113,6 +113,72 @@ pub fn create_user_page_table() -> Option<u64> {
 	Some(new_pml4_phys)
 }
 
+/// Recursively free all user-space page frames and intermediate page
+/// table frames in a process's PML4, then free the PML4 itself.
+///
+/// Only walks the lower half (PML4\[0..256\]).  The upper half
+/// (indices 256-511) is shared with the kernel and must NOT be freed.
+///
+/// # Safety
+///
+/// `pml4_phys` must be a valid PML4 frame allocated via
+/// [`create_user_page_table`] and must **not** be the currently
+/// active CR3.
+pub unsafe fn free_user_page_table(pml4_phys: u64) {
+	let hhdm = HHDM.load(Ordering::Relaxed);
+	let pml4_virt = (hhdm + pml4_phys) as *const u64;
+
+	// Walk only the user half (indices 0..256).
+	for pml4_idx in 0..256 {
+		let pml4e = ptr::read_volatile(pml4_virt.add(pml4_idx));
+		if pml4e & PageFlags::PRESENT.bits() == 0 {
+			continue;
+		}
+		let pdpt_phys = pml4e & PHYS_ADDR_MASK;
+		let pdpt_virt = (hhdm + pdpt_phys) as *const u64;
+
+		for pdpt_idx in 0..512 {
+			let pdpte = ptr::read_volatile(pdpt_virt.add(pdpt_idx));
+			if pdpte & PageFlags::PRESENT.bits() == 0 {
+				continue;
+			}
+			if pdpte & PageFlags::HUGE.bits() != 0 {
+				continue; // 1 GiB huge — not used for user space
+			}
+			let pd_phys = pdpte & PHYS_ADDR_MASK;
+			let pd_virt = (hhdm + pd_phys) as *const u64;
+
+			for pd_idx in 0..512 {
+				let pde = ptr::read_volatile(pd_virt.add(pd_idx));
+				if pde & PageFlags::PRESENT.bits() == 0 {
+					continue;
+				}
+				if pde & PageFlags::HUGE.bits() != 0 {
+					continue; // 2 MiB huge — not used for user space
+				}
+				let pt_phys = pde & PHYS_ADDR_MASK;
+				let pt_virt = (hhdm + pt_phys) as *const u64;
+
+				// Free every leaf page frame in this PT.
+				for pt_idx in 0..512 {
+					let pte = ptr::read_volatile(pt_virt.add(pt_idx));
+					if pte & PageFlags::PRESENT.bits() != 0 {
+						pmm::free_frame(pte & PHYS_ADDR_MASK);
+					}
+				}
+				// Free the PT frame itself.
+				pmm::free_frame(pt_phys);
+			}
+			// Free the PD frame.
+			pmm::free_frame(pd_phys);
+		}
+		// Free the PDPT frame.
+		pmm::free_frame(pdpt_phys);
+	}
+	// Free the PML4 frame.
+	pmm::free_frame(pml4_phys);
+}
+
 /// Pre-allocate the shared user-accessible region for window buffers.
 ///
 /// Creates PML4\[384\] → PDPT so that all process page tables (which
