@@ -112,8 +112,11 @@ static WINDOWS: spin::Mutex<[Window; MAX_WINDOWS]> =
 	spin::Mutex::new([Window::empty(); MAX_WINDOWS]);
 
 /// Base virtual address for window pixel buffers.
-/// Each window gets up to 2 MiB at `WIN_BUFFER_BASE + slot * 0x20_0000`.
-const WIN_BUFFER_BASE: u64 = 0x400_0000; // 64 MiB
+///
+/// Placed in the higher-half shared region (PML4[384]) so that all
+/// process page tables automatically have access.  Each window gets
+/// up to 2 MiB at `WIN_BUFFER_BASE + slot * 0x20_0000`.
+const WIN_BUFFER_BASE: u64 = 0xFFFF_C000_0000_0000;
 
 // ── Window management ([084]) ───────────────────────────────────
 

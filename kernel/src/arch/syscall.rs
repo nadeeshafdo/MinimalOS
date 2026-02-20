@@ -246,6 +246,33 @@ pub mod nr {
 	pub const SYS_WIN_MOVE: u64 = 20;
 }
 
+// ── User-pointer validation ────────────────────────────────────
+
+/// The upper bound of user-space canonical addresses.
+/// Anything at or above this address is kernel memory.
+const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
+
+/// Validate that a user-space pointer range `[ptr, ptr+len)` is
+/// safe for the kernel to access on behalf of a user process.
+///
+/// Returns `false` if:
+/// - `ptr` is null
+/// - `ptr + len` overflows
+/// - any byte in the range falls in kernel address space
+#[inline]
+fn validate_user_ptr(ptr: u64, len: usize) -> bool {
+	if ptr == 0 {
+		return false;
+	}
+	if len == 0 {
+		return true;
+	}
+	match ptr.checked_add(len as u64) {
+		Some(end) => end <= USER_SPACE_END,
+		None => false,
+	}
+}
+
 /// Rust syscall dispatcher — called from the assembly stub.
 ///
 /// Returns the syscall result in RAX.
@@ -263,14 +290,15 @@ unsafe extern "C" fn syscall_dispatch(
 			// a0 = pointer to UTF-8 string, a1 = length
 			let ptr = a0 as *const u8;
 			let len = a1 as usize;
-			if !ptr.is_null() && len > 0 && len <= 1024 {
-				let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
-				if let Ok(msg) = core::str::from_utf8(slice) {
-					klog::info!("[syscall] SYS_LOG: {}", msg);
-					return 0; // success
-				}
+			if !validate_user_ptr(a0, len) || len > 1024 {
+				return u64::MAX;
 			}
-			u64::MAX // error: bad pointer or encoding
+			let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+			if let Ok(msg) = core::str::from_utf8(slice) {
+				klog::info!("[syscall] SYS_LOG: {}", msg);
+				return 0; // success
+			}
+			u64::MAX // error: bad encoding
 		}
 		nr::SYS_EXIT => {
 			klog::info!("[syscall] SYS_EXIT(code={})", a0);
@@ -299,21 +327,21 @@ unsafe extern "C" fn syscall_dispatch(
 		nr::SYS_SPAWN => {
 			// [066] a0 = path pointer, a1 = path length
 			// [071] a2 = args pointer (0 = none), a3 = args length
-			let ptr = a0 as *const u8;
 			let len = a1 as usize;
-			if ptr.is_null() || len == 0 || len > 256 {
+			if !validate_user_ptr(a0, len) || len == 0 || len > 256 {
 				return u64::MAX;
 			}
-			let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+			let slice = unsafe { core::slice::from_raw_parts(a0 as *const u8, len) };
 			let path = match core::str::from_utf8(slice) {
 				Ok(s) => s,
 				Err(_) => return u64::MAX,
 			};
 			// Extract optional args
-			let args_ptr = a2 as *const u8;
 			let args_len = a3 as usize;
-			let args = if !args_ptr.is_null() && args_len > 0 && args_len <= 256 {
-				let args_slice = unsafe { core::slice::from_raw_parts(args_ptr, args_len) };
+			let args = if a2 != 0 && args_len > 0 && args_len <= 256
+				&& validate_user_ptr(a2, args_len)
+			{
+				let args_slice = unsafe { core::slice::from_raw_parts(a2 as *const u8, args_len) };
 				core::str::from_utf8(args_slice).unwrap_or("")
 			} else {
 				""
@@ -333,9 +361,28 @@ unsafe extern "C" fn syscall_dispatch(
 			if fd != 0 {
 				return u64::MAX; // only STDIN supported
 			}
-			// Non-blocking: return one byte if available, 0 if not.
-			let ch = crate::task::input::pop_char();
-			ch as u64
+			// Blocking read: if no input is available, suspend the
+			// calling process until the keyboard IRQ delivers a byte.
+			loop {
+				let ch = crate::task::input::pop_char();
+				if ch != 0 {
+					return ch as u64;
+				}
+				// Buffer empty — block.
+				let pid = {
+					let sched = crate::task::process::SCHEDULER.lock();
+					sched.current().map(|p| p.pid).unwrap_or(0)
+				};
+				crate::task::input::set_waiter(pid);
+				{
+					let mut sched = crate::task::process::SCHEDULER.lock();
+					if let Some(current) = sched.current_mut() {
+						current.state = crate::task::process::ProcessState::Blocked;
+					}
+				}
+				unsafe { crate::task::process::do_schedule() };
+				// Woken up — loop back and try again.
+			}
 		}
 		nr::SYS_PIPE_CREATE => {
 			// [070] Create a new IPC pipe.
@@ -353,23 +400,21 @@ unsafe extern "C" fn syscall_dispatch(
 		nr::SYS_PIPE_WRITE => {
 			// [070] a0 = pipe_id, a1 = buf_ptr, a2 = buf_len
 			let pipe_id = a0 as usize;
-			let ptr = a1 as *const u8;
 			let len = a2 as usize;
-			if ptr.is_null() || len == 0 || len > 4096 {
+			if !validate_user_ptr(a1, len) || len == 0 || len > 4096 {
 				return u64::MAX;
 			}
-			let data = unsafe { core::slice::from_raw_parts(ptr, len) };
+			let data = unsafe { core::slice::from_raw_parts(a1 as *const u8, len) };
 			crate::task::pipe::write(pipe_id, data) as u64
 		}
 		nr::SYS_PIPE_READ => {
 			// [070] a0 = pipe_id, a1 = buf_ptr, a2 = buf_len
 			let pipe_id = a0 as usize;
-			let ptr = a1 as *mut u8;
 			let len = a2 as usize;
-			if ptr.is_null() || len == 0 || len > 4096 {
+			if !validate_user_ptr(a1, len) || len == 0 || len > 4096 {
 				return u64::MAX;
 			}
-			let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+			let buf = unsafe { core::slice::from_raw_parts_mut(a1 as *mut u8, len) };
 			crate::task::pipe::read(pipe_id, buf) as u64
 		}
 		nr::SYS_PIPE_CLOSE => {
@@ -420,21 +465,19 @@ unsafe extern "C" fn syscall_dispatch(
 		}
 		nr::SYS_READ_EVENT => {
 			// [079] a0 = pointer to 12-byte buffer in user space.
-			let buf_ptr = a0 as *mut u8;
-			if buf_ptr.is_null() {
+			if !validate_user_ptr(a0, 12) {
 				return u64::MAX;
 			}
-			unsafe { crate::task::events::read_event_to_user(buf_ptr) as u64 }
+			unsafe { crate::task::events::read_event_to_user(a0 as *mut u8) as u64 }
 		}
 		nr::SYS_LIST => {
 			// a0 = buf_ptr, a1 = buf_len
 			// Write newline-separated ramdisk filenames to user buffer.
-			let buf_ptr = a0 as *mut u8;
 			let buf_len = a1 as usize;
-			if buf_ptr.is_null() || buf_len == 0 || buf_len > 4096 {
+			if !validate_user_ptr(a0, buf_len) || buf_len == 0 || buf_len > 4096 {
 				return u64::MAX;
 			}
-			let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, buf_len) };
+			let buf = unsafe { core::slice::from_raw_parts_mut(a0 as *mut u8, buf_len) };
 			let ramdisk = match crate::fs::ramdisk::get() {
 				Some(rd) => rd,
 				None => return u64::MAX,
@@ -461,10 +504,9 @@ unsafe extern "C" fn syscall_dispatch(
 		nr::SYS_PRINT => {
 			// a0 = pointer to UTF-8 string, a1 = length
 			// Write raw text to serial AND framebuffer (no prefix/formatting).
-			let ptr = a0 as *const u8;
 			let len = a1 as usize;
-			if !ptr.is_null() && len > 0 && len <= 4096 {
-				let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+			if validate_user_ptr(a0, len) && len > 0 && len <= 4096 {
+				let slice = unsafe { core::slice::from_raw_parts(a0 as *const u8, len) };
 				if let Ok(msg) = core::str::from_utf8(slice) {
 					khal::serial::write_str(msg);
 					kdisplay::console_write_fmt(format_args!("{}", msg));
@@ -475,13 +517,12 @@ unsafe extern "C" fn syscall_dispatch(
 		}
 		nr::SYS_FB_INFO => {
 			// [080] a0 = pointer to FbInfo struct (24 bytes) in user space.
-			let buf_ptr = a0 as *mut crate::task::window::FbInfo;
-			if buf_ptr.is_null() {
+			if !validate_user_ptr(a0, core::mem::size_of::<crate::task::window::FbInfo>()) {
 				return u64::MAX;
 			}
 			match crate::task::window::get_fb_info() {
 				Some(info) => {
-					unsafe { core::ptr::write(buf_ptr, info); }
+					unsafe { core::ptr::write(a0 as *mut crate::task::window::FbInfo, info); }
 					0
 				}
 				None => u64::MAX,
@@ -527,20 +568,19 @@ unsafe extern "C" fn syscall_dispatch(
 		}
 		nr::SYS_WIN_CREATE => {
 			// [084] a0 = result_ptr (&mut [u64; 2]), a1 = xy_packed, a2 = wh_packed, a3 = title_ptr
-			let result_ptr = a0 as *mut u64;
 			let x = a1 as i32;
 			let y = (a1 >> 32) as i32;
 			let w = a2 as u32;
 			let h = (a2 >> 32) as u32;
-			let title_ptr = a3 as *const u8;
 
-			if result_ptr.is_null() || w == 0 || h == 0 || w > 2048 || h > 2048 {
+			if !validate_user_ptr(a0, 16) || w == 0 || h == 0 || w > 2048 || h > 2048 {
 				return u64::MAX;
 			}
 
 			// Read title (up to 31 bytes).
-			let title = if !title_ptr.is_null() {
+			let title = if a3 != 0 && validate_user_ptr(a3, 1) {
 				// Find NUL or limit to 31 chars.
+				let title_ptr = a3 as *const u8;
 				let mut len = 0usize;
 				while len < 31 {
 					let b = unsafe { core::ptr::read(title_ptr.add(len)) };
@@ -560,8 +600,8 @@ unsafe extern "C" fn syscall_dispatch(
 			match crate::task::window::create_window(x, y, w, h, title) {
 				Some((id, buf_vaddr)) => {
 					unsafe {
-						core::ptr::write(result_ptr, id as u64);
-						core::ptr::write(result_ptr.add(1), buf_vaddr);
+						core::ptr::write((a0) as *mut u64, id as u64);
+						core::ptr::write((a0 as *mut u64).add(1), buf_vaddr);
 					}
 					0
 				}
@@ -575,12 +615,12 @@ unsafe extern "C" fn syscall_dispatch(
 		}
 		nr::SYS_WIN_LIST => {
 			// [084] a0 = buf_ptr (array of WindowInfo), a1 = max_count
-			let buf_ptr = a0 as *mut crate::task::window::WindowInfo;
 			let max_count = a1 as usize;
-			if buf_ptr.is_null() || max_count == 0 {
+			let buf_size = max_count * core::mem::size_of::<crate::task::window::WindowInfo>();
+			if !validate_user_ptr(a0, buf_size) || max_count == 0 {
 				return u64::MAX;
 			}
-			unsafe { crate::task::window::list_windows(buf_ptr, max_count) as u64 }
+			unsafe { crate::task::window::list_windows(a0 as *mut crate::task::window::WindowInfo, max_count) as u64 }
 		}
 		nr::SYS_WIN_MOVE => {
 			// [087] a0 = window id, a1 = xy_packed (x in low 32, y in high 32)

@@ -70,6 +70,150 @@ pub fn init(hhdm_offset: u64) {
 	klog::info!("[031] Paging subsystem initialised (HHDM={:#x})", hhdm_offset);
 }
 
+/// Return the HHDM offset (for use by other modules that need to
+/// convert between physical and virtual addresses).
+pub fn hhdm_offset() -> u64 {
+	HHDM.load(Ordering::Relaxed)
+}
+
+/// Create a new user-space page table (PML4).
+///
+/// Allocates a fresh PML4 frame, copies the kernel's higher-half
+/// entries (PML4[256..512]) so kernel code, HHDM, heap, and shared
+/// regions are accessible, and returns the **physical address** of
+/// the new PML4.
+pub fn create_user_page_table() -> Option<u64> {
+	let hhdm = HHDM.load(Ordering::Relaxed);
+
+	// Allocate a fresh frame for the new PML4.
+	let new_pml4_phys = pmm::alloc_frame()?;
+	let new_pml4_virt = (hhdm + new_pml4_phys) as *mut u64;
+
+	// Read the kernel's current PML4.
+	let cr3: u64;
+	unsafe {
+		core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
+	}
+	let kernel_pml4_phys = cr3 & PHYS_ADDR_MASK;
+	let kernel_pml4_virt = (hhdm + kernel_pml4_phys) as *const u64;
+
+	unsafe {
+		// Zero the entire new PML4 (lower half starts empty).
+		ptr::write_bytes(new_pml4_virt as *mut u8, 0, 4096);
+
+		// Copy higher-half entries (indices 256-511) from the kernel.
+		// This shares: kernel code, HHDM, heap, APIC, shared window
+		// buffers, and any other kernel-side mappings.
+		for i in 256..512 {
+			let entry = ptr::read_volatile(kernel_pml4_virt.add(i));
+			ptr::write_volatile(new_pml4_virt.add(i), entry);
+		}
+	}
+
+	Some(new_pml4_phys)
+}
+
+/// Pre-allocate the shared user-accessible region for window buffers.
+///
+/// Creates PML4\[384\] → PDPT so that all process page tables (which
+/// copy PML4\[256..512\]) share the same window-buffer hierarchy.
+/// Pages mapped within this region are automatically visible to
+/// every process.
+///
+/// Must be called **once** during kernel init, before any process
+/// is spawned.
+///
+/// # Safety
+/// Must only be called once, after `init()`.
+pub unsafe fn init_shared_user_region() {
+	let hhdm = HHDM.load(Ordering::Relaxed);
+
+	let cr3: u64;
+	core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
+	let pml4_phys = cr3 & PHYS_ADDR_MASK;
+
+	// PML4 index 384 covers virtual addresses starting at
+	// 0xFFFF_C000_0000_0000.  Pre-allocate the PDPT so the entry
+	// exists before any process copies PML4[256..512].
+	ensure_table(hhdm, pml4_phys, 384, PageFlags::USER_RW);
+
+	klog::info!("Shared user region pre-allocated (PML4[384] for window buffers)");
+}
+
+/// Map a 4 KiB virtual page in a **specific** page table.
+///
+/// Like [`map_page`], but operates on the given PML4 physical address
+/// instead of the current CR3.  No TLB flush is performed — the
+/// caller must flush or switch CR3 as appropriate.
+///
+/// # Safety
+/// Same requirements as `map_page`, plus `pml4_phys` must be a valid
+/// PML4 frame allocated via [`create_user_page_table`].
+pub unsafe fn map_page_in(pml4_phys: u64, virt: u64, phys: u64, flags: PageFlags) {
+	debug_assert!(virt & 0xFFF == 0, "map_page_in: virt not page-aligned");
+	debug_assert!(phys & 0xFFF == 0, "map_page_in: phys not frame-aligned");
+
+	let hhdm = HHDM.load(Ordering::Relaxed);
+
+	let pml4_idx = ((virt >> 39) & 0x1FF) as usize;
+	let pdpt_idx = ((virt >> 30) & 0x1FF) as usize;
+	let pd_idx = ((virt >> 21) & 0x1FF) as usize;
+	let pt_idx = ((virt >> 12) & 0x1FF) as usize;
+
+	let pdpt_phys = ensure_table(hhdm, pml4_phys, pml4_idx, flags);
+	let pd_phys = ensure_table(hhdm, pdpt_phys, pdpt_idx, flags);
+	let pt_phys = ensure_table(hhdm, pd_phys, pd_idx, flags);
+
+	let pt_virt = (hhdm + pt_phys) as *mut u64;
+	let entry = phys | flags.bits() | PageFlags::PRESENT.bits();
+	ptr::write_volatile(pt_virt.add(pt_idx), entry);
+}
+
+/// Translate a virtual address in a **specific** page table.
+///
+/// Like [`translate`], but walks the given PML4 instead of the
+/// current CR3.
+pub unsafe fn translate_in(pml4_phys: u64, virt: u64) -> Option<u64> {
+	let hhdm = HHDM.load(Ordering::Relaxed);
+
+	let pml4_idx = ((virt >> 39) & 0x1FF) as usize;
+	let pdpt_idx = ((virt >> 30) & 0x1FF) as usize;
+	let pd_idx = ((virt >> 21) & 0x1FF) as usize;
+	let pt_idx = ((virt >> 12) & 0x1FF) as usize;
+
+	let pml4_virt = (hhdm + pml4_phys) as *const u64;
+	let pml4e = ptr::read_volatile(pml4_virt.add(pml4_idx));
+	if pml4e & PageFlags::PRESENT.bits() == 0 {
+		return None;
+	}
+
+	let pdpt_virt = (hhdm + (pml4e & PHYS_ADDR_MASK)) as *const u64;
+	let pdpte = ptr::read_volatile(pdpt_virt.add(pdpt_idx));
+	if pdpte & PageFlags::PRESENT.bits() == 0 {
+		return None;
+	}
+	if pdpte & PageFlags::HUGE.bits() != 0 {
+		return Some((pdpte & 0x000F_FFFF_C000_0000) | (virt & 0x3FFF_FFFF));
+	}
+
+	let pd_virt = (hhdm + (pdpte & PHYS_ADDR_MASK)) as *const u64;
+	let pde = ptr::read_volatile(pd_virt.add(pd_idx));
+	if pde & PageFlags::PRESENT.bits() == 0 {
+		return None;
+	}
+	if pde & PageFlags::HUGE.bits() != 0 {
+		return Some((pde & 0x000F_FFFF_FFE0_0000) | (virt & 0x1F_FFFF));
+	}
+
+	let pt_virt = (hhdm + (pde & PHYS_ADDR_MASK)) as *const u64;
+	let pte = ptr::read_volatile(pt_virt.add(pt_idx));
+	if pte & PageFlags::PRESENT.bits() == 0 {
+		return None;
+	}
+
+	Some((pte & PHYS_ADDR_MASK) | (virt & 0xFFF))
+}
+
 /// Map a 4 KiB virtual page to a physical frame.
 ///
 /// Walks PML4 → PDPT → PD → PT, allocating intermediate tables

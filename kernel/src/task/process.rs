@@ -471,6 +471,44 @@ impl Scheduler {
 	}
 }
 
+// ── Pending wake queue (lock-free, IRQ-safe) ────────────────────
+
+/// Pending wake requests from IRQ context.
+/// Each slot holds a PID to wake (0 = empty).
+static PENDING_WAKES: [AtomicU64; 8] = [
+	AtomicU64::new(0), AtomicU64::new(0),
+	AtomicU64::new(0), AtomicU64::new(0),
+	AtomicU64::new(0), AtomicU64::new(0),
+	AtomicU64::new(0), AtomicU64::new(0),
+];
+
+/// Request that a blocked process be woken on the next schedule() call.
+///
+/// Lock-free — safe to call from IRQ context.
+pub fn request_wake(pid: u64) {
+	for slot in PENDING_WAKES.iter() {
+		if slot.compare_exchange(0, pid, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+			return;
+		}
+	}
+	// All slots full — best-effort; shouldn't happen with few processes.
+}
+
+/// Drain pending wake requests.  Called while holding the scheduler lock.
+fn process_pending_wakes(sched: &mut Scheduler) {
+	for slot in PENDING_WAKES.iter() {
+		let pid = slot.swap(0, Ordering::AcqRel);
+		if pid != 0 {
+			for task in sched.tasks.iter_mut() {
+				if task.pid == pid && task.state == ProcessState::Blocked {
+					task.state = ProcessState::Ready;
+					break;
+				}
+			}
+		}
+	}
+}
+
 /// [064] Free-standing schedule function that safely manages the lock.
 ///
 /// Acquires the scheduler lock, rearranges tasks, extracts the
@@ -481,16 +519,19 @@ impl Scheduler {
 /// # Safety
 /// Must be called with interrupts disabled or from interrupt context.
 pub unsafe fn do_schedule() {
-	// We use a static "dummy" to receive the old RSP when the old
-	// task is dead (so we don't need a valid pointer into VecDeque).
-	static mut DEAD_RSP: u64 = 0;
+	// Dummy RSP landing pad for dead tasks — AtomicU64 avoids
+	// the data race that `static mut` would cause on SMP.
+	static DEAD_RSP: AtomicU64 = AtomicU64::new(0);
 
-	let (old_rsp_ptr, new_rsp) = {
+	let (old_rsp_ptr, new_rsp, new_cr3) = {
 		let mut sched = SCHEDULER.lock();
 
 		if sched.tasks.is_empty() {
 			return;
 		}
+
+		// Process pending wake requests from IRQ handlers.
+		process_pending_wakes(&mut sched);
 
 		// [072] Wake any sleeping tasks whose wake_tick has passed.
 		sched.wake_sleeping(super::clock::now());
@@ -528,8 +569,8 @@ pub unsafe fn do_schedule() {
 
 		if !old_is_dead {
 			let mut old = old;
-			// Preserve Sleeping state; otherwise mark Ready.
-			if old.state != ProcessState::Sleeping {
+			// Preserve Sleeping and Blocked states; otherwise mark Ready.
+			if old.state != ProcessState::Sleeping && old.state != ProcessState::Blocked {
 				old.state = ProcessState::Ready;
 			}
 			sched.tasks.push_back(old);
@@ -558,20 +599,27 @@ pub unsafe fn do_schedule() {
 		let old_rsp_ptr = if old_is_dead {
 			// Task is dead, use dummy so context_switch_asm has
 			// somewhere to write the RSP (which we'll never use).
-			&raw mut DEAD_RSP
+			DEAD_RSP.as_ptr()
 		} else {
 			&mut sched.tasks.back_mut().unwrap().kernel_rsp as *mut u64
 		};
 		let new_rsp = sched.current.as_ref().unwrap().kernel_rsp;
+		let new_cr3 = sched.current.as_ref().unwrap().cr3;
 
-		(old_rsp_ptr, new_rsp)
+		(old_rsp_ptr, new_rsp, new_cr3)
 		// MutexGuard dropped here — lock is released before switch
 	};
 
 	unsafe {
+		// Switch page tables if the new task uses a different CR3.
+		let current_cr3: u64;
+		core::arch::asm!("mov {}, cr3", out(reg) current_cr3, options(nomem, nostack, preserves_flags));
+		if (current_cr3 & 0x000F_FFFF_FFFF_F000) != new_cr3 {
+			core::arch::asm!("mov cr3, {}", in(reg) new_cr3, options(nostack, preserves_flags));
+		}
+
 		context_switch_asm(old_rsp_ptr, new_rsp);
-		// The context switch may return from an interrupt context where
-		// IF=0.  Re-enable interrupts so the timer can fire and drive
+		// Re-enable interrupts so the timer can fire and drive
 		// preemptive scheduling.
 		core::arch::asm!("sti", options(nomem, nostack));
 	}
@@ -598,15 +646,15 @@ pub fn spawn_from_ramdisk(path: &str, args: &str) -> Result<u64, &'static str> {
 
 	klog::info!("[066] Spawning '{}': entry={:#x}", path, elf.entry);
 
-	// We share the kernel page tables (same CR3) for simplicity.
-	// All user mappings go into the same address space.
-	// TODO: per-process page tables for isolation.
-	let cr3: u64;
-	unsafe {
-		core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
-	}
+	// ── Per-process page table ──────────────────────────────────
+	// Create a brand-new PML4 with kernel higher-half mappings
+	// shared.  User code/stack are private to this process.
+	let cr3 = crate::memory::paging::create_user_page_table()
+		.ok_or("failed to allocate page table")?;
 
-	// Map PT_LOAD segments.
+	let hhdm = crate::memory::paging::hhdm_offset();
+
+	// ── Map PT_LOAD segments into the new page table ────────────
 	for phdr in elf.phdrs {
 		if !phdr.is_load() {
 			continue;
@@ -622,64 +670,85 @@ pub fn spawn_from_ramdisk(path: &str, args: &str) -> Result<u64, &'static str> {
 
 		for i in 0..num_pages {
 			let page_virt = page_start + (i as u64) * 4096;
-			if unsafe { crate::memory::paging::translate(page_virt) }.is_none() {
+			if unsafe { crate::memory::paging::translate_in(cr3, page_virt) }.is_none() {
 				let phys = crate::memory::pmm::alloc_frame()
 					.ok_or("out of physical memory")?;
 				unsafe {
-					crate::memory::paging::map_page(
+					crate::memory::paging::map_page_in(
+						cr3,
 						page_virt,
 						phys,
 						crate::memory::paging::PageFlags::USER_RW,
 					);
-					core::ptr::write_bytes(page_virt as *mut u8, 0, 4096);
+					// Zero via HHDM (the page is in another address space).
+					core::ptr::write_bytes((hhdm + phys) as *mut u8, 0, 4096);
 				}
 			}
 		}
 
+		// Copy ELF file data via HHDM.
 		if filesz > 0 {
-			unsafe {
-				core::ptr::copy_nonoverlapping(
-					elf.data.as_ptr().add(offset),
-					vaddr as *mut u8,
-					filesz,
-				);
+			let mut copied = 0;
+			while copied < filesz {
+				let target_virt = vaddr + copied as u64;
+				let page_virt = target_virt & !0xFFF;
+				let page_offset = (target_virt & 0xFFF) as usize;
+				let chunk = (filesz - copied).min(4096 - page_offset);
+
+				let page_phys = unsafe {
+					crate::memory::paging::translate_in(cr3, page_virt)
+						.ok_or("ELF page not mapped")?
+				};
+
+				unsafe {
+					core::ptr::copy_nonoverlapping(
+						elf.data.as_ptr().add(offset + copied),
+						(hhdm + page_phys + page_offset as u64) as *mut u8,
+						chunk,
+					);
+				}
+				copied += chunk;
 			}
 		}
 	}
 
-	// Allocate a unique user stack for this process.
-	// Use PID-based offset to avoid collisions: 0x80_0000 + pid * 0x10000
-	// Allocate 8 pages (32 KiB) to support shell structures (History ~4 KiB, etc.)
+	// ── Allocate user stack (fixed address — each process has its
+	// own page table, so no PID-based offset is needed) ──────────
 	const USER_STACK_PAGES: u64 = 8;
-	let pid_for_stack = NEXT_PID.load(Ordering::Relaxed);
-	let user_stack_base = 0x80_0000u64 + pid_for_stack * 0x1_0000;
+	const USER_STACK_BASE: u64 = 0x7FFF_0000;
 	for i in 0..USER_STACK_PAGES {
-		let page_virt = user_stack_base + i * 4096;
+		let page_virt = USER_STACK_BASE + i * 4096;
 		let page_phys = crate::memory::pmm::alloc_frame()
 			.ok_or("out of physical memory for user stack")?;
 		unsafe {
-			crate::memory::paging::map_page(
+			crate::memory::paging::map_page_in(
+				cr3,
 				page_virt,
 				page_phys,
 				crate::memory::paging::PageFlags::USER_RW,
 			);
+			core::ptr::write_bytes((hhdm + page_phys) as *mut u8, 0, 4096);
 		}
 	}
-	let user_rsp = user_stack_base + USER_STACK_PAGES * 4096;
+	let user_rsp = USER_STACK_BASE + USER_STACK_PAGES * 4096;
 
 	let mut proc = Process::new(path, cr3, elf.entry, user_rsp);
 
-	// [071] Copy arguments to the start of the user stack page.
+	// [071] Copy arguments to the start of the user stack via HHDM.
 	if !args.is_empty() {
 		let copy_len = args.len().min(256);
+		let stack_phys = unsafe {
+			crate::memory::paging::translate_in(cr3, USER_STACK_BASE)
+				.ok_or("user stack page not mapped")?
+		};
 		unsafe {
 			core::ptr::copy_nonoverlapping(
 				args.as_ptr(),
-				user_stack_base as *mut u8,
+				(hhdm + stack_phys) as *mut u8,
 				copy_len,
 			);
 		}
-		proc.args_ptr = user_stack_base;
+		proc.args_ptr = USER_STACK_BASE;
 		proc.args_len = copy_len as u64;
 	}
 
@@ -687,6 +756,6 @@ pub fn spawn_from_ramdisk(path: &str, args: &str) -> Result<u64, &'static str> {
 	let pid = proc.pid;
 
 	SCHEDULER.lock().push(proc);
-	klog::info!("[066] Process '{}' (PID {}) ready", path, pid);
+	klog::info!("[066] Process '{}' (PID {}) ready (CR3={:#x})", path, pid, cr3);
 	Ok(pid)
 }

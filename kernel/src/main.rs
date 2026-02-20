@@ -161,6 +161,11 @@ unsafe extern "C" fn _start() -> ! {
 	klog::info!("[036] Vec<i32> = {:?}, sum = {} \u{2714}", v.as_slice(), v.iter().sum::<i32>());
 	drop(v);
 
+	// Pre-allocate the shared higher-half region for window buffers
+	// (PML4[384]).  This must happen before any process is created
+	// so that every process's PML4 copy includes the entry.
+	unsafe { memory::paging::init_shared_user_region(); }
+
 	// Read APIC physical base from MSR
 	let apic_low: u32;
 	let apic_high: u32;
@@ -358,109 +363,31 @@ unsafe extern "C" fn _start() -> ! {
 		klog::error!("[057] hello.txt: file not found");
 	}
 
-	// ── [058] The Loader — Load ELF from ramdisk ────────────────
+	// ── [058] The Loader — Spawn init.elf via spawn_from_ramdisk ──
 	//
-	// 1. Find init.elf in the tar archive.
-	// 2. Parse the ELF header and program headers.
-	// 3. Map PT_LOAD segments into user address space.
-	// 4. Allocate a user stack.
-	// 5. Create a Process and push it to the scheduler.
+	// With per-process page tables, init is spawned just like every
+	// other process: create_user_page_table → map ELF → push to
+	// scheduler.  No special-casing required.
 
-	let elf_entry = fs::tar::find_file(ramdisk, "init.elf")
-		.expect("[058] init.elf not found in ramdisk");
-	klog::info!("[058] Found init.elf in ramdisk ({} bytes)", elf_entry.size);
-
-	let elf = fs::elf::parse(elf_entry.data)
-		.expect("[058] Failed to parse init.elf");
-	klog::info!("[058] ELF entry point: {:#x}", elf.entry);
-
-	// Map each PT_LOAD segment into user space.
-	for phdr in elf.phdrs {
-		if !phdr.is_load() {
-			continue;
-		}
-
-		let vaddr = phdr.p_vaddr;
-		let memsz = phdr.p_memsz as usize;
-		let filesz = phdr.p_filesz as usize;
-		let offset = phdr.p_offset as usize;
-		let flags = phdr.p_flags;
-
-		klog::info!(
-			"[058]   PT_LOAD: vaddr={:#x} filesz={} memsz={} flags={:#x}",
-			vaddr, filesz, memsz, flags,
-		);
-
-		// Allocate and map pages for this segment.
-		let page_start = vaddr & !0xFFF;
-		let page_end = (vaddr + memsz as u64 + 0xFFF) & !0xFFF;
-		let num_pages = ((page_end - page_start) / 4096) as usize;
-
-		for i in 0..num_pages {
-			let page_virt = page_start + (i as u64) * 4096;
-			// Only allocate if this page isn't already mapped (segments may share pages).
-			if memory::paging::translate(page_virt).is_none() {
-				let phys = memory::pmm::alloc_frame()
-					.expect("alloc user ELF page");
-				memory::paging::map_page(
-					page_virt,
-					phys,
-					memory::paging::PageFlags::USER_RW,
-				);
-				// Zero the page first (for BSS / partial pages).
-				unsafe {
-					core::ptr::write_bytes(page_virt as *mut u8, 0, 4096);
-				}
-			}
-		}
-
-		// Copy file data into the mapped pages.
-		if filesz > 0 {
-			unsafe {
-				core::ptr::copy_nonoverlapping(
-					elf.data.as_ptr().add(offset),
-					vaddr as *mut u8,
-					filesz,
-				);
-			}
-		}
-	}
-
-	// Allocate and map user stack page.
-	let user_stack_virt: u64 = 0x80_0000; // 8 MiB
-	let user_stack_phys = memory::pmm::alloc_frame()
-		.expect("alloc user stack page");
-	memory::paging::map_page(
-		user_stack_virt,
-		user_stack_phys,
-		memory::paging::PageFlags::USER_RW,
-	);
-
-	// User stack grows downward — point to top of the page.
-	let user_rsp = user_stack_virt + 4096;
-
-	let entry_point = elf.entry;
-	klog::info!("[058] ELF entry={:#x}, user RSP={:#x}", entry_point, user_rsp);
-
-	// ── [061]-[063] Create init process via scheduler ───────────
+	// Create a "kernel idle" process that represents the current
+	// kernel thread.  The scheduler needs a "current" to switch
+	// away from on the very first do_schedule().
 	let cr3: u64;
 	core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
-
-	let mut init_proc = task::process::Process::new("init", cr3, entry_point, user_rsp);
-	init_proc.prepare_initial_stack();
-	klog::info!("[061] PCB created: PID={}, name=\"init\"", init_proc.pid);
-	klog::info!("[062] Context switch assembly ready");
-
-	// Create a "kernel idle" process that represents the current kernel
-	// thread.  The scheduler needs a "current" to switch away from.
 	let mut idle = task::process::Process::new("idle", cr3, 0, 0);
 	idle.state = task::process::ProcessState::Running;
-
 	{
 		let mut sched = task::process::SCHEDULER.lock();
 		sched.set_current(idle);
-		sched.push(init_proc);
-		klog::info!("[063] Scheduler ready: {} task(s)", sched.task_count());
+	}
+
+	klog::info!("[058] Loading init.elf from ramdisk...");
+	match task::process::spawn_from_ramdisk("init.elf", "") {
+		Ok(pid) => klog::info!("[058] init.elf spawned (PID {})", pid),
+		Err(e) => {
+			klog::error!("[058] FATAL: failed to spawn init.elf: {}", e);
+			loop { core::arch::asm!("cli; hlt"); }
+		}
 	}
 
 	// Perform the first schedule — this will context-switch from idle

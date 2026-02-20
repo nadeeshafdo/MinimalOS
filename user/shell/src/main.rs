@@ -1013,10 +1013,8 @@ pub extern "C" fn _start(args_ptr: u64, args_len: u64) -> ! {
 
 	loop {
 		let ch = read_char();
-		if ch == 0 {
-			yield_cpu();
-			continue;
-		}
+		// SYS_READ now blocks until input is available, so ch is
+		// always non-zero — no need to yield_cpu().
 
 		match ch {
 			// Enter / newline

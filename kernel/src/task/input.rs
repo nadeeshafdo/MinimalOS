@@ -2,7 +2,12 @@
 //!
 //! A fixed-size ring buffer that sits between the IRQ1 handler
 //! (producer) and `sys_read(STDIN)` (consumer).
+//!
+//! Supports blocking reads: when the buffer is empty and a process
+//! calls `sys_read`, the kernel blocks the caller and wakes it
+//! when a character arrives from the keyboard IRQ.
 
+use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
 const BUF_SIZE: usize = 256;
@@ -54,11 +59,24 @@ impl RingBuffer {
 
 static INPUT: Mutex<RingBuffer> = Mutex::new(RingBuffer::new());
 
+/// PID of a process blocked waiting for keyboard input (0 = none).
+static KEYBOARD_WAITER: AtomicU64 = AtomicU64::new(0);
+
 /// Called by the keyboard IRQ handler to enqueue a character.
+///
+/// If a process is blocked waiting for input, this triggers a
+/// lock-free wake request so the scheduler will unblock it on
+/// the next schedule() call.
 pub fn push_char(ch: char) {
 	// Only buffer printable ASCII + control chars (newline, backspace).
 	if ch.is_ascii() {
 		INPUT.lock().push(ch as u8);
+
+		// If a process is blocked waiting for keyboard input, wake it.
+		let waiter = KEYBOARD_WAITER.swap(0, Ordering::AcqRel);
+		if waiter != 0 {
+			crate::task::process::request_wake(waiter);
+		}
 	}
 }
 
@@ -67,6 +85,14 @@ pub fn push_char(ch: char) {
 /// Returns 0 if the buffer is empty (non-blocking).
 pub fn pop_char() -> u8 {
 	INPUT.lock().pop().unwrap_or(0)
+}
+
+/// Register the given PID as waiting for keyboard input.
+///
+/// Called by `SYS_READ` when the buffer is empty and the process
+/// needs to block.
+pub fn set_waiter(pid: u64) {
+	KEYBOARD_WAITER.store(pid, Ordering::Release);
 }
 
 /// Returns true if there is at least one character available.
