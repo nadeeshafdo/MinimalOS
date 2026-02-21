@@ -1,13 +1,26 @@
-//! Bitmap-based Physical Memory Manager (PMM).
+//! Bitmap-based Physical Memory Manager (PMM) with per-core frame caches.
 //!
 //! Tracks 4 KiB page frames with a simple bitmap: bit **1** = used, bit **0** = free.
 //! The bitmap itself is carved from the first usable region large enough to hold it.
+//!
+//! **SMP optimization**: Each core maintains a local cache of pre-allocated
+//! frames.  `alloc_frame()` pops from the cache with zero locking; the global
+//! bitmap is only touched when the cache is empty or full.
 
 use limine::memory_map::{Entry, EntryType};
 use spin::Mutex;
 
+use crate::arch::smp;
+
 /// Size of a single page frame.
 const FRAME_SIZE: u64 = 4096;
+
+/// Number of frames each core caches locally.
+const CACHE_SIZE: usize = 32;
+
+/// When freeing pushes a cache above this threshold, drain half back to the
+/// global bitmap.
+const CACHE_DRAIN_THRESHOLD: usize = CACHE_SIZE;
 
 /// Global PMM instance, initialised once at boot.
 static PMM: Mutex<Option<BitmapAllocator>> = Mutex::new(None);
@@ -24,10 +37,84 @@ struct BitmapAllocator {
 	total_frames: usize,
 	/// Current number of free (allocatable) frames.
 	free_frames: usize,
+	/// Hint: byte index where the last successful allocation was found.
+	/// Avoids re-scanning the start of the bitmap on every allocation.
+	search_hint: usize,
 }
 
 // Safety: the bitmap pointer is only accessed under the PMM lock.
 unsafe impl Send for BitmapAllocator {}
+
+// ── Per-Core Frame Cache ────────────────────────────────────────
+
+/// A lock-free per-core cache of physical frames.
+///
+/// Each core only ever accesses its own cache (indexed by core_id),
+/// so no atomics or locks are needed.
+struct FrameCache {
+	frames: [u64; CACHE_SIZE],
+	count: usize,
+}
+
+impl FrameCache {
+	const fn new() -> Self {
+		Self {
+			frames: [0; CACHE_SIZE],
+			count: 0,
+		}
+	}
+
+	/// Pop a frame from the cache.  Returns `None` if empty.
+	#[inline]
+	fn pop(&mut self) -> Option<u64> {
+		if self.count == 0 {
+			return None;
+		}
+		self.count -= 1;
+		Some(self.frames[self.count])
+	}
+
+	/// Push a frame into the cache.  Returns `false` if full.
+	#[inline]
+	fn push(&mut self, frame: u64) -> bool {
+		if self.count >= CACHE_SIZE {
+			return false;
+		}
+		self.frames[self.count] = frame;
+		self.count += 1;
+		true
+	}
+
+	/// Is the cache full?
+	#[inline]
+	fn is_full(&self) -> bool {
+		self.count >= CACHE_DRAIN_THRESHOLD
+	}
+}
+
+/// Per-core frame caches.  Indexed by `smp::core_id()`.
+static mut CORE_CACHES: [FrameCache; smp::MAX_CORES] = [
+	FrameCache::new(),
+	FrameCache::new(),
+	FrameCache::new(),
+	FrameCache::new(),
+];
+
+/// Whether the SMP per-core caches have been activated.
+/// Before SMP init, we fall back to the global bitmap directly.
+static mut CACHES_ACTIVE: bool = false;
+
+/// Activate per-core frame caches.
+///
+/// Called after SMP init, once `smp::core_id()` is valid on the BSP.
+pub fn activate_caches() {
+	unsafe {
+		CACHES_ACTIVE = true;
+	}
+	klog::info!("PMM: per-core frame caches activated ({} frames/core)", CACHE_SIZE);
+}
+
+// ── Init ────────────────────────────────────────────────────────
 
 /// Initialise the physical memory manager from the Limine memory map.
 ///
@@ -61,10 +148,6 @@ pub unsafe fn init(hhdm_offset: u64, entries: &[&Entry]) {
 	);
 
 	// ── 2. Find a usable region large enough to hold the bitmap ──
-	//
-	// We must avoid placing the bitmap at physical address 0 (the null
-	// page), so we skip any region that starts at 0 and try the next,
-	// or offset into a 0-based region past the first page.
 	let mut bitmap_phys: Option<u64> = None;
 	for entry in entries.iter() {
 		if entry.entry_type != EntryType::USABLE {
@@ -139,48 +222,119 @@ pub unsafe fn init(hhdm_offset: u64, entries: &[&Entry]) {
 		_bitmap_frames: bitmap_frames,
 		total_frames,
 		free_frames: free_count,
+		search_hint: 0,
 	});
 }
+
+// ── Allocation / Free ───────────────────────────────────────────
 
 /// Allocate a single 4 KiB physical frame.
 ///
 /// Returns the **physical address** of the frame, or `None` if OOM.
+///
+/// **Fast path**: pops from the per-core cache (zero locking).
+/// **Slow path**: locks the global bitmap and refills the cache.
 pub fn alloc_frame() -> Option<u64> {
-	let mut guard = PMM.lock();
-	let alloc = guard.as_mut()?;
-
-	let bitmap_bytes = (alloc.total_frames + 7) / 8;
-
-	for byte_idx in 0..bitmap_bytes {
-		let byte = unsafe { *alloc.bitmap.add(byte_idx) };
-		if byte == 0xFF {
-			continue; // all 8 frames in this byte are used
+	// Fast path: per-core cache (after SMP is initialized).
+	unsafe {
+		if CACHES_ACTIVE {
+			let core = smp::core_id() as usize;
+			let cache = &mut CORE_CACHES[core];
+			if let Some(frame) = cache.pop() {
+				return Some(frame);
+			}
+			// Cache empty — refill from global bitmap.
+			return refill_and_alloc(cache);
 		}
-		// Find the first zero bit
-		let bit_idx = byte.trailing_ones() as usize; // index of first 0
-		let frame = byte_idx * 8 + bit_idx;
-		if frame >= alloc.total_frames {
-			return None;
-		}
-		// Mark used
-		unsafe {
-			*alloc.bitmap.add(byte_idx) |= 1u8 << bit_idx;
-		}
-		alloc.free_frames -= 1;
-		return Some(frame as u64 * FRAME_SIZE);
 	}
-	None
+
+	// Pre-SMP path: global bitmap directly.
+	alloc_from_global()
 }
 
 /// Free a previously allocated 4 KiB physical frame.
+///
+/// **Fast path**: pushes to the per-core cache (zero locking).
+/// **Slow path**: if cache is full, drains half back to the global bitmap.
 ///
 /// # Panics
 ///
 /// Panics on double-free or out-of-range address.
 pub fn free_frame(phys_addr: u64) {
+	// Fast path: per-core cache.
+	unsafe {
+		if CACHES_ACTIVE {
+			let core = smp::core_id() as usize;
+			let cache = &mut CORE_CACHES[core];
+			if cache.push(phys_addr) {
+				// If cache is getting full, drain half back to bitmap.
+				if cache.is_full() {
+					drain_cache(cache);
+				}
+				return;
+			}
+			// Cache was full even before push — drain and retry.
+			drain_cache(cache);
+			cache.push(phys_addr);
+			return;
+		}
+	}
+
+	// Pre-SMP path: global bitmap directly.
+	free_to_global(phys_addr);
+}
+
+/// Return the current number of free frames (approximate — excludes
+/// frames held in per-core caches).
+pub fn free_frame_count() -> usize {
+	PMM.lock().as_ref().map_or(0, |a| a.free_frames)
+}
+
+// ── Internal: global bitmap operations ──────────────────────────
+
+/// Allocate a frame directly from the global bitmap (under lock).
+fn alloc_from_global() -> Option<u64> {
+	let mut guard = PMM.lock();
+	let alloc = guard.as_mut()?;
+	alloc_from_bitmap(alloc)
+}
+
+/// Search the bitmap for a free frame, mark it used, return its address.
+fn alloc_from_bitmap(alloc: &mut BitmapAllocator) -> Option<u64> {
+	let bitmap_bytes = (alloc.total_frames + 7) / 8;
+	let start = alloc.search_hint;
+
+	// Scan from hint to end, then wrap around.
+	for offset in 0..bitmap_bytes {
+		let byte_idx = (start + offset) % bitmap_bytes;
+		let byte = unsafe { *alloc.bitmap.add(byte_idx) };
+		if byte == 0xFF {
+			continue;
+		}
+		let bit_idx = byte.trailing_ones() as usize;
+		let frame = byte_idx * 8 + bit_idx;
+		if frame >= alloc.total_frames {
+			continue;
+		}
+		unsafe {
+			*alloc.bitmap.add(byte_idx) |= 1u8 << bit_idx;
+		}
+		alloc.free_frames -= 1;
+		alloc.search_hint = byte_idx; // remember for next time
+		return Some(frame as u64 * FRAME_SIZE);
+	}
+	None
+}
+
+/// Free a frame directly to the global bitmap (under lock).
+fn free_to_global(phys_addr: u64) {
 	let mut guard = PMM.lock();
 	let alloc = guard.as_mut().expect("PMM not initialised");
+	free_to_bitmap(alloc, phys_addr);
+}
 
+/// Mark a frame as free in the bitmap.
+fn free_to_bitmap(alloc: &mut BitmapAllocator, phys_addr: u64) {
 	assert!(phys_addr % FRAME_SIZE == 0, "free_frame: address not frame-aligned");
 
 	let frame = (phys_addr / FRAME_SIZE) as usize;
@@ -197,7 +351,43 @@ pub fn free_frame(phys_addr: u64) {
 	alloc.free_frames += 1;
 }
 
-/// Return the current number of free frames.
-pub fn free_frame_count() -> usize {
-	PMM.lock().as_ref().map_or(0, |a| a.free_frames)
+/// Refill the per-core cache from the global bitmap, then return one frame.
+fn refill_and_alloc(cache: &mut FrameCache) -> Option<u64> {
+	let mut guard = PMM.lock();
+	let alloc = guard.as_mut()?;
+
+	// Refill: pull up to CACHE_SIZE/2 frames into the cache.
+	let refill_count = CACHE_SIZE / 2;
+	for _ in 0..refill_count {
+		if let Some(frame) = alloc_from_bitmap(alloc) {
+			cache.push(frame);
+		} else {
+			break;
+		}
+	}
+
+	// Return one frame from the (now hopefully non-empty) cache.
+	if let Some(frame) = cache.pop() {
+		Some(frame)
+	} else {
+		// Truly OOM.
+		None
+	}
+}
+
+/// Drain half the per-core cache back to the global bitmap.
+fn drain_cache(cache: &mut FrameCache) {
+	let drain_count = cache.count / 2;
+	if drain_count == 0 {
+		return;
+	}
+
+	let mut guard = PMM.lock();
+	let alloc = guard.as_mut().expect("PMM not initialised");
+
+	for _ in 0..drain_count {
+		if let Some(frame) = cache.pop() {
+			free_to_bitmap(alloc, frame);
+		}
+	}
 }

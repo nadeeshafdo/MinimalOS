@@ -305,6 +305,12 @@ unsafe extern "C" fn _start() -> ! {
 		klog::warn!("SMP: No SMP response from Limine — running single-core");
 	}
 
+	// ── [090] Activate SMP memory optimizations ───────────────
+	// Per-core frame caches and heap arenas require smp::core_id()
+	// to be valid, so they must be activated after SMP init.
+	memory::pmm::activate_caches();
+	unsafe { memory::heap::init_arenas(); }
+
 	// ── [053] The Disk — Detect the RAMDisk module ─────────────
 	let module_response = MODULE_REQUEST.get_response()
 		.expect("Limine module response not available");
