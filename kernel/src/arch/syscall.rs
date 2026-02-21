@@ -250,6 +250,12 @@ pub mod nr {
 	pub const SYS_CAP_SEND: u64 = 22;
 	/// `sys_cap_recv(msg_buf_ptr)` — receive a message (blocks if queue empty).
 	pub const SYS_CAP_RECV: u64 = 23;
+	/// `sys_cap_mem_read(cap, offset, dst_ptr, len)` — blit from Memory cap to user buffer.
+	#[allow(dead_code)]
+	pub const SYS_CAP_MEM_READ: u64 = 24;
+	/// `sys_cap_mem_write(cap, offset, src_ptr, len)` — blit from user buffer to Memory cap.
+	#[allow(dead_code)]
+	pub const SYS_CAP_MEM_WRITE: u64 = 25;
 }
 
 // ── User-pointer validation ────────────────────────────────────

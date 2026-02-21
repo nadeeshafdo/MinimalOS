@@ -161,8 +161,134 @@ fn build_imports() -> Imports {
 			},
 		),
 	);
+	// env.sys_cap_mem_read(cap_handle: i64, offset: i32, dst_ptr: i32, len: i32) -> i64
+	let _ = imports.define(
+		"env",
+		"sys_cap_mem_read",
+		Extern::typed_func(
+			|mut ctx: tinywasm::FuncContext<'_>, args: (i64, i32, i32, i32)| -> tinywasm::Result<i64> {
+				let (cap_handle, offset, dst_ptr, len) = args;
+				let result = internal_cap_mem_read(
+					cap_handle as u64,
+					offset as u64,
+					len as usize,
+				);
+				match result {
+					Some(data) => {
+						let mut mem = ctx.exported_memory_mut("memory")?;
+						mem.store(dst_ptr as usize, data.len(), &data)?;
+						Ok(0)
+					}
+					None => Ok(-1i64),
+				}
+			},
+		),
+	);
+
+	// env.sys_cap_mem_write(cap_handle: i64, offset: i32, src_ptr: i32, len: i32) -> i64
+	let _ = imports.define(
+		"env",
+		"sys_cap_mem_write",
+		Extern::typed_func(
+			|mut ctx: tinywasm::FuncContext<'_>, args: (i64, i32, i32, i32)| -> tinywasm::Result<i64> {
+				let (cap_handle, offset, src_ptr, len) = args;
+				// Read source data from Wasm linear memory.
+				let mem = ctx.exported_memory("memory")?;
+				let src_bytes = mem.load(src_ptr as usize, len as usize)?;
+				// Need to copy because we'll access SCHEDULER.
+				let mut buf = alloc::vec![0u8; len as usize];
+				buf.copy_from_slice(src_bytes);
+				let result = internal_cap_mem_write(
+					cap_handle as u64,
+					offset as u64,
+					&buf,
+				);
+				Ok(if result { 0 } else { -1i64 })
+			},
+		),
+	);
 
 	imports
+}
+
+// ── Capability Memory Blit ───────────────────────────────────────
+
+/// Read `len` bytes from a Memory capability at `offset`.
+///
+/// Validates: cap exists, is Memory, has READ, offset+len in bounds.
+/// Returns the data as a Vec, or None on error.
+fn internal_cap_mem_read(cap_handle: u64, offset: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
+	let sched = crate::task::process::SCHEDULER.lock();
+	let current = sched.current()?;
+	let cap = current.caps.get(cap_handle)?;
+
+	if !cap.has_perms(crate::cap::perms::READ) {
+		klog::warn!("[blit] cap_mem_read: missing READ permission");
+		return None;
+	}
+
+	let (phys, pages) = match &cap.object {
+		crate::cap::ObjectKind::Memory { phys, pages } => (*phys, *pages),
+		_ => {
+			klog::warn!("[blit] cap_mem_read: not a Memory capability");
+			return None;
+		}
+	};
+
+	let cap_size = pages * 4096;
+	if offset as usize + len > cap_size {
+		klog::warn!("[blit] cap_mem_read: offset+len exceeds cap bounds");
+		return None;
+	}
+
+	// Translate: phys + HHDM offset + offset_in_cap.
+	let hhdm = crate::memory::paging::hhdm_offset();
+	let src_ptr = (hhdm + phys + offset) as *const u8;
+
+	let mut buf = alloc::vec![0u8; len];
+	unsafe { core::ptr::copy_nonoverlapping(src_ptr, buf.as_mut_ptr(), len) };
+	Some(buf)
+}
+
+/// Write `data` to a Memory capability at `offset`.
+///
+/// Validates: cap exists, is Memory, has WRITE, offset+len in bounds.
+fn internal_cap_mem_write(cap_handle: u64, offset: u64, data: &[u8]) -> bool {
+	let sched = crate::task::process::SCHEDULER.lock();
+	let current = match sched.current() {
+		Some(p) => p,
+		None => return false,
+	};
+	let cap = match current.caps.get(cap_handle) {
+		Some(c) => c,
+		None => return false,
+	};
+
+	if !cap.has_perms(crate::cap::perms::WRITE) {
+		klog::warn!("[blit] cap_mem_write: missing WRITE permission");
+		return false;
+	}
+
+	let (phys, pages) = match &cap.object {
+		crate::cap::ObjectKind::Memory { phys, pages } => (*phys, *pages),
+		_ => {
+			klog::warn!("[blit] cap_mem_write: not a Memory capability");
+			return false;
+		}
+	};
+
+	let cap_size = pages * 4096;
+	if offset as usize + data.len() > cap_size {
+		klog::warn!("[blit] cap_mem_write: offset+len exceeds cap bounds");
+		return false;
+	}
+
+	// Translate: phys + HHDM offset + offset_in_cap.
+	let hhdm = crate::memory::paging::hhdm_offset();
+	let dst_ptr = (hhdm + phys + offset) as *mut u8;
+
+	unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst_ptr, data.len()) };
+	true
 }
 
 // ── Internal Send Logic ─────────────────────────────────────────
@@ -323,11 +449,14 @@ pub fn spawn_wasm(name: &str) -> Option<u64> {
 	// 4. Create the WasmEnv.
 	let wasm_env = Box::new(WasmEnv { store, instance });
 
-	// 5. Create a Process (kernel thread — no CR3/Ring 3 needed).
-	//    Entry point is the trampoline, which will call _start.
+	// 5. Create a Process — SASOS: share the kernel's CR3.
+	//    No user page table needed; Wasm SFI provides isolation.
+	let kernel_cr3: u64;
+	unsafe { core::arch::asm!("mov {}, cr3", out(reg) kernel_cr3) };
+
 	let mut process = crate::task::process::Process::new(
 		name,
-		0, // cr3 = 0 (kernel thread, no user page table)
+		kernel_cr3, // SASOS: same address space as kernel
 		wasm_actor_trampoline as u64,
 		0, // user_rsp = 0 (not used for kernel threads)
 	);
