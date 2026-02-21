@@ -400,6 +400,14 @@ unsafe extern "C" fn _start() -> ! {
 		sched.set_current(idle);
 	}
 
+	// ── CRITICAL SECTION: disable interrupts from spawn through the
+	// first do_schedule().  Once init is added to the queue,
+	// task_count() > 1 and the timer handler would call do_schedule()
+	// from interrupt context, preempting main() into init before we
+	// reach the intentional first switch below.  do_schedule() will
+	// re-enable interrupts (sti) after the context switch completes.
+	core::arch::asm!("cli", options(nomem, nostack));
+
 	klog::info!("[058] Loading init.elf from ramdisk...");
 	match task::process::spawn_from_ramdisk("init.elf", "") {
 		Ok(pid) => klog::info!("[058] init.elf spawned (PID {})", pid),
