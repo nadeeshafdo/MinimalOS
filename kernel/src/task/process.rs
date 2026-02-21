@@ -130,8 +130,9 @@ pub struct Process {
 	pub wait_addr: u64,
 	/// Kernel stack for this process (heap-allocated).
 	pub kernel_stack: Box<KernelStack>,
-	/// [091] Per-process capability table.
-	pub caps: CapTable,
+	/// [091] Per-process capability table (heap-allocated to keep
+	/// Process small — VecDeque moves must not bloat the struct).
+	pub caps: Box<CapTable>,
 }
 
 impl Process {
@@ -153,7 +154,7 @@ impl Process {
 			Box::from_raw(ptr)
 		};
 
-		let mut caps = CapTable::new();
+		let mut caps = Box::new(CapTable::new());
 		// Every process gets a default Log capability (handle 0).
 		caps.insert(cap::ObjectKind::Log, cap::perms::READ | cap::perms::WRITE);
 
