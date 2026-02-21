@@ -11,6 +11,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
 use crate::cap::{self, CapTable};
+use crate::ipc::IpcQueue;
 
 // ── Process identifiers ─────────────────────────────────────────
 
@@ -133,6 +134,8 @@ pub struct Process {
 	/// [091] Per-process capability table (heap-allocated to keep
 	/// Process small — VecDeque moves must not bloat the struct).
 	pub caps: Box<CapTable>,
+	/// [092] Per-process IPC receive queue (heap-allocated).
+	pub ipc_queue: Box<IpcQueue>,
 }
 
 impl Process {
@@ -172,6 +175,7 @@ impl Process {
 			wait_addr: 0,
 			kernel_stack,
 			caps,
+			ipc_queue: Box::new(IpcQueue::new()),
 		}
 	}
 

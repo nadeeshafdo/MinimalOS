@@ -7,6 +7,7 @@ extern crate alloc;
 mod arch;
 mod cap;
 mod fs;
+mod ipc;
 mod memory;
 mod task;
 mod traps;

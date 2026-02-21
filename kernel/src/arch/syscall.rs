@@ -246,6 +246,10 @@ pub mod nr {
 	pub const SYS_WIN_MOVE: u64 = 20;
 	/// `sys_cap_grant(source_handle, endpoint_handle, requested_perms)` — delegate a capability.
 	pub const SYS_CAP_GRANT: u64 = 21;
+	/// `sys_cap_send(endpoint_handle, msg_ptr)` — send a message via IPC.
+	pub const SYS_CAP_SEND: u64 = 22;
+	/// `sys_cap_recv(msg_buf_ptr)` — receive a message (blocks if queue empty).
+	pub const SYS_CAP_RECV: u64 = 23;
 }
 
 // ── User-pointer validation ────────────────────────────────────
@@ -706,6 +710,163 @@ unsafe extern "C" fn syscall_dispatch(
 					klog::warn!("[syscall] SYS_CAP_GRANT: target actor {} not found", target_actor_id);
 					u64::MAX
 				}
+			}
+		}
+		nr::SYS_CAP_SEND => {
+			// [092] a0 = endpoint_handle, a1 = msg_ptr (48-byte Message)
+			//
+			// Send a message to a target actor via IPC.  If the message
+			// carries a capability grant, the kernel performs an inline
+			// cap transfer (with GRANT check and permission narrowing)
+			// before pushing the message.  If the target's CapTable is
+			// full, the syscall aborts — no message enters the queue.
+			let endpoint_handle = a0;
+			let msg_ptr = a1;
+
+			// Validate user pointer for 48-byte Message.
+			if !validate_user_ptr(msg_ptr, core::mem::size_of::<crate::ipc::Message>()) {
+				return u64::MAX;
+			}
+
+			// Copy message from user space.
+			let mut msg = unsafe {
+				core::ptr::read(msg_ptr as *const crate::ipc::Message)
+			};
+
+			let mut sched = crate::task::process::SCHEDULER.lock();
+
+			// 1. Resolve endpoint → target_actor_id, and extract cap
+			//    transfer data from the caller's table.
+			let (target_actor_id, cap_transfer) = {
+				let caller = match sched.current() {
+					Some(p) => p,
+					None => return u64::MAX,
+				};
+
+				// Validate endpoint.
+				let ep = match caller.caps.get(endpoint_handle) {
+					Some(c) => c,
+					None => {
+						klog::warn!("[syscall] SYS_CAP_SEND: invalid endpoint_handle={:#x}", endpoint_handle);
+						return u64::MAX;
+					}
+				};
+				let target_id = match &ep.object {
+					crate::cap::ObjectKind::Endpoint { target_actor_id } => *target_actor_id,
+					_ => {
+						klog::warn!("[syscall] SYS_CAP_SEND: not an Endpoint");
+						return u64::MAX;
+					}
+				};
+
+				// If cap_grant is set, validate the source cap.
+				let transfer = if msg.cap_grant != 0 {
+					let src = match caller.caps.get(msg.cap_grant) {
+						Some(c) => c,
+						None => {
+							klog::warn!("[syscall] SYS_CAP_SEND: invalid cap_grant={:#x}", msg.cap_grant);
+							return u64::MAX;
+						}
+					};
+					if !src.has_perms(crate::cap::perms::GRANT) {
+						klog::warn!("[syscall] SYS_CAP_SEND: cap lacks GRANT permission");
+						return u64::MAX;
+					}
+					let granted_perms = src.perms & msg.cap_perms;
+					Some((src.object.clone(), granted_perms))
+				} else {
+					None
+				};
+
+				(target_id, transfer)
+			};
+
+			// 2. Find the target process.
+			let mut target_woken = false;
+			let mut found = false;
+			for target in sched.tasks_iter_mut() {
+				if target.pid != target_actor_id { continue; }
+				found = true;
+
+				// Check IpcQueue capacity first.
+				if target.ipc_queue.is_full() {
+					klog::warn!("[syscall] SYS_CAP_SEND: target IPC queue full");
+					return u64::MAX;
+				}
+
+				// Atomic: insert cap BEFORE pushing message.
+				if let Some((obj, perms)) = cap_transfer {
+					match target.caps.insert(obj, perms) {
+						Some(new_handle) => {
+							// Overwrite cap_grant with the new handle
+							// in the target's table.
+							msg.cap_grant = new_handle;
+						}
+						None => {
+							klog::warn!("[syscall] SYS_CAP_SEND: target CapTable full, aborting");
+							return u64::MAX;
+						}
+					}
+				}
+
+				// Push message into target's IPC queue.
+				let _ = target.ipc_queue.push(msg);
+
+				// Wake target if blocked.
+				if target.state == crate::task::process::ProcessState::Blocked {
+					target.state = crate::task::process::ProcessState::Ready;
+					target_woken = true;
+				}
+				break;
+			}
+
+			if !found {
+				klog::warn!("[syscall] SYS_CAP_SEND: target actor {} not found", target_actor_id);
+				return u64::MAX;
+			}
+
+			// Release scheduler lock before IPI.
+			drop(sched);
+
+			// Broadcast IPI to wake halted cores so they pick up
+			// the newly readied target.
+			if target_woken {
+				khal::apic::send_ipi_all_excluding_self();
+			}
+
+			0
+		}
+		nr::SYS_CAP_RECV => {
+			// [092] a0 = msg_buf_ptr (48-byte buffer in user space)
+			//
+			// Blocking receive: pop the next message from the caller's
+			// IPC queue.  If empty, block until a message arrives.
+			let msg_buf_ptr = a0;
+
+			// Validate user pointer BEFORE entering the blocking loop.
+			if !validate_user_ptr(msg_buf_ptr, core::mem::size_of::<crate::ipc::Message>()) {
+				return u64::MAX;
+			}
+
+			loop {
+				// Try to pop a message.
+				{
+					let mut sched = crate::task::process::SCHEDULER.lock();
+					if let Some(current) = sched.current_mut() {
+						if let Some(msg) = current.ipc_queue.pop() {
+							// Copy message to user buffer.
+							unsafe {
+								core::ptr::write(msg_buf_ptr as *mut crate::ipc::Message, msg);
+							}
+							return 0;
+						}
+						// Queue empty — block.
+						current.state = crate::task::process::ProcessState::Blocked;
+					}
+				}
+				// Yield CPU until woken by SYS_CAP_SEND.
+				unsafe { crate::task::process::do_schedule(); }
+				// Woken — loop back and try again.
 			}
 		}
 		_ => {

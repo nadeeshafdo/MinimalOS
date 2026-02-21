@@ -200,3 +200,32 @@ pub fn disable_timer() {
 		write_reg(APIC_REG_LVT_TIMER, lvt | (1 << 16));
 	}
 }
+
+// ── Inter-Processor Interrupts (IPI) ────────────────────────────
+
+/// Interrupt Command Register — low 32 bits.
+const APIC_REG_ICR_LO: u32 = 0x300;
+/// Interrupt Command Register — high 32 bits (destination field).
+#[allow(dead_code)]
+const APIC_REG_ICR_HI: u32 = 0x310;
+
+/// ICR bit 14: Level = Assert (required by Intel SDM for fixed IPIs).
+const APIC_ICR_ASSERT: u32 = 1 << 14;
+/// ICR shorthand: All Excluding Self (bits 19:18 = 0b11).
+const APIC_ICR_SHORTHAND_ALL_EXCLUDING_SELF: u32 = 0b11 << 18;
+
+/// Send a fixed IPI to all cores except self.
+///
+/// Uses the timer vector to trigger a reschedule on all other cores.
+/// This rips halted cores out of `hlt` so they can pick up newly
+/// readied tasks from the global scheduler queue.
+pub fn send_ipi_all_excluding_self() {
+	unsafe {
+		write_reg(
+			APIC_REG_ICR_LO,
+			APIC_ICR_SHORTHAND_ALL_EXCLUDING_SELF
+				| APIC_ICR_ASSERT
+				| TIMER_VECTOR as u32,
+		);
+	}
+}
