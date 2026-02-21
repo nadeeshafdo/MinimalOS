@@ -11,6 +11,7 @@ mod ipc;
 mod memory;
 mod task;
 mod traps;
+mod wasm;
 
 use limine::BaseRevision;
 use limine::modules::InternalModule;

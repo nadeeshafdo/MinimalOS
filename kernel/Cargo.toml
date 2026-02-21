@@ -10,3 +10,4 @@ spin = "0.9"
 klog = { path = "../crates/klog" }
 kdisplay = { path = "../crates/kdisplay" }
 khal = { path = "../crates/khal" }
+tinywasm = { version = "0.8", default-features = false, features = ["parser"] }

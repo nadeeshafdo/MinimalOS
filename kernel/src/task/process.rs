@@ -136,6 +136,9 @@ pub struct Process {
 	pub caps: Box<CapTable>,
 	/// [092] Per-process IPC receive queue (heap-allocated).
 	pub ipc_queue: Box<IpcQueue>,
+	/// [093] Wasm environment (Store + Instance) for Wasm actors.
+	/// `None` for legacy ELF processes.
+	pub wasm_env: Option<Box<crate::wasm::WasmEnv>>,
 }
 
 impl Process {
@@ -176,6 +179,7 @@ impl Process {
 			kernel_stack,
 			caps,
 			ipc_queue: Box::new(IpcQueue::new()),
+			wasm_env: None,
 		}
 	}
 
