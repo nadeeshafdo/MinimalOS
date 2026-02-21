@@ -5,6 +5,7 @@
 
 extern crate alloc;
 mod arch;
+mod cap;
 mod fs;
 mod memory;
 mod task;
@@ -425,7 +426,56 @@ unsafe extern "C" fn _start() -> ! {
 
 	klog::info!("[058] Loading init.elf from ramdisk...");
 	match task::process::spawn_from_ramdisk("init.elf", "") {
-		Ok(pid) => klog::info!("[058] init.elf spawned (PID {})", pid),
+		Ok(pid) => {
+			klog::info!("[058] init.elf spawned (PID {})", pid);
+			// [091] Seed init's CapTable with root capabilities.
+			// init is the capability broker — it holds GRANT on
+			// everything and delegates to child drivers.
+			{
+				use cap::{ObjectKind, perms};
+				let mut sched = task::process::SCHEDULER.lock();
+				// Find init process in the ready queue.
+				let mut found = false;
+				for task in sched.tasks_iter_mut() {
+					if task.pid != pid { continue; }
+					// Slot 0 already has Log (from Process::new).
+					// Slot 1: ramdisk memory (READ | GRANT)
+					task.caps.insert(
+						ObjectKind::Memory { phys: 0, pages: 0 },
+						perms::READ | perms::GRANT,
+					);
+					// Slot 2: PS/2 I/O ports (READ | WRITE | GRANT)
+					task.caps.insert(
+						ObjectKind::IoPort { base: 0x60, count: 2 },
+						perms::READ | perms::WRITE | perms::GRANT,
+					);
+					// Slot 3: Keyboard IRQ1 (READ | GRANT)
+					task.caps.insert(
+						ObjectKind::IrqLine { irq: 1 },
+						perms::READ | perms::GRANT,
+					);
+					// Slot 4: Mouse IRQ12 (READ | GRANT)
+					task.caps.insert(
+						ObjectKind::IrqLine { irq: 12 },
+						perms::READ | perms::GRANT,
+					);
+					// Slot 5: Framebuffer (READ | WRITE | MAP | GRANT)
+					task.caps.insert(
+						ObjectKind::Memory { phys: 0, pages: 0 },
+						perms::READ | perms::WRITE | perms::MAP | perms::GRANT,
+					);
+					klog::info!("[091] CapTable: init.elf has {} capabilities: {}",
+						task.caps.count(),
+						task.caps.summary(),
+					);
+					found = true;
+					break;
+				}
+				if !found {
+					klog::warn!("[091] Could not find init.elf (PID {}) to seed capabilities", pid);
+				}
+			}
+		}
 		Err(e) => {
 			klog::error!("[058] FATAL: failed to spawn init.elf: {}", e);
 			loop { core::arch::asm!("cli; hlt"); }

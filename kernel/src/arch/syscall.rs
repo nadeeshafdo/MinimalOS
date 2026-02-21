@@ -244,6 +244,8 @@ pub mod nr {
 	pub const SYS_WIN_LIST: u64 = 19;
 	/// `sys_win_move(win_id, xy_packed)` — move a window.
 	pub const SYS_WIN_MOVE: u64 = 20;
+	/// `sys_cap_grant(source_handle, endpoint_handle, requested_perms)` — delegate a capability.
+	pub const SYS_CAP_GRANT: u64 = 21;
 }
 
 // ── User-pointer validation ────────────────────────────────────
@@ -629,6 +631,82 @@ unsafe extern "C" fn syscall_dispatch(
 			let new_y = (a1 >> 32) as i32;
 			crate::task::window::move_window(win_id, new_x, new_y);
 			0
+		}
+		nr::SYS_CAP_GRANT => {
+			// [091] a0 = source_handle, a1 = endpoint_handle, a2 = requested_perms
+			//
+			// Capability delegation: copy a capability from the caller's
+			// table to a target actor identified by an Endpoint capability.
+			// Permissions can only be narrowed (never widened).
+			let source_handle = a0;
+			let endpoint_handle = a1;
+			let requested_perms = a2 as u32;
+
+			let mut sched = crate::task::process::SCHEDULER.lock();
+
+			// 1. Read source and endpoint from caller's cap table.
+			let (src_object, src_perms, target_actor_id) = {
+				let caller = match sched.current() {
+					Some(p) => p,
+					None => return u64::MAX,
+				};
+
+				// Validate source capability exists and has GRANT.
+				let src = match caller.caps.get(source_handle) {
+					Some(c) => c,
+					None => {
+						klog::warn!("[syscall] SYS_CAP_GRANT: invalid source_handle={:#x}", source_handle);
+						return u64::MAX;
+					}
+				};
+				if !src.has_perms(crate::cap::perms::GRANT) {
+					klog::warn!("[syscall] SYS_CAP_GRANT: source lacks GRANT permission");
+					return u64::MAX;
+				}
+
+				// Validate endpoint capability.
+				let ep = match caller.caps.get(endpoint_handle) {
+					Some(c) => c,
+					None => {
+						klog::warn!("[syscall] SYS_CAP_GRANT: invalid endpoint_handle={:#x}", endpoint_handle);
+						return u64::MAX;
+					}
+				};
+				let target_id = match &ep.object {
+					crate::cap::ObjectKind::Endpoint { target_actor_id } => *target_actor_id,
+					_ => {
+						klog::warn!("[syscall] SYS_CAP_GRANT: endpoint_handle is not an Endpoint");
+						return u64::MAX;
+					}
+				};
+
+				// Clone the source object and compute narrowed perms.
+				(src.object.clone(), src.perms & requested_perms, target_id)
+			};
+
+			// 2. Find target process by actor_id (== pid for now).
+			let target = sched.tasks_iter_mut()
+				.find(|p| p.pid == target_actor_id);
+
+			match target {
+				Some(target_proc) => {
+					match target_proc.caps.insert(src_object, src_perms) {
+						Some(new_handle) => {
+							klog::info!("[syscall] SYS_CAP_GRANT: granted cap to actor {} (handle={:#x})",
+								target_actor_id, new_handle);
+							0 // success
+						}
+						None => {
+							klog::warn!("[syscall] SYS_CAP_GRANT: target cap table full");
+							u64::MAX
+						}
+					}
+				}
+				None => {
+					klog::warn!("[syscall] SYS_CAP_GRANT: target actor {} not found", target_actor_id);
+					u64::MAX
+				}
+			}
 		}
 		_ => {
 			klog::warn!("[syscall] unknown syscall nr={}", nr);
