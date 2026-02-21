@@ -5,6 +5,7 @@ members = [
 	"crates/*",
 	"sdk/*",
 	"user/*",
+	"actors/*",
 ]
 
 [profile.dev]

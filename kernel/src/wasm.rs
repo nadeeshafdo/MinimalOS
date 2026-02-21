@@ -95,7 +95,7 @@ fn build_imports() -> Imports {
 				klog::info!("[wasm] sys_spawn(\"{}\")", name);
 
 				// Try Wasm spawn first, fall back to ELF.
-				match spawn_wasm(name) {
+				match spawn_wasm(name, |_| {}) {
 					Some(pid) => Ok(pid as i64),
 					None => {
 						match crate::task::process::spawn_from_ramdisk(name, "") {
@@ -414,7 +414,10 @@ pub extern "C" fn wasm_actor_trampoline() {
 ///
 /// Returns `Some(pid)` on success, `None` if the file is not a
 /// `.wasm` file or parsing failed.
-pub fn spawn_wasm(name: &str) -> Option<u64> {
+pub fn spawn_wasm<F>(name: &str, init_caps: F) -> Option<u64> 
+where 
+	F: FnOnce(&mut crate::cap::CapTable)
+{
 	if !name.ends_with(".wasm") {
 		return None;
 	}
@@ -465,7 +468,10 @@ pub fn spawn_wasm(name: &str) -> Option<u64> {
 	let pid = process.pid;
 	klog::info!("[wasm] Spawning '{}' (PID {})", name, pid);
 
-	// 6. Prepare the initial kernel stack and push to scheduler.
+	// 6. Seed capabilities BEFORE pushing to the scheduler (fixes SMP race condition)
+	init_caps(&mut process.caps);
+
+	// 7. Prepare the initial kernel stack and push to scheduler.
 	process.prepare_initial_stack();
 	{
 		let mut sched = crate::task::process::SCHEDULER.lock();

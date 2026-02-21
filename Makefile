@@ -57,8 +57,13 @@ user-display-server:
 		-Z build-std=core \
 		-Z build-std-features=compiler-builtins-mem
 
+actor-vfs:
+	cargo build --manifest-path actors/vfs/Cargo.toml --target wasm32-unknown-unknown --release
+	@mkdir -p ramdisk
+	cp target/wasm32-unknown-unknown/release/vfs.wasm ramdisk/vfs.wasm
+
 # Build ramdisk tar archive from ramdisk/ directory
-ramdisk: user-init user-shell user-display-server
+ramdisk: user-init user-shell user-display-server actor-vfs
 	@mkdir -p $(DISTDIR)
 	@cp $(USER_INIT_ELF) ramdisk/init.elf
 	@cp $(USER_SHELL_ELF) ramdisk/shell.elf

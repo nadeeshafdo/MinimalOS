@@ -489,6 +489,16 @@ unsafe extern "C" fn _start() -> ! {
 					klog::warn!("[091] Could not find init.elf (PID {}) to seed capabilities", pid);
 				}
 			}
+
+			// [VFS] Spawn the VFS Wasm actor and hand it the RAMDisk capability directly.
+			klog::info!("[wasm] Spawning vfs.wasm...");
+			wasm::spawn_wasm("vfs.wasm", |caps| {
+				use cap::{ObjectKind, perms};
+				let rd_phys = rd_base as u64 - hhdm_offset;
+				let rd_pages = (rd_size + 0xFFF) / 0x1000;
+				let rd_cap = ObjectKind::Memory { phys: rd_phys, pages: rd_pages };
+				caps.insert_at(1, rd_cap, perms::READ);
+			});
 		}
 		Err(e) => {
 			klog::error!("[058] FATAL: failed to spawn init.elf: {}", e);

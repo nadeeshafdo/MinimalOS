@@ -157,6 +157,8 @@ impl CapTable {
 		if !slot.object.is_empty() {
 			return None; // already occupied
 		}
+		// Increment generation to prevent ABA on explicitly set slots
+		slot.generation = slot.generation.wrapping_add(1);
 		let gen = slot.generation;
 		slot.object = object;
 		slot.perms = perms;
