@@ -433,35 +433,47 @@ unsafe extern "C" fn _start() -> ! {
 			// everything and delegates to child drivers.
 			{
 				use cap::{ObjectKind, perms};
+
+				// Compute real hardware coordinates for capabilities.
+				let rd_phys = rd_base as u64 - hhdm_offset;
+				let rd_pages = (rd_size + 0xFFF) / 0x1000;
+				let (fb_phys, fb_pages) = match task::window::get_fb_info() {
+					Some(info) => {
+						let fb_bytes = info.pitch as usize * info.height as usize;
+						(info.phys_addr, (fb_bytes + 0xFFF) / 0x1000)
+					}
+					None => (0u64, 0usize),
+				};
+
 				let mut sched = task::process::SCHEDULER.lock();
 				// Find init process in the ready queue.
 				let mut found = false;
 				for task in sched.tasks_iter_mut() {
 					if task.pid != pid { continue; }
 					// Slot 0 already has Log (from Process::new).
-					// Slot 1: ramdisk memory (READ | GRANT)
+					// Slot 1: ramdisk memory
 					task.caps.insert(
-						ObjectKind::Memory { phys: 0, pages: 0 },
+						ObjectKind::Memory { phys: rd_phys, pages: rd_pages },
 						perms::READ | perms::GRANT,
 					);
-					// Slot 2: PS/2 I/O ports (READ | WRITE | GRANT)
+					// Slot 2: PS/2 I/O ports
 					task.caps.insert(
 						ObjectKind::IoPort { base: 0x60, count: 2 },
 						perms::READ | perms::WRITE | perms::GRANT,
 					);
-					// Slot 3: Keyboard IRQ1 (READ | GRANT)
+					// Slot 3: Keyboard IRQ1
 					task.caps.insert(
 						ObjectKind::IrqLine { irq: 1 },
 						perms::READ | perms::GRANT,
 					);
-					// Slot 4: Mouse IRQ12 (READ | GRANT)
+					// Slot 4: Mouse IRQ12
 					task.caps.insert(
 						ObjectKind::IrqLine { irq: 12 },
 						perms::READ | perms::GRANT,
 					);
-					// Slot 5: Framebuffer (READ | WRITE | MAP | GRANT)
+					// Slot 5: Framebuffer memory
 					task.caps.insert(
-						ObjectKind::Memory { phys: 0, pages: 0 },
+						ObjectKind::Memory { phys: fb_phys, pages: fb_pages },
 						perms::READ | perms::WRITE | perms::MAP | perms::GRANT,
 					);
 					klog::info!("[091] CapTable: init.elf has {} capabilities: {}",
