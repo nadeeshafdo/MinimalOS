@@ -278,15 +278,30 @@ unsafe extern "C" fn _start() -> ! {
 	klog::info!("[038] PS/2 status register: {:#04x} (output_full={})",
 		ps2_status, ps2_status & 0x01);
 
+	// Drain any stale bytes from the PS/2 output buffer.
+	while khal::keyboard::read_status() & 0x01 != 0 {
+		let _ = khal::keyboard::read_scancode();
+	}
+
 	// [039][040] Initialise keyboard state machine (pc-keyboard crate)
 	khal::keyboard::init();
 
-	// Enable keyboard IRQ1
+	// ── [075] PS/2 Mouse init ──────────────────────────────────
+	// Init mouse BEFORE enabling keyboard IRQ1.  Mouse init sends
+	// command bytes through the shared PS/2 controller (port 0x60),
+	// and stray ACK/ID bytes can trigger IRQ1 if it's already enabled,
+	// causing them to be misinterpreted as keyboard scancodes.
+	khal::mouse::init();
+
+	// Drain any bytes left by mouse init before enabling IRQs.
+	while khal::keyboard::read_status() & 0x01 != 0 {
+		let _ = khal::keyboard::read_scancode();
+	}
+
+	// Now enable both IRQs — buffer is clean.
 	khal::keyboard::enable_irq();
 	klog::info!("[039] Keyboard IRQ1 enabled (vector {})", khal::keyboard::KEYBOARD_VECTOR);
 	klog::info!("[041] Keyboard echo active — type to see characters on screen");
-	// \u{2500}\u{2500} [075] PS/2 Mouse init \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
-	khal::mouse::init();
 	khal::mouse::enable_irq();
 	klog::info!("[075] PS/2 Mouse initialised (IRQ12, vector {})", khal::mouse::MOUSE_VECTOR);
 
