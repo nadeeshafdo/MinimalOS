@@ -111,14 +111,29 @@ pub struct Gdt {
 	entries: [u64; GDT_ENTRIES],
 }
 
+impl Gdt {
+	/// Create a zeroed GDT (for static array initialization).
+	pub const fn zeroed() -> Self {
+		Self { entries: [0; GDT_ENTRIES] }
+	}
+}
+
 /// Segment selectors for GDT entries.
 /// Each selector is the byte offset into the GDT.
+#[allow(dead_code)]
 pub struct Selectors {
 	pub kernel_code: u16,
 	pub kernel_data: u16,
 	pub user_data: u16,
 	pub user_code: u16,
 	pub tss: u16,
+}
+
+impl Selectors {
+	/// Create zeroed selectors (for static array initialization).
+	pub const fn zeroed() -> Self {
+		Self { kernel_code: 0, kernel_data: 0, user_data: 0, user_code: 0, tss: 0 }
+	}
 }
 
 impl Gdt {
@@ -155,7 +170,20 @@ impl Gdt {
 	///
 	/// The GDT must remain valid for the entire lifetime of the system.
 	/// The selectors must point to valid descriptors within this GDT.
+	#[allow(dead_code)]
 	pub unsafe fn load(&'static self, selectors: &Selectors) {
+		self.load_raw(selectors);
+	}
+
+	/// Load this GDT and switch to its segments (non-'static version).
+	///
+	/// Used for per-core GDTs stored in the `CoreLocal` array.
+	///
+	/// # Safety
+	///
+	/// The GDT must remain valid for the entire lifetime of the system.
+	/// Caller must ensure the backing memory is never freed.
+	pub unsafe fn load_raw(&self, selectors: &Selectors) {
 		let ptr = GdtPointer {
 			limit: (size_of::<Self>() - 1) as u16,
 			base: self as *const _ as u64,

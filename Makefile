@@ -115,11 +115,11 @@ iso: kernel ramdisk limine
 
 # Run in QEMU (BIOS mode)
 qemu-bios: iso
-	qemu-system-x86_64 -M q35 -m 2G -cdrom $(ISO) -serial stdio
+	qemu-system-x86_64 -M q35 -m 2G -cdrom $(ISO) -serial stdio -smp 4
 
 # Run in QEMU (UEFI mode) - requires OVMF
 qemu-uefi: iso
-	qemu-system-x86_64 -M q35 -m 2G -cdrom $(ISO) -serial stdio \
+	qemu-system-x86_64 -M q35 -m 2G -cdrom $(ISO) -serial stdio -smp 4 \
 		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd
 
 # Default run target (BIOS)
@@ -128,7 +128,7 @@ run: qemu
 
 # Debug mode
 qemu-debug: iso
-	qemu-system-x86_64 -M q35 -m 2G -cdrom $(ISO) -serial stdio \
+	qemu-system-x86_64 -M q35 -m 2G -cdrom $(ISO) -serial stdio -smp 4 \
 		-d int,cpu_reset -no-reboot
 
 # Clean build artifacts

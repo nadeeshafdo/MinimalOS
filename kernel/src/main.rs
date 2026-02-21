@@ -14,7 +14,7 @@ use limine::BaseRevision;
 use limine::modules::InternalModule;
 use limine::request::{
 	FramebufferRequest, HhdmRequest, MemoryMapRequest, ModuleRequest,
-	RequestsStartMarker, RequestsEndMarker,
+	MpRequest, RequestsStartMarker, RequestsEndMarker,
 };
 
 /// Limine requests start marker.
@@ -52,6 +52,11 @@ static RAMDISK_MODULE: InternalModule =
 static MODULE_REQUEST: ModuleRequest =
 	ModuleRequest::new().with_internal_modules(&[&RAMDISK_MODULE]);
 
+/// [089] Request SMP information from the bootloader.
+#[used]
+#[unsafe(link_section = ".requests")]
+static SMP_REQUEST: MpRequest = MpRequest::new();
+
 /// Limine requests end marker.
 #[used]
 #[unsafe(link_section = ".requests_end_marker")]
@@ -87,7 +92,8 @@ unsafe extern "C" fn _start() -> ! {
 	klog::info!("[019] IDT loaded successfully");
 
 	// [046] The Hotline — Enable syscall/sysret via MSRs
-	arch::syscall::init(arch::tss::Tss::kernel_rsp0());
+	// Use the BSP's per-core kernel RSP from the SMP CoreLocal.
+	arch::syscall::init(arch::smp::bsp_core_local().kernel_rsp0());
 
 	// [023] Modern Times - Enable the Local APIC
 	klog::debug!("Enabling Local APIC...");
@@ -291,6 +297,13 @@ unsafe extern "C" fn _start() -> ! {
 	}
 
 	klog::info!("Kernel initialized successfully");
+
+	// ── [089] Wake Application Processors ─────────────────────
+	if let Some(smp_response) = SMP_REQUEST.get_response() {
+		unsafe { arch::smp::wake_aps(smp_response); }
+	} else {
+		klog::warn!("SMP: No SMP response from Limine — running single-core");
+	}
 
 	// ── [053] The Disk — Detect the RAMDisk module ─────────────
 	let module_response = MODULE_REQUEST.get_response()

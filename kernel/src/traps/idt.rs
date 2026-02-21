@@ -1,6 +1,5 @@
 //! IDT initialization and management.
 
-use crate::arch::gdt::Gdt;
 use crate::arch::idt::{Idt, EntryOptions, GateType};
 use crate::arch::tss::Tss;
 use core::sync::atomic::{AtomicPtr, Ordering};
@@ -8,52 +7,47 @@ use spin::Once;
 
 use super::handlers;
 
-/// Global IDT instance.
+/// Global IDT instance (shared by all cores — IDT has no "Busy" bit).
 static IDT: Once<Idt> = Once::new();
 
-/// Global TSS instance.
-static TSS: Once<Tss> = Once::new();
-
-/// Global GDT instance.
-static GDT: Once<Gdt> = Once::new();
-
-/// Raw pointer to the TSS, set after init, for dynamic RSP0 updates.
+/// Raw pointer to the BSP's TSS, for dynamic RSP0 updates during
+/// context switch.  Updated when smp::init_bsp() sets up CoreLocal.
 static TSS_PTR: AtomicPtr<Tss> = AtomicPtr::new(core::ptr::null_mut());
 
-/// Initialize the GDT, TSS, and IDT.
+/// Initialize the GDT, TSS, and IDT for the BSP.
 ///
 /// This sets up:
-/// 1. TSS with IST1 pointing to a dedicated double fault stack
-/// 2. GDT with kernel code, kernel data, and TSS descriptors
-/// 3. IDT with breakpoint and double fault handlers
+/// 1. Per-core GDT and TSS via `smp::init_bsp()`
+/// 2. Shared IDT with all exception and interrupt handlers
 pub fn init_idt() {
-	// [021] Initialize TSS with IST stacks
-	let tss_ref = TSS.call_once(|| {
-		let mut tss = Tss::new();
-		tss.init();
-		tss
-	});
+	// [089] Per-core GDT/TSS: the BSP's GDT and TSS are now managed
+	// by the SMP subsystem in CoreLocal.  The old static TSS and GDT
+	// (previously created here via spin::Once) are replaced.
 
-	// Store raw pointer for dynamic RSP0 updates during context switch.
-	TSS_PTR.store(tss_ref as *const Tss as *mut Tss, Ordering::Relaxed);
+	// First, disable legacy PIC before setting up interrupts.
+	khal::pic::disable();
+	klog::info!("[022] Legacy PIC disabled (IRQs remapped to 32-47, all masked)");
 
-	// [021] Initialize GDT with TSS descriptor
-	let (gdt, selectors) = Gdt::new(tss_ref);
-	let gdt_ref = GDT.call_once(|| gdt);
+	// Create and load the BSP's per-core GDT/TSS via the SMP module.
+	// We pass APIC ID 0 (BSP) — the real APIC ID is corrected after
+	// APIC init, but the GDT/TSS doesn't depend on it.
+	unsafe { crate::arch::smp::init_bsp(0); }
 
-	// Load GDT and set segment registers
-	unsafe {
-		gdt_ref.load(&selectors);
-	}
+	// Store the BSP's TSS pointer for context-switch RSP0 updates.
+	let tss_ptr = crate::arch::smp::bsp_tss_ptr();
+	TSS_PTR.store(tss_ptr, Ordering::Relaxed);
+
+	let selectors_kcode = 0x08u16; // Kernel code selector (same for all cores)
+
 	klog::debug!("GDT loaded (CS=0x{:04x}, DS=0x{:04x}, TSS=0x{:04x})",
-		selectors.kernel_code, selectors.kernel_data, selectors.tss);
+		0x08u16, 0x10u16, 0x28u16);
 	klog::info!("[044] User segments defined (User CS=0x{:04x}, User DS=0x{:04x})",
-		selectors.user_code, selectors.user_data);
+		0x20u16 | 3, 0x18u16 | 3);
 	klog::info!("[045] RSP0 set in TSS for Ring 3 -> Ring 0 transitions");
 
-	// Create IDT
+	// Create shared IDT
 	let mut idt = Idt::new();
-	let cs = selectors.kernel_code;
+	let cs = selectors_kcode;
 
 	// [020] Register breakpoint handler (INT 3)
 	let breakpoint_options = EntryOptions::new()
@@ -119,9 +113,20 @@ pub fn init_idt() {
 		= handlers::mouse_handler;
 	idt.set_handler(khal::mouse::MOUSE_VECTOR, mouse_handler as usize, cs, mouse_options);
 
-	// Load IDT
+	// Load IDT on BSP
 	let idt_ref = IDT.call_once(|| idt);
 	idt_ref.load();
+}
+
+/// Load the shared IDT on an Application Processor.
+///
+/// Called from `smp::ap_entry()`.  The IDT is shared — it was already
+/// created by the BSP in `init_idt()`.  We just need to execute `lidt`.
+pub fn load_idt_on_ap() {
+	if let Some(idt_ref) = IDT.get() {
+		// The IDT is in a static Once<>, so it has 'static lifetime.
+		idt_ref.load();
+	}
 }
 
 /// Get a reference to the global IDT.
@@ -130,7 +135,10 @@ pub fn get_idt() -> Option<&'static Idt> {
 	IDT.get()
 }
 
-/// Get a raw mutable pointer to the TSS (for dynamic RSP0 updates).
+/// Get a raw mutable pointer to the current core's TSS.
+///
+/// For now this returns the BSP's TSS.  In the SMP future, this
+/// should read from the per-core CoreLocal via GS.
 pub fn tss_ptr() -> *mut Tss {
 	TSS_PTR.load(Ordering::Relaxed)
 }

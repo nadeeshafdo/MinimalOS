@@ -5,15 +5,21 @@
 //! during critical exceptions like Double Fault.
 
 /// Size of each IST stack in bytes (16 KiB).
+#[allow(dead_code)]
 const IST_STACK_SIZE: usize = 4096 * 4;
 
 /// Size of the kernel stack used when transitioning from Ring 3 to Ring 0.
+#[allow(dead_code)]
 const KERNEL_STACK_SIZE: usize = 4096 * 4;
 
 /// Stack storage for IST entry 1 (used by Double Fault handler).
+/// NOTE: Superseded by per-core stacks in `arch::smp::CoreLocal`.
+#[allow(dead_code)]
 static mut DOUBLE_FAULT_STACK: [u8; IST_STACK_SIZE] = [0; IST_STACK_SIZE];
 
 /// Kernel stack for Ring 3 → Ring 0 transitions (RSP0).
+/// NOTE: Superseded by per-core stacks in `arch::smp::CoreLocal`.
+#[allow(dead_code)]
 static mut KERNEL_STACK: [u8; KERNEL_STACK_SIZE] = [0; KERNEL_STACK_SIZE];
 
 /// The 64-bit Task State Segment.
@@ -53,11 +59,10 @@ impl Tss {
 		}
 	}
 
-	/// Initialize the TSS with IST stacks and RSP0.
+	/// Initialize the TSS with IST stacks and RSP0 (BSP legacy path).
 	///
-	/// Sets up:
-	/// - IST1: dedicated stack for Double Fault handling
-	/// - RSP0: kernel stack for Ring 3 → Ring 0 transitions
+	/// NOTE: Superseded by per-core init in `arch::smp::CoreLocal`.
+	#[allow(dead_code)]
 	pub fn init(&mut self) {
 		// IST1: Double Fault handler stack
 		let ist1_top = core::ptr::addr_of!(DOUBLE_FAULT_STACK) as *const u8;
@@ -70,7 +75,8 @@ impl Tss {
 
 	/// Return the kernel RSP0 value (top of KERNEL_STACK).
 	///
-	/// Used by the syscall module to initialise `SYSCALL_KERNEL_RSP`.
+	/// NOTE: Superseded by `CoreLocal::kernel_rsp0()`.
+	#[allow(dead_code)]
 	pub fn kernel_rsp0() -> u64 {
 		let base = core::ptr::addr_of!(KERNEL_STACK) as *const u8;
 		base as u64 + KERNEL_STACK_SIZE as u64
