@@ -6,7 +6,6 @@
 extern crate alloc;
 mod arch;
 mod cap;
-mod fs;
 mod ipc;
 mod memory;
 mod task;
@@ -309,8 +308,8 @@ unsafe extern "C" fn _start() -> ! {
 		rd_base, rd_size, rd_size / 512,
 	);
 
-	// Store ramdisk globally so sys_spawn and wasm actors can access it.
-	fs::ramdisk::init(rd_base, rd_size);
+	// Store ramdisk globally so wasm actors can be loaded from it.
+	wasm::init_ramdisk(rd_base, rd_size);
 
 	// Diagnostic TAR listing (quests [054]-[057]) has been purged.
 	// The VFS wasm actor is now responsible for filesystem operations.
