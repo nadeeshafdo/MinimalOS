@@ -273,34 +273,23 @@ pub unsafe fn context_switch(old: &mut Process, new: &Process) {
 /// When a newly-created task is switched to for the first time,
 /// `context_switch_asm` will `ret` into this function.
 ///
-/// It reads the current process's entry point and user RSP from
-/// the global scheduler, then drops to Ring 3 via `iretq`.
+/// All processes are Wasm actors running as kernel threads.
+/// The trampoline reads the entry point from the scheduler and
+/// calls it directly — no Ring 3 transition needed.
 extern "C" fn task_entry_trampoline() {
-	// Read the current task's parameters from the scheduler.
-	let (entry, user_rsp, args_ptr, args_len, is_wasm) = {
+	let entry = {
 		let sched = SCHEDULER.lock();
 		let current = sched.current().expect("trampoline: no current task");
-		(current.entry_point, current.user_rsp, current.args_ptr, current.args_len, current.wasm_env.is_some())
+		current.entry_point
 	};
 
-	if is_wasm {
-		// Wasm actors run as kernel threads — call the entry point
-		// directly (it's wasm_actor_trampoline) instead of iretq to Ring 3.
-		klog::info!("[064] Entering wasm actor: RIP={:#x}", entry);
-		let func: extern "C" fn() = unsafe { core::mem::transmute(entry) };
-		func();
-		// Should not return — wasm_actor_trampoline calls do_schedule.
-		loop { unsafe { core::arch::asm!("hlt") }; }
-	}
-
-	klog::info!("[064] Entering user mode: RIP={:#x} RSP={:#x}", entry, user_rsp);
-
-	// User CS = 0x20 | 3 = 0x23, User SS = 0x18 | 3 = 0x1b
-	let frame = super::usermode::IretqFrame::new(entry, 0x23, 0x1b, user_rsp);
-	unsafe {
-		// [071] Pass args_ptr in RDI and args_len in RSI.
-		super::usermode::jump_to_ring3_with_args(&frame, args_ptr, args_len);
-	}
+	// Wasm actors run as kernel threads — call the entry point
+	// directly (it's wasm_actor_trampoline).
+	klog::info!("[064] Entering wasm actor: RIP={:#x}", entry);
+	let func: extern "C" fn() = unsafe { core::mem::transmute(entry) };
+	func();
+	// Should not return — wasm_actor_trampoline calls do_schedule.
+	loop { unsafe { core::arch::asm!("hlt") }; }
 }
 
 // ── Scheduler ([063]) ───────────────────────────────────────────
@@ -665,153 +654,5 @@ pub unsafe fn do_schedule() {
 		// Re-enable interrupts so the timer can fire and drive
 		// preemptive scheduling.
 		core::arch::asm!("sti", options(nomem, nostack));
-	}
-}
-
-// ── Spawn helper ([066]) ────────────────────────────────────────
-
-/// Spawn a new process from an ELF file in the ramdisk.
-///
-/// Loads the ELF, maps its segments, allocates a user stack,
-/// creates a `Process`, prepares its kernel stack, and pushes it
-/// into the scheduler.
-///
-/// Returns the new PID on success, or an error message on failure.
-pub fn spawn_from_ramdisk(path: &str, args: &str) -> Result<u64, &'static str> {
-	let ramdisk = crate::fs::ramdisk::get()
-		.ok_or("ramdisk not initialised")?;
-
-	let entry = crate::fs::tar::find_file(ramdisk, path)
-		.ok_or("file not found in ramdisk")?;
-
-	let elf = crate::fs::elf::parse(entry.data)
-		.map_err(|_| "invalid ELF")?;
-
-	klog::info!("[066] Spawning '{}': entry={:#x}", path, elf.entry);
-
-	// ── Per-process page table ──────────────────────────────────
-	// Create a brand-new PML4 with kernel higher-half mappings
-	// shared.  User code/stack are private to this process.
-	let cr3 = crate::memory::paging::create_user_page_table()
-		.ok_or("failed to allocate page table")?;
-
-	// Everything after this point must clean up cr3 on failure.
-	// Wrap in a closure so `?` returns to us for cleanup.
-	let result = (|| -> Result<u64, &'static str> {
-		let hhdm = crate::memory::paging::hhdm_offset();
-
-		// ── Map PT_LOAD segments into the new page table ────────
-		for phdr in elf.phdrs {
-			if !phdr.is_load() {
-				continue;
-			}
-			let vaddr = phdr.p_vaddr;
-			let memsz = phdr.p_memsz as usize;
-			let filesz = phdr.p_filesz as usize;
-			let offset = phdr.p_offset as usize;
-
-			let page_start = vaddr & !0xFFF;
-			let page_end = (vaddr + memsz as u64 + 0xFFF) & !0xFFF;
-			let num_pages = ((page_end - page_start) / 4096) as usize;
-
-			for i in 0..num_pages {
-				let page_virt = page_start + (i as u64) * 4096;
-				if unsafe { crate::memory::paging::translate_in(cr3, page_virt) }.is_none() {
-					let phys = crate::memory::pmm::alloc_frame()
-						.ok_or("out of physical memory")?;
-					unsafe {
-						crate::memory::paging::map_page_in(
-							cr3,
-							page_virt,
-							phys,
-							crate::memory::paging::PageFlags::USER_RW,
-						);
-						// Zero via HHDM (the page is in another address space).
-						core::ptr::write_bytes((hhdm + phys) as *mut u8, 0, 4096);
-					}
-				}
-			}
-
-			// Copy ELF file data via HHDM.
-			if filesz > 0 {
-				let mut copied = 0;
-				while copied < filesz {
-					let target_virt = vaddr + copied as u64;
-					let page_virt = target_virt & !0xFFF;
-					let page_offset = (target_virt & 0xFFF) as usize;
-					let chunk = (filesz - copied).min(4096 - page_offset);
-
-					let page_phys = unsafe {
-						crate::memory::paging::translate_in(cr3, page_virt)
-							.ok_or("ELF page not mapped")?
-					};
-
-					unsafe {
-						core::ptr::copy_nonoverlapping(
-							elf.data.as_ptr().add(offset + copied),
-							(hhdm + page_phys + page_offset as u64) as *mut u8,
-							chunk,
-						);
-					}
-					copied += chunk;
-				}
-			}
-		}
-
-		// ── Allocate user stack (fixed address — each process has
-		// its own page table, so no PID-based offset needed) ─────
-		const USER_STACK_PAGES: u64 = 8;
-		const USER_STACK_BASE: u64 = 0x7FFF_0000;
-		for i in 0..USER_STACK_PAGES {
-			let page_virt = USER_STACK_BASE + i * 4096;
-			let page_phys = crate::memory::pmm::alloc_frame()
-				.ok_or("out of physical memory for user stack")?;
-			unsafe {
-				crate::memory::paging::map_page_in(
-					cr3,
-					page_virt,
-					page_phys,
-					crate::memory::paging::PageFlags::USER_RW,
-				);
-				core::ptr::write_bytes((hhdm + page_phys) as *mut u8, 0, 4096);
-			}
-		}
-		let user_rsp = USER_STACK_BASE + USER_STACK_PAGES * 4096;
-
-		let mut proc = Process::new(path, cr3, elf.entry, user_rsp);
-
-		// [071] Copy arguments to the start of the user stack via HHDM.
-		if !args.is_empty() {
-			let copy_len = args.len().min(256);
-			let stack_phys = unsafe {
-				crate::memory::paging::translate_in(cr3, USER_STACK_BASE)
-					.ok_or("user stack page not mapped")?
-			};
-			unsafe {
-				core::ptr::copy_nonoverlapping(
-					args.as_ptr(),
-					(hhdm + stack_phys) as *mut u8,
-					copy_len,
-				);
-			}
-			proc.args_ptr = USER_STACK_BASE;
-			proc.args_len = copy_len as u64;
-		}
-
-		proc.prepare_initial_stack();
-		let pid = proc.pid;
-
-		SCHEDULER.lock().push(proc);
-		klog::info!("[066] Process '{}' (PID {}) ready (CR3={:#x})", path, pid, cr3);
-		Ok(pid)
-	})();
-
-	match result {
-		Ok(pid) => Ok(pid),
-		Err(e) => {
-			klog::warn!("spawn '{}' failed: {} — freeing page table CR3={:#x}", path, e, cr3);
-			unsafe { crate::memory::paging::free_user_page_table(cr3); }
-			Err(e)
-		}
 	}
 }
