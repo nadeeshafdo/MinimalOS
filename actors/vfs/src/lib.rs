@@ -8,6 +8,8 @@ use sdk::{log, Message};
 const RAMDISK_CAP: i64 = 1;
 /// Endpoint to Shell actor (slot 2, seeded by kernel post-spawn).
 const EP_SHELL: i64 = 2;
+/// Endpoint to UI Server actor (slot 3, seeded by kernel post-spawn).
+const EP_UI: i64 = 3;
 /// Permission bit: READ.
 const PERM_READ: u32 = 1 << 0;
 
@@ -137,8 +139,18 @@ pub extern "C" fn _start() {
                 for i in 0..file_count {
                     let entry = &files[i];
                     if entry.name_len == name_len && &entry.name[..name_len] == requested {
+                        // Determine reply endpoint from data[2] hint.
+                        // Requestors encode which VFS EP slot points back
+                        // to them in data[2] (safe because filenames are
+                        // < 16 chars, so data[2] is unused by filename).
+                        let reply_ep = match msg.data[2] {
+                            3 => EP_UI,
+                            _ => EP_SHELL, // default: Shell (slot 2)
+                        };
+
                         if let Ok(name) = core::str::from_utf8(requested) {
-                            log!("VFS: READ_REQ '{}' -> offset={}, size={}", name, entry.offset, entry.size);
+                            log!("VFS: READ_REQ '{}' -> offset={}, size={}, reply_ep={}",
+                                 name, entry.offset, entry.size, reply_ep);
                         }
 
                         // Build reply: offset + size in data, grant READ-only ramdisk cap.
@@ -150,7 +162,7 @@ pub extern "C" fn _start() {
                             _pad: 0,
                         };
                         let send_result = unsafe {
-                            sdk::sys_cap_send(EP_SHELL, &reply as *const Message as i32)
+                            sdk::sys_cap_send(reply_ep, &reply as *const Message as i32)
                         };
                         if send_result != 0 {
                             log!("VFS: ERROR — failed to send reply ({})", send_result);
@@ -164,6 +176,10 @@ pub extern "C" fn _start() {
                     if let Ok(name) = core::str::from_utf8(requested) {
                         log!("VFS: file not found: '{}'", name);
                     }
+                    let reply_ep = match msg.data[2] {
+                        3 => EP_UI,
+                        _ => EP_SHELL,
+                    };
                     // Send error reply (size=0, no cap).
                     let reply = Message {
                         label: sdk::VFS_READ_REPLY,
@@ -172,7 +188,7 @@ pub extern "C" fn _start() {
                         cap_perms: 0,
                         _pad: 0,
                     };
-                    let _ = unsafe { sdk::sys_cap_send(EP_SHELL, &reply as *const Message as i32) };
+                    let _ = unsafe { sdk::sys_cap_send(reply_ep, &reply as *const Message as i32) };
                 }
             }
             other => {
