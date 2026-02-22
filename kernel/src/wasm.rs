@@ -497,7 +497,10 @@ where
 	// 4. Build imports with the actor's PID so closures can look up caps.
 	let imports = build_imports(pid);
 	let mut store = Store::default();
-	let instance = match module.instantiate(&mut store, Some(imports)) {
+	// Use ModuleInstance::instantiate (NOT Module::instantiate) to avoid
+	// auto-calling _start — tinywasm's Module::instantiate calls start()
+	// which falls back to the _start export even without a start section.
+	let instance = match ModuleInstance::instantiate(&mut store, module, Some(imports)) {
 		Ok(i) => i,
 		Err(e) => {
 			klog::error!("[wasm] instantiate error: {:?}", e);

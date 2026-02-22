@@ -276,12 +276,22 @@ pub unsafe fn context_switch(old: &mut Process, new: &Process) {
 /// It reads the current process's entry point and user RSP from
 /// the global scheduler, then drops to Ring 3 via `iretq`.
 extern "C" fn task_entry_trampoline() {
-	// Read the current task's user-mode parameters from the scheduler.
-	let (entry, user_rsp, args_ptr, args_len) = {
+	// Read the current task's parameters from the scheduler.
+	let (entry, user_rsp, args_ptr, args_len, is_wasm) = {
 		let sched = SCHEDULER.lock();
 		let current = sched.current().expect("trampoline: no current task");
-		(current.entry_point, current.user_rsp, current.args_ptr, current.args_len)
+		(current.entry_point, current.user_rsp, current.args_ptr, current.args_len, current.wasm_env.is_some())
 	};
+
+	if is_wasm {
+		// Wasm actors run as kernel threads — call the entry point
+		// directly (it's wasm_actor_trampoline) instead of iretq to Ring 3.
+		klog::info!("[064] Entering wasm actor: RIP={:#x}", entry);
+		let func: extern "C" fn() = unsafe { core::mem::transmute(entry) };
+		func();
+		// Should not return — wasm_actor_trampoline calls do_schedule.
+		loop { unsafe { core::arch::asm!("hlt") }; }
+	}
 
 	klog::info!("[064] Entering user mode: RIP={:#x} RSP={:#x}", entry, user_rsp);
 
