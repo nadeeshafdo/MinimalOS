@@ -240,37 +240,8 @@ unsafe extern "C" fn _start() -> ! {
 			);
 			klog::info!("[080] Framebuffer info stored: phys={:#x} {}x{}", fb_phys, fb.width(), fb.height());
 
-			// Following commented block of code was written as part of `QUESTS.md`
-			// to demonstrate basic framebuffer output before the console was implemented.
-			// It's left here as a reference for how to use the framebuffer directly,
-			// and to show some early debug output before the console was available.
-
-			// [011] The Screen Wipe - Fill entire screen with blue
-			// kdisplay::fill_screen(&fb, kdisplay::Color::BLUE);
-			// klog::info!("[011] Screen filled with blue");
-
-			// [015] Initialize framebuffer console
-			kdisplay::init_console(&fb, kdisplay::Color::WHITE, kdisplay::Color::ASH);
-			klog::info!("[015] Framebuffer console initialized");
-
-			// [014] Hello World
-			kdisplay::kprintln!("Hello MinimalOS!");
-			kdisplay::kprintln!();
-
-			// [017] Formatting test
-			kdisplay::kprintln!("Framebuffer: {}x{} @ {}bpp", fb.width(), fb.height(), fb.bpp());
-			kdisplay::kprintln!("Pitch: {} bytes", fb.pitch());
-			kdisplay::kprintln!("Magic: {:#010X}", 0xDEADBEEFu32);
-			kdisplay::kprintln!();
-			kdisplay::kprintln!("RAM: {} MiB usable / {} MiB total",
-				_usable_ram / (1024 * 1024), _total_ram / (1024 * 1024));
-			kdisplay::kprintln!();
-			kdisplay::kprintln!("Kernel initialized successfully.");
-			klog::info!("[017] Formatted output rendered");
-
-			// [025] Tick Tock - Print heartbeat label (dots come from timer handler)
-			kdisplay::kprintln!();
-			kdisplay::kprint!("[025] Heartbeat: ");
+			// Display output is now the responsibility of Wasm UI actors.
+			// The kernel only stores FbInfo for capability-based access.
 		}
 	} else {
 		klog::warn!("No framebuffer available");
@@ -308,12 +279,6 @@ unsafe extern "C" fn _start() -> ! {
 	khal::mouse::enable_irq();
 	klog::info!("[075] PS/2 Mouse initialised (IRQ12, vector {})", khal::mouse::MOUSE_VECTOR);
 
-	// [077] Initialise software cursor (after framebuffer + mouse).
-	if let Some(fb) = FRAMEBUFFER_REQUEST.get_response().and_then(|r| r.framebuffers().next()) {
-		unsafe { kdisplay::init_cursor(&fb); }
-		klog::info!("[077] Software cursor initialised (XOR sprite, 12x19)");
-	}
-
 	klog::info!("Kernel initialized successfully");
 
 	// ── [089] Wake Application Processors ─────────────────────
@@ -344,61 +309,11 @@ unsafe extern "C" fn _start() -> ! {
 		rd_base, rd_size, rd_size / 512,
 	);
 
-	// Store ramdisk globally so sys_spawn can access it later.
+	// Store ramdisk globally so sys_spawn and wasm actors can access it.
 	fs::ramdisk::init(rd_base, rd_size);
 
-	let ramdisk = fs::ramdisk::get().expect("ramdisk not stored");
-
-	// ── [054] The Block — Read a raw sector ────────────────────
-	if let Some(sector0) = ramdisk.read_sector(0) {
-		klog::info!(
-			"[054] Sector 0 read OK — first 16 bytes: {:02x?}",
-			&sector0[..16],
-		);
-	} else {
-		klog::error!("[054] Failed to read sector 0!");
-	}
-
-	// ── [055] The Structure — TAR filesystem parser ────────────
-	klog::info!("[055] Parsing USTAR tar archive...");
-	let mut entry_count = 0usize;
-	let iter = unsafe { fs::tar::TarIter::new(ramdisk) };
-	for entry in iter {
-		klog::info!(
-			"[055]   entry: name={:?} size={} type={}",
-			entry.name,
-			entry.size,
-			entry.typeflag as char,
-		);
-		entry_count += 1;
-	}
-	klog::info!("[055] TAR archive contains {} entries", entry_count);
-
-	// ── [056] The Listing — ls /  ──────────────────────────────
-	klog::info!("[056] ls /:");
-	let iter = unsafe { fs::tar::TarIter::new(ramdisk) };
-	for entry in iter {
-		let name = entry.name.strip_prefix("./").unwrap_or(entry.name);
-		if name.is_empty() {
-			continue; // skip the root "./" entry
-		}
-		let kind = if entry.typeflag == b'5' { "DIR " } else { "FILE" };
-		klog::info!("[056]   {} {:>6} {}", kind, entry.size, name);
-	}
-
-	// ── [057] The Reader — cat hello.txt ───────────────────────
-	klog::info!("[057] cat hello.txt:");
-	if let Some(entry) = fs::tar::find_file(ramdisk, "hello.txt") {
-		if let Ok(text) = core::str::from_utf8(entry.data) {
-			for line in text.lines() {
-				klog::info!("[057]   {}", line);
-			}
-		} else {
-			klog::error!("[057] hello.txt: not valid UTF-8");
-		}
-	} else {
-		klog::error!("[057] hello.txt: file not found");
-	}
+	// Diagnostic TAR listing (quests [054]-[057]) has been purged.
+	// The VFS wasm actor is now responsible for filesystem operations.
 
 	// ── [058] The Loader — Spawn init.elf via spawn_from_ramdisk ──
 	//

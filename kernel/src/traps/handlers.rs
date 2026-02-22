@@ -120,8 +120,7 @@ pub extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame
 			// Legacy: echo printable chars to console + input buffer.
 			if press {
 				if let khal::keyboard::KeyKind::Char(c) = event.key {
-					kdisplay::console_try_put_char(c);
-					// Echo to serial for complete terminal experience.
+					// Echo to serial (display echo is now a Wasm actor's job).
 					if c == '\x08' {
 						khal::serial::write_str("\x08 \x08");
 					} else {
@@ -147,14 +146,11 @@ pub extern "x86-interrupt" fn mouse_handler(_stack_frame: InterruptStackFrame) {
 	if khal::mouse::is_mouse_data() {
 		let byte = khal::mouse::read_data();
 		if let Some(packet) = khal::mouse::handle_byte(byte) {
-			// [077] Move software cursor on screen.
-			kdisplay::cursor_move(packet.dx, packet.dy);
-
 			// [078] Push mouse event into EventBuffer.
-			let (ax, ay) = kdisplay::cursor_position();
+			// Cursor rendering is now a Wasm actor's responsibility.
 			crate::task::events::push_mouse(
 				packet.dx, packet.dy, packet.buttons,
-				ax as i16, ay as i16,
+				0, 0, // absolute position tracked by UI actor, not kernel
 			);
 		}
 	}

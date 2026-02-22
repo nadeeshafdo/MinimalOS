@@ -521,7 +521,6 @@ unsafe extern "C" fn syscall_dispatch(
 				let slice = unsafe { core::slice::from_raw_parts(a0 as *const u8, len) };
 				if let Ok(msg) = core::str::from_utf8(slice) {
 					khal::serial::write_str(msg);
-					kdisplay::console_write_fmt(format_args!("{}", msg));
 					return 0;
 				}
 			}
@@ -529,7 +528,7 @@ unsafe extern "C" fn syscall_dispatch(
 		}
 		nr::SYS_FB_INFO => {
 			// [080] a0 = pointer to FbInfo struct (24 bytes) in user space.
-			if !validate_user_ptr(a0, core::mem::size_of::<crate::task::window::FbInfo>()) {
+			if !validate_user_ptr(a0, 24) {
 				return u64::MAX;
 			}
 			match crate::task::window::get_fb_info() {
@@ -578,69 +577,10 @@ unsafe extern "C" fn syscall_dispatch(
 			klog::info!("[080] mmap: {:#x} → {} pages (phys={:#x})", vaddr, num_pages, phys_start);
 			0
 		}
-		nr::SYS_WIN_CREATE => {
-			// [084] a0 = result_ptr (&mut [u64; 2]), a1 = xy_packed, a2 = wh_packed, a3 = title_ptr
-			let x = a1 as i32;
-			let y = (a1 >> 32) as i32;
-			let w = a2 as u32;
-			let h = (a2 >> 32) as u32;
-
-			if !validate_user_ptr(a0, 16) || w == 0 || h == 0 || w > 2048 || h > 2048 {
-				return u64::MAX;
-			}
-
-			// Read title (up to 31 bytes).
-			let title = if a3 != 0 && validate_user_ptr(a3, 1) {
-				// Find NUL or limit to 31 chars.
-				let title_ptr = a3 as *const u8;
-				let mut len = 0usize;
-				while len < 31 {
-					let b = unsafe { core::ptr::read(title_ptr.add(len)) };
-					if b == 0 { break; }
-					len += 1;
-				}
-				if len > 0 {
-					let slice = unsafe { core::slice::from_raw_parts(title_ptr, len) };
-					core::str::from_utf8(slice).unwrap_or("?")
-				} else {
-					"Window"
-				}
-			} else {
-				"Window"
-			};
-
-			match crate::task::window::create_window(x, y, w, h, title) {
-				Some((id, buf_vaddr)) => {
-					unsafe {
-						core::ptr::write((a0) as *mut u64, id as u64);
-						core::ptr::write((a0 as *mut u64).add(1), buf_vaddr);
-					}
-					0
-				}
-				None => u64::MAX,
-			}
-		}
-		nr::SYS_WIN_UPDATE => {
-			// [086] a0 = window id
-			crate::task::window::mark_dirty(a0 as u32);
-			0
-		}
-		nr::SYS_WIN_LIST => {
-			// [084] a0 = buf_ptr (array of WindowInfo), a1 = max_count
-			let max_count = a1 as usize;
-			let buf_size = max_count * core::mem::size_of::<crate::task::window::WindowInfo>();
-			if !validate_user_ptr(a0, buf_size) || max_count == 0 {
-				return u64::MAX;
-			}
-			unsafe { crate::task::window::list_windows(a0 as *mut crate::task::window::WindowInfo, max_count) as u64 }
-		}
-		nr::SYS_WIN_MOVE => {
-			// [087] a0 = window id, a1 = xy_packed (x in low 32, y in high 32)
-			let win_id = a0 as u32;
-			let new_x = a1 as i32;
-			let new_y = (a1 >> 32) as i32;
-			crate::task::window::move_window(win_id, new_x, new_y);
-			0
+		// Legacy window syscalls — purged. Window management is now
+		// the responsibility of Wasm UI actors via capabilities.
+		nr::SYS_WIN_CREATE | nr::SYS_WIN_UPDATE | nr::SYS_WIN_LIST | nr::SYS_WIN_MOVE => {
+			u64::MAX
 		}
 		nr::SYS_CAP_GRANT => {
 			// [091] a0 = source_handle, a1 = endpoint_handle, a2 = requested_perms
