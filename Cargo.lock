@@ -43,10 +43,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f8a2ca5ac02d09563609681103aada9e1777d54fc57a5acd7a41404f9c93b6e"
 
 [[package]]
-name = "display_server"
-version = "0.1.0"
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -76,10 +72,6 @@ dependencies = [
  "equivalent",
  "hashbrown 0.16.1",
 ]
-
-[[package]]
-name = "init"
-version = "0.1.0"
 
 [[package]]
 name = "khal"
@@ -180,10 +172,6 @@ name = "semver"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
-
-[[package]]
-name = "shell"
-version = "0.1.0"
 
 [[package]]
 name = "spin"

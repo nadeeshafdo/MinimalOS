@@ -4,7 +4,6 @@ members = [
 	"kernel",
 	"crates/*",
 	"sdk/*",
-	"user/*",
 	"actors/*",
 ]
 
