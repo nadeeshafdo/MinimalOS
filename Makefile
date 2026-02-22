@@ -46,6 +46,7 @@ actor-shell:
 # Build ramdisk tar archive from ramdisk/ directory
 ramdisk: actor-vfs actor-ui-server actor-shell
 	@mkdir -p $(DISTDIR)
+	cp assets/font.psf ramdisk/font.psf
 	tar cf $(RAMDISK) -C ramdisk .
 	@echo "RAMDisk: $$(wc -c < $(RAMDISK)) bytes"
 
