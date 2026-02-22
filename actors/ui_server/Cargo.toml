@@ -1,0 +1,10 @@
+[package]
+name = "ui_server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actor-sdk = { path = "../sdk" }
+
+[lib]
+crate-type = ["cdylib"]

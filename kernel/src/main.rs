@@ -500,6 +500,27 @@ unsafe extern "C" fn _start() -> ! {
 				let result = caps.insert_at(1, rd_cap, perms::READ);
 				klog::info!("[wasm] RAMDisk cap inserted at slot 1: {:?}", result);
 			});
+
+			// [UI] Spawn the UI Server Wasm actor and hand it the Framebuffer capability.
+			klog::info!("[wasm] Spawning ui_server.wasm...");
+			{
+				use cap::{ObjectKind, perms};
+				match task::window::get_fb_info() {
+					Some(info) => {
+						let fb_bytes = info.pitch as usize * info.height as usize;
+						let fb_pages = (fb_bytes + 0xFFF) / 0x1000;
+						let fb_phys = info.phys_addr;
+						wasm::spawn_wasm("ui_server.wasm", |caps| {
+							let fb_obj = ObjectKind::Memory { phys: fb_phys, pages: fb_pages };
+							let result = caps.insert_at(2, fb_obj, perms::WRITE | perms::GRANT);
+							klog::info!("[wasm] Framebuffer cap inserted at slot 2: {:?}", result);
+						});
+					}
+					None => {
+						klog::warn!("[wasm] No framebuffer available, skipping ui_server.wasm");
+					}
+				}
+			};
 		}
 		Err(e) => {
 			klog::error!("[058] FATAL: failed to spawn init.elf: {}", e);

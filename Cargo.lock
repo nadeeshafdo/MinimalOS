@@ -246,6 +246,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7b9c7822f388596a7cdcaf382ba6711b57b4a1ff48d9977463c6a455f99b376"
 
 [[package]]
+name = "ui_server"
+version = "0.1.0"
+dependencies = [
+ "actor-sdk",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
