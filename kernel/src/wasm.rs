@@ -18,6 +18,90 @@ extern crate alloc;
 use alloc::boxed::Box;
 use tinywasm::{Extern, Imports, Module, ModuleInstance, Store};
 
+// ── Boot-time RAMDisk storage ───────────────────────────────────
+//
+// Replaces the deleted `kernel/src/fs/ramdisk.rs`.  The kernel
+// stores the Limine module pointer once at boot; `spawn_wasm`
+// uses it to locate `.wasm` files inside the TAR archive.
+
+use khal::ramdisk::RamDisk;
+use spin::Once;
+
+/// The global ramdisk instance, initialised once during boot.
+static RAMDISK: Once<RamDisk> = Once::new();
+
+/// Store the ramdisk globally (called from `_start` in main.rs).
+///
+/// # Safety
+/// The `base` pointer must remain valid for the kernel's lifetime.
+pub unsafe fn init_ramdisk(base: *const u8, size: usize) {
+	RAMDISK.call_once(|| unsafe { RamDisk::new(base, size) });
+	klog::debug!("Ramdisk stored ({} bytes)", size);
+}
+
+/// Get a reference to the global ramdisk.
+fn get_ramdisk() -> Option<&'static RamDisk> {
+	RAMDISK.get()
+}
+
+// ── Minimal TAR file finder ─────────────────────────────────────
+//
+// Replaces the deleted `kernel/src/fs/tar.rs`.  Only the bare
+// minimum needed to locate a named file inside a USTAR archive.
+
+const TAR_BLOCK: usize = 512;
+
+/// Find a file by name in a USTAR TAR archive.
+///
+/// Returns `(data_ptr, data_len)` on success.
+fn tar_find_file<'a>(disk: &'a RamDisk, name: &str) -> Option<&'a [u8]> {
+	let buf = unsafe { disk.as_slice() };
+	let search = name.strip_prefix("./").unwrap_or(name);
+	let mut offset = 0usize;
+
+	loop {
+		if offset + TAR_BLOCK > buf.len() {
+			return None;
+		}
+		let header = &buf[offset..offset + TAR_BLOCK];
+		// Two consecutive zero blocks = end of archive.
+		if header.iter().all(|&b| b == 0) {
+			return None;
+		}
+		// Validate USTAR magic at offset 257.
+		if &header[257..262] != b"ustar" {
+			offset += TAR_BLOCK;
+			continue;
+		}
+		// Parse name (bytes 0..100).
+		let name_end = header[..100].iter().position(|&b| b == 0).unwrap_or(100);
+		let entry_name = core::str::from_utf8(&header[..name_end]).unwrap_or("");
+		let entry_name = entry_name.strip_prefix("./").unwrap_or(entry_name);
+		// Parse size (bytes 124..136, octal).
+		let size = parse_tar_octal(&header[124..136]);
+		let data_start = offset + TAR_BLOCK;
+		let data_end = data_start + size;
+
+		if entry_name == search && size > 0 && data_end <= buf.len() {
+			return Some(&buf[data_start..data_end]);
+		}
+		// Advance past header + data (data padded to block boundary).
+		let data_blocks = (size + TAR_BLOCK - 1) / TAR_BLOCK;
+		offset += TAR_BLOCK + data_blocks * TAR_BLOCK;
+	}
+}
+
+fn parse_tar_octal(field: &[u8]) -> usize {
+	let mut v: usize = 0;
+	for &b in field {
+		if b == 0 || b == b' ' { break; }
+		if b >= b'0' && b <= b'7' {
+			v = v * 8 + (b - b'0') as usize;
+		}
+	}
+	v
+}
+
 // ── Wasm Environment ────────────────────────────────────────────
 
 /// Holds the `tinywasm` execution state for a Wasm actor.
@@ -90,37 +174,6 @@ fn build_imports(actor_pid: u64) -> Imports {
 				}
 				unsafe { crate::task::process::do_schedule() };
 				Ok(())
-			},
-		),
-	);
-
-	// env.sys_spawn(name_ptr: i32, name_len: i32) -> i64
-	// NOTE: LIFO arg order
-	let _ = imports.define(
-		"env",
-		"sys_spawn",
-		Extern::typed_func(
-			|mut ctx: tinywasm::FuncContext<'_>, args: (i32, i32)| -> tinywasm::Result<i64> {
-				let (name_len, name_ptr) = args;
-				let mem = ctx.exported_memory("memory")?;
-				let n = (name_len as usize).min(64);
-				let bytes = mem.load(name_ptr as usize, n)?;
-				let name = core::str::from_utf8(bytes).unwrap_or("??");
-				klog::info!("[wasm] sys_spawn(\"{}\")", name);
-
-				// Try Wasm spawn first, fall back to ELF.
-				match spawn_wasm(name, |_| {}) {
-					Some(pid) => Ok(pid as i64),
-					None => {
-						match crate::task::process::spawn_from_ramdisk(name, "") {
-							Ok(pid) => Ok(pid as i64),
-							Err(e) => {
-								klog::warn!("[wasm] spawn failed: {}", e);
-								Ok(-1i64)
-							}
-						}
-					}
-				}
 			},
 		),
 	);
@@ -337,8 +390,9 @@ fn internal_cap_mem_write(actor_pid: u64, cap_handle: u64, offset: u64, data: &[
 
 // ── Internal Send Logic ─────────────────────────────────────────
 
-/// Internal implementation of SYS_CAP_SEND, callable from host functions.
-fn internal_cap_send(endpoint_handle: u64, mut msg: crate::ipc::Message) -> u64 {
+/// Internal implementation of SYS_CAP_SEND, callable from host functions
+/// and the syscall dispatcher.
+pub fn internal_cap_send(endpoint_handle: u64, mut msg: crate::ipc::Message) -> u64 {
 	let mut sched = crate::task::process::SCHEDULER.lock();
 
 	// 1. Resolve endpoint → target_actor_id and cap transfer.
@@ -467,9 +521,8 @@ where
 	}
 
 	// 1. Read .wasm bytes from ramdisk.
-	let ramdisk = crate::fs::ramdisk::get()?;
-	let entry = crate::fs::tar::find_file(ramdisk, name)?;
-	let wasm_bytes = entry.data;
+	let ramdisk = get_ramdisk()?;
+	let wasm_bytes = tar_find_file(ramdisk, name)?;
 
 	klog::info!("[wasm] Loading {} ({} bytes)", name, wasm_bytes.len());
 
