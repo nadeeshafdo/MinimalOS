@@ -6,8 +6,8 @@ use sdk::{log, Message};
 
 /// Endpoint to VFS actor (seeded by kernel at slot 1).
 const EP_VFS: i64 = 1;
-/// Endpoint to UI Server actor (seeded by kernel at slot 2).  Phase 10.
-const _EP_UI: i64 = 2;
+/// Endpoint to UI Server actor (seeded by kernel at slot 2).
+const EP_UI: i64 = 2;
 
 /// Pack a null-terminated filename into the 24-byte `data` field of a Message.
 fn pack_filename(name: &[u8]) -> [u64; 3] {
@@ -30,9 +30,11 @@ pub extern "C" fn _start() {
     // ── Read hello.txt via VFS IPC ──────────────────────────────
     log!("Shell: requesting hello.txt from VFS...");
 
+    let mut data = pack_filename(b"hello.txt");
+    data[2] = 2; // reply hint: VFS slot 2 = EP→Shell
     let req = Message {
         label: sdk::VFS_READ_REQ,
-        data: pack_filename(b"hello.txt"),
+        data,
         cap_grant: 0,
         cap_perms: 0,
         _pad: 0,
@@ -93,6 +95,27 @@ pub extern "C" fn _start() {
         log!("Shell: === end ===");
     } else {
         log!("Shell: ERROR — file is not valid UTF-8");
+        unsafe { sdk::sys_exit(1); }
+        return;
+    }
+
+    // ── Send text to UI Server for on-screen rendering ──────────
+    log!("Shell: sending text to UI Server...");
+
+    // Pack the file contents (up to 23 chars) into a UI_DRAW_REQ message.
+    let draw_len = read_len.min(23);
+    let draw_msg = Message {
+        label: sdk::UI_DRAW_REQ,
+        data: pack_filename(&buf[..draw_len]),
+        cap_grant: 0,
+        cap_perms: 0,
+        _pad: 0,
+    };
+    let send_result = unsafe { sdk::sys_cap_send(EP_UI, &draw_msg as *const Message as i32) };
+    if send_result != 0 {
+        log!("Shell: ERROR — UI_DRAW_REQ send failed ({})", send_result as i64);
+    } else {
+        log!("Shell: UI_DRAW_REQ sent successfully.");
     }
 
     log!("Shell: capability IPC test complete.");
