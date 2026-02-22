@@ -358,6 +358,11 @@ impl Scheduler {
 		self.tasks.iter_mut()
 	}
 
+	/// Immutable iterator over the ready queue (for cap lookup by PID).
+	pub fn tasks_iter(&self) -> impl Iterator<Item = &Process> {
+		self.tasks.iter()
+	}
+
 	/// [072] Wake any sleeping tasks whose wake_tick has passed.
 	pub fn wake_sleeping(&mut self, now: u64) {
 		for task in self.tasks.iter_mut() {

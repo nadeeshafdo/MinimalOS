@@ -58,7 +58,7 @@ user-display-server:
 		-Z build-std-features=compiler-builtins-mem
 
 actor-vfs:
-	cargo build --manifest-path actors/vfs/Cargo.toml --target wasm32-unknown-unknown --release
+	RUSTFLAGS="-C link-arg=--no-entry" cargo build --manifest-path actors/vfs/Cargo.toml --target wasm32-unknown-unknown --release
 	@mkdir -p ramdisk
 	cp target/wasm32-unknown-unknown/release/vfs.wasm ramdisk/vfs.wasm
 

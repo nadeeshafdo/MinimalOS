@@ -39,17 +39,20 @@ unsafe impl Sync for WasmEnv {}
 // ── Host Function Bridge ────────────────────────────────────────
 
 /// Build the `Imports` object mapping "env" module functions to
-/// kernel internals.
-fn build_imports() -> Imports {
+/// kernel internals.  `actor_pid` is captured by closures that need
+/// to look up the calling process's capabilities.
+fn build_imports(actor_pid: u64) -> Imports {
 	let mut imports = Imports::new();
 
 	// env.sys_log(ptr: i32, len: i32)
+	// NOTE: tinywasm 0.8 typed_func presents tuple args in LIFO
+	// (stack-pop) order, so we destructure reversed.
 	let _ = imports.define(
 		"env",
 		"sys_log",
 		Extern::typed_func(
 			|mut ctx: tinywasm::FuncContext<'_>, args: (i32, i32)| -> tinywasm::Result<()> {
-				let (ptr, len) = args;
+				let (len, ptr) = args;
 				let mem = ctx.exported_memory("memory")?;
 				let n = (len as usize).min(256);
 				let bytes = mem.load(ptr as usize, n)?;
@@ -62,17 +65,27 @@ fn build_imports() -> Imports {
 	);
 
 	// env.sys_exit(code: i32)
+	let exit_pid = actor_pid;
 	let _ = imports.define(
 		"env",
 		"sys_exit",
 		Extern::typed_func(
-			|_ctx: tinywasm::FuncContext<'_>, code: i32| -> tinywasm::Result<()> {
+			move |_ctx: tinywasm::FuncContext<'_>, code: i32| -> tinywasm::Result<()> {
 				klog::info!("[wasm] sys_exit({})", code);
-				// Mark current task dead and schedule away.
+				// Mark the wasm actor dead and schedule away.
 				{
 					let mut sched = crate::task::process::SCHEDULER.lock();
+					// Find by PID (current() is unreliable on SMP).
 					if let Some(current) = sched.current_mut() {
-						current.state = crate::task::process::ProcessState::Dead;
+						if current.pid == exit_pid {
+							current.state = crate::task::process::ProcessState::Dead;
+						}
+					}
+					for task in sched.tasks_iter_mut() {
+						if task.pid == exit_pid {
+							task.state = crate::task::process::ProcessState::Dead;
+							break;
+						}
 					}
 				}
 				unsafe { crate::task::process::do_schedule() };
@@ -82,12 +95,13 @@ fn build_imports() -> Imports {
 	);
 
 	// env.sys_spawn(name_ptr: i32, name_len: i32) -> i64
+	// NOTE: LIFO arg order
 	let _ = imports.define(
 		"env",
 		"sys_spawn",
 		Extern::typed_func(
 			|mut ctx: tinywasm::FuncContext<'_>, args: (i32, i32)| -> tinywasm::Result<i64> {
-				let (name_ptr, name_len) = args;
+				let (name_len, name_ptr) = args;
 				let mem = ctx.exported_memory("memory")?;
 				let n = (name_len as usize).min(64);
 				let bytes = mem.load(name_ptr as usize, n)?;
@@ -162,13 +176,17 @@ fn build_imports() -> Imports {
 		),
 	);
 	// env.sys_cap_mem_read(cap_handle: i64, offset: i32, dst_ptr: i32, len: i32) -> i64
+	// NOTE: tinywasm pop_params bug — i32 args come LIFO within their type-stack.
+	// Original order: (cap, offset, dst, len)  Received: (cap, len, dst, offset)
+	let read_pid = actor_pid;
 	let _ = imports.define(
 		"env",
 		"sys_cap_mem_read",
 		Extern::typed_func(
-			|mut ctx: tinywasm::FuncContext<'_>, args: (i64, i32, i32, i32)| -> tinywasm::Result<i64> {
-				let (cap_handle, offset, dst_ptr, len) = args;
+			move |mut ctx: tinywasm::FuncContext<'_>, args: (i64, i32, i32, i32)| -> tinywasm::Result<i64> {
+				let (cap_handle, len, dst_ptr, offset) = args;
 				let result = internal_cap_mem_read(
+					read_pid,
 					cap_handle as u64,
 					offset as u64,
 					len as usize,
@@ -186,12 +204,15 @@ fn build_imports() -> Imports {
 	);
 
 	// env.sys_cap_mem_write(cap_handle: i64, offset: i32, src_ptr: i32, len: i32) -> i64
+	// NOTE: tinywasm pop_params bug — i32 args come LIFO within their type-stack.
+	// Original order: (cap, offset, src, len)  Received: (cap, len, src, offset)
+	let write_pid = actor_pid;
 	let _ = imports.define(
 		"env",
 		"sys_cap_mem_write",
 		Extern::typed_func(
-			|mut ctx: tinywasm::FuncContext<'_>, args: (i64, i32, i32, i32)| -> tinywasm::Result<i64> {
-				let (cap_handle, offset, src_ptr, len) = args;
+			move |mut ctx: tinywasm::FuncContext<'_>, args: (i64, i32, i32, i32)| -> tinywasm::Result<i64> {
+				let (cap_handle, len, src_ptr, offset) = args;
 				// Read source data from Wasm linear memory.
 				let mem = ctx.exported_memory("memory")?;
 				let src_bytes = mem.load(src_ptr as usize, len as usize)?;
@@ -199,6 +220,7 @@ fn build_imports() -> Imports {
 				let mut buf = alloc::vec![0u8; len as usize];
 				buf.copy_from_slice(src_bytes);
 				let result = internal_cap_mem_write(
+					write_pid,
 					cap_handle as u64,
 					offset as u64,
 					&buf,
@@ -213,14 +235,40 @@ fn build_imports() -> Imports {
 
 // ── Capability Memory Blit ───────────────────────────────────────
 
+/// Find a process in the scheduler by PID (checks current + ready queue).
+fn find_process_cap<'a>(
+	sched: &'a crate::task::process::Scheduler,
+	pid: u64,
+	cap_handle: u64,
+) -> Option<&'a crate::cap::Capability> {
+	// Check current task first.
+	if let Some(current) = sched.current() {
+		if current.pid == pid {
+			return current.caps.get(cap_handle);
+		}
+	}
+	// Check the ready queue (process may have been preempted).
+	for task in sched.tasks_iter() {
+		if task.pid == pid {
+			return task.caps.get(cap_handle);
+		}
+	}
+	None
+}
+
 /// Read `len` bytes from a Memory capability at `offset`.
 ///
 /// Validates: cap exists, is Memory, has READ, offset+len in bounds.
 /// Returns the data as a Vec, or None on error.
-fn internal_cap_mem_read(cap_handle: u64, offset: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
+fn internal_cap_mem_read(actor_pid: u64, cap_handle: u64, offset: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
 	let sched = crate::task::process::SCHEDULER.lock();
-	let current = sched.current()?;
-	let cap = current.caps.get(cap_handle)?;
+	let cap = match find_process_cap(&sched, actor_pid, cap_handle) {
+		Some(c) => c,
+		None => {
+			klog::warn!("[blit] cap_mem_read: no cap at handle {} for pid {}", cap_handle, actor_pid);
+			return None;
+		}
+	};
 
 	if !cap.has_perms(crate::cap::perms::READ) {
 		klog::warn!("[blit] cap_mem_read: missing READ permission");
@@ -253,13 +301,9 @@ fn internal_cap_mem_read(cap_handle: u64, offset: u64, len: usize) -> Option<all
 /// Write `data` to a Memory capability at `offset`.
 ///
 /// Validates: cap exists, is Memory, has WRITE, offset+len in bounds.
-fn internal_cap_mem_write(cap_handle: u64, offset: u64, data: &[u8]) -> bool {
+fn internal_cap_mem_write(actor_pid: u64, cap_handle: u64, offset: u64, data: &[u8]) -> bool {
 	let sched = crate::task::process::SCHEDULER.lock();
-	let current = match sched.current() {
-		Some(p) => p,
-		None => return false,
-	};
-	let cap = match current.caps.get(cap_handle) {
+	let cap = match find_process_cap(&sched, actor_pid, cap_handle) {
 		Some(c) => c,
 		None => return false,
 	};
@@ -372,7 +416,7 @@ fn internal_cap_send(endpoint_handle: u64, mut msg: crate::ipc::Message) -> u64 
 /// Extracts the `WasmEnv`, drops the scheduler lock, enables
 /// interrupts, and runs `_start`.
 pub extern "C" fn wasm_actor_trampoline() {
-	// 1. Extract the environment and DROP the scheduler lock.
+	// 1. Extract the environment, then DROP the scheduler lock.
 	let mut wasm_env = {
 		let mut sched = crate::task::process::SCHEDULER.lock();
 		let current = sched.current_mut().expect("no current task in trampoline");
@@ -438,22 +482,7 @@ where
 		}
 	};
 
-	// 3. Build imports and instantiate.
-	let imports = build_imports();
-	let mut store = Store::default();
-	let instance = match module.instantiate(&mut store, Some(imports)) {
-		Ok(i) => i,
-		Err(e) => {
-			klog::error!("[wasm] instantiate error: {:?}", e);
-			return None;
-		}
-	};
-
-	// 4. Create the WasmEnv.
-	let wasm_env = Box::new(WasmEnv { store, instance });
-
-	// 5. Create a Process — SASOS: share the kernel's CR3.
-	//    No user page table needed; Wasm SFI provides isolation.
+	// 3. Create a Process first so we know its PID for the host functions.
 	let kernel_cr3: u64;
 	unsafe { core::arch::asm!("mov {}, cr3", out(reg) kernel_cr3) };
 
@@ -463,9 +492,24 @@ where
 		wasm_actor_trampoline as u64,
 		0, // user_rsp = 0 (not used for kernel threads)
 	);
+	let pid = process.pid;
+
+	// 4. Build imports with the actor's PID so closures can look up caps.
+	let imports = build_imports(pid);
+	let mut store = Store::default();
+	let instance = match module.instantiate(&mut store, Some(imports)) {
+		Ok(i) => i,
+		Err(e) => {
+			klog::error!("[wasm] instantiate error: {:?}", e);
+			return None;
+		}
+	};
+	klog::info!("[wasm] instantiate complete for PID {}", pid);
+
+	// 5. Create the WasmEnv and attach to process.
+	let wasm_env = Box::new(WasmEnv { store, instance });
 	process.wasm_env = Some(wasm_env);
 
-	let pid = process.pid;
 	klog::info!("[wasm] Spawning '{}' (PID {})", name, pid);
 
 	// 6. Seed capabilities BEFORE pushing to the scheduler (fixes SMP race condition)

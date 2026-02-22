@@ -497,7 +497,8 @@ unsafe extern "C" fn _start() -> ! {
 				let rd_phys = rd_base as u64 - hhdm_offset;
 				let rd_pages = (rd_size + 0xFFF) / 0x1000;
 				let rd_cap = ObjectKind::Memory { phys: rd_phys, pages: rd_pages };
-				caps.insert_at(1, rd_cap, perms::READ);
+				let result = caps.insert_at(1, rd_cap, perms::READ);
+				klog::info!("[wasm] RAMDisk cap inserted at slot 1: {:?}", result);
 			});
 		}
 		Err(e) => {

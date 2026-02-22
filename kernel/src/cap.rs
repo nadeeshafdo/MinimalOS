@@ -149,6 +149,9 @@ impl CapTable {
 	/// Insert a capability at a specific slot index (for init setup).
 	///
 	/// Returns the composite handle, or `None` if the slot is occupied.
+	/// Uses generation 0 so the handle equals the raw index — this is
+	/// intentional for boot-time capability seeding where actors can
+	/// reference caps by well-known indices.
 	pub fn insert_at(&mut self, index: usize, object: ObjectKind, perms: u32) -> Option<u64> {
 		if index >= CAP_TABLE_SIZE {
 			return None;
@@ -157,9 +160,7 @@ impl CapTable {
 		if !slot.object.is_empty() {
 			return None; // already occupied
 		}
-		// Increment generation to prevent ABA on explicitly set slots
-		slot.generation = slot.generation.wrapping_add(1);
-		let gen = slot.generation;
+		let gen = slot.generation; // keep generation at 0 for initial setup
 		slot.object = object;
 		slot.perms = perms;
 		Some(handle_pack(gen, index))
