@@ -383,22 +383,24 @@ unsafe extern "C" fn _start() -> ! {
 			klog::info!("[wasm] Shell caps: {}", shell.caps.summary());
 		}
 
-		// VFS: Slot 2 = EP→Shell (so it can reply)
+		// VFS: Slot 2 = EP→Shell, Slot 3 = EP→UI (reply routing)
 		if let Some(vfs) = sched.get_process_mut(vfs_pid) {
 			vfs.caps.insert_at(2, ObjectKind::Endpoint { target_actor_id: shell_pid }, perms::WRITE);
+			vfs.caps.insert_at(3, ObjectKind::Endpoint { target_actor_id: ui_pid }, perms::WRITE);
 			klog::info!("[wasm] VFS caps: {}", vfs.caps.summary());
 		}
 
-		// UI Server: Slot 3 = EP→Shell (for future UI_DRAW_REPLY, Phase 10)
+		// UI Server: Slot 1 = EP→VFS, Slot 3 = EP→Shell
 		if let Some(ui) = sched.get_process_mut(ui_pid) {
+			ui.caps.insert_at(1, ObjectKind::Endpoint { target_actor_id: vfs_pid }, perms::WRITE);
 			ui.caps.insert_at(3, ObjectKind::Endpoint { target_actor_id: shell_pid }, perms::WRITE);
 			klog::info!("[wasm] UI caps: {}", ui.caps.summary());
 		}
 	}
 
 	klog::info!("[wasm] All actors spawned and wired:");
-	klog::info!("[wasm]   VFS  (PID {}) — RAMDisk + EP→Shell", vfs_pid);
-	klog::info!("[wasm]   UI   (PID {}) — Framebuffer + EP→Shell", ui_pid);
+	klog::info!("[wasm]   VFS  (PID {}) — RAMDisk + EP→Shell + EP→UI", vfs_pid);
+	klog::info!("[wasm]   UI   (PID {}) — EP→VFS + Framebuffer + EP→Shell", ui_pid);
 	klog::info!("[wasm]   Shell(PID {}) — EP→VFS + EP→UI", shell_pid);
 
 	// Perform the first schedule — context-switches from idle into
