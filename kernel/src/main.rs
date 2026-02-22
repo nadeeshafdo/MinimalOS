@@ -315,12 +315,6 @@ unsafe extern "C" fn _start() -> ! {
 	// Diagnostic TAR listing (quests [054]-[057]) has been purged.
 	// The VFS wasm actor is now responsible for filesystem operations.
 
-	// ── [058] The Loader — Spawn init.elf via spawn_from_ramdisk ──
-	//
-	// With per-process page tables, init is spawned just like every
-	// other process: create_user_page_table → map ELF → push to
-	// scheduler.  No special-casing required.
-
 	// Create a "kernel idle" process that represents the current
 	// kernel thread.  The scheduler needs a "current" to switch
 	// away from on the very first do_schedule().
@@ -334,118 +328,82 @@ unsafe extern "C" fn _start() -> ! {
 	}
 
 	// ── CRITICAL SECTION: disable interrupts from spawn through the
-	// first do_schedule().  Once init is added to the queue,
-	// task_count() > 1 and the timer handler would call do_schedule()
-	// from interrupt context, preempting main() into init before we
-	// reach the intentional first switch below.  do_schedule() will
-	// re-enable interrupts (sti) after the context switch completes.
+	// first do_schedule().  Actors must not be preempted before the
+	// Endpoint wiring is complete.
 	core::arch::asm!("cli", options(nomem, nostack));
 
-	klog::info!("[058] Loading init.elf from ramdisk...");
-	match task::process::spawn_from_ramdisk("init.elf", "") {
-		Ok(pid) => {
-			klog::info!("[058] init.elf spawned (PID {})", pid);
-			// [091] Seed init's CapTable with root capabilities.
-			// init is the capability broker — it holds GRANT on
-			// everything and delegates to child drivers.
-			{
-				use cap::{ObjectKind, perms};
+	// ── Phase 9: Spawn all Wasm actors ─────────────────────────
+	// No more ELF.  Every user-space entity is a Wasm actor running
+	// inside the kernel's address space via tinywasm.
+	use cap::{ObjectKind, perms};
 
-				// Compute real hardware coordinates for capabilities.
-				let rd_phys = rd_base as u64 - hhdm_offset;
-				let rd_pages = (rd_size + 0xFFF) / 0x1000;
-				let (fb_phys, fb_pages) = match task::window::get_fb_info() {
-					Some(info) => {
-						let fb_bytes = info.pitch as usize * info.height as usize;
-						(info.phys_addr, (fb_bytes + 0xFFF) / 0x1000)
-					}
-					None => (0u64, 0usize),
-				};
-
-				let mut sched = task::process::SCHEDULER.lock();
-				// Find init process in the ready queue.
-				let mut found = false;
-				for task in sched.tasks_iter_mut() {
-					if task.pid != pid { continue; }
-					// Slot 0 already has Log (from Process::new).
-					// Slot 1: ramdisk memory
-					task.caps.insert(
-						ObjectKind::Memory { phys: rd_phys, pages: rd_pages },
-						perms::READ | perms::GRANT,
-					);
-					// Slot 2: PS/2 I/O ports
-					task.caps.insert(
-						ObjectKind::IoPort { base: 0x60, count: 2 },
-						perms::READ | perms::WRITE | perms::GRANT,
-					);
-					// Slot 3: Keyboard IRQ1
-					task.caps.insert(
-						ObjectKind::IrqLine { irq: 1 },
-						perms::READ | perms::GRANT,
-					);
-					// Slot 4: Mouse IRQ12
-					task.caps.insert(
-						ObjectKind::IrqLine { irq: 12 },
-						perms::READ | perms::GRANT,
-					);
-					// Slot 5: Framebuffer memory
-					task.caps.insert(
-						ObjectKind::Memory { phys: fb_phys, pages: fb_pages },
-						perms::READ | perms::WRITE | perms::MAP | perms::GRANT,
-					);
-					klog::info!("[091] CapTable: init.elf has {} capabilities: {}",
-						task.caps.count(),
-						task.caps.summary(),
-					);
-					found = true;
-					break;
-				}
-				if !found {
-					klog::warn!("[091] Could not find init.elf (PID {}) to seed capabilities", pid);
-				}
-			}
-
-			// [VFS] Spawn the VFS Wasm actor and hand it the RAMDisk capability directly.
-			klog::info!("[wasm] Spawning vfs.wasm...");
-			wasm::spawn_wasm("vfs.wasm", |caps| {
-				use cap::{ObjectKind, perms};
-				let rd_phys = rd_base as u64 - hhdm_offset;
-				let rd_pages = (rd_size + 0xFFF) / 0x1000;
-				let rd_cap = ObjectKind::Memory { phys: rd_phys, pages: rd_pages };
-				let result = caps.insert_at(1, rd_cap, perms::READ);
-				klog::info!("[wasm] RAMDisk cap inserted at slot 1: {:?}", result);
-			});
-
-			// [UI] Spawn the UI Server Wasm actor and hand it the Framebuffer capability.
-			klog::info!("[wasm] Spawning ui_server.wasm...");
-			{
-				use cap::{ObjectKind, perms};
-				match task::window::get_fb_info() {
-					Some(info) => {
-						let fb_bytes = info.pitch as usize * info.height as usize;
-						let fb_pages = (fb_bytes + 0xFFF) / 0x1000;
-						let fb_phys = info.phys_addr;
-						wasm::spawn_wasm("ui_server.wasm", |caps| {
-							let fb_obj = ObjectKind::Memory { phys: fb_phys, pages: fb_pages };
-							let result = caps.insert_at(2, fb_obj, perms::WRITE | perms::GRANT);
-							klog::info!("[wasm] Framebuffer cap inserted at slot 2: {:?}", result);
-						});
-					}
-					None => {
-						klog::warn!("[wasm] No framebuffer available, skipping ui_server.wasm");
-					}
-				}
-			};
+	let rd_phys = rd_base as u64 - hhdm_offset;
+	let rd_pages = (rd_size + 0xFFF) / 0x1000;
+	let (fb_phys, fb_pages) = match task::window::get_fb_info() {
+		Some(info) => {
+			let fb_bytes = info.pitch as usize * info.height as usize;
+			(info.phys_addr, (fb_bytes + 0xFFF) / 0x1000)
 		}
-		Err(e) => {
-			klog::error!("[058] FATAL: failed to spawn init.elf: {}", e);
-			loop { core::arch::asm!("cli; hlt"); }
+		None => (0u64, 0usize),
+	};
+
+	// 1. Spawn VFS actor — gets RAMDisk at slot 1 (READ|GRANT so it can delegate).
+	klog::info!("[wasm] Spawning vfs.wasm...");
+	let vfs_pid = wasm::spawn_wasm("vfs.wasm", |caps| {
+		let rd_cap = ObjectKind::Memory { phys: rd_phys, pages: rd_pages };
+		caps.insert_at(1, rd_cap, perms::READ | perms::GRANT);
+		klog::info!("[wasm] VFS: RAMDisk cap at slot 1 (READ|GRANT)");
+	}).expect("FATAL: failed to spawn vfs.wasm");
+
+	// 2. Spawn UI Server actor — gets Framebuffer at slot 2 (WRITE|GRANT).
+	klog::info!("[wasm] Spawning ui_server.wasm...");
+	let ui_pid = wasm::spawn_wasm("ui_server.wasm", |caps| {
+		if fb_pages > 0 {
+			let fb_obj = ObjectKind::Memory { phys: fb_phys, pages: fb_pages };
+			caps.insert_at(2, fb_obj, perms::WRITE | perms::GRANT);
+			klog::info!("[wasm] UI: Framebuffer cap at slot 2 (WRITE|GRANT)");
+		}
+	}).expect("FATAL: failed to spawn ui_server.wasm");
+
+	// 3. Spawn Shell actor — caps are injected below.
+	klog::info!("[wasm] Spawning shell.wasm...");
+	let shell_pid = wasm::spawn_wasm("shell.wasm", |_caps| {
+		// Endpoints will be injected in the post-spawn wiring step.
+	}).expect("FATAL: failed to spawn shell.wasm");
+
+	// 4. Post-Spawn Endpoint Injection — short-lived lock.
+	//    All actors are in the ready queue but interrupts are disabled,
+	//    so none of them can execute yet.
+	{
+		let mut sched = task::process::SCHEDULER.lock();
+
+		// Shell: Slot 1 = EP→VFS, Slot 2 = EP→UI
+		if let Some(shell) = sched.get_process_mut(shell_pid) {
+			shell.caps.insert_at(1, ObjectKind::Endpoint { target_actor_id: vfs_pid }, perms::WRITE);
+			shell.caps.insert_at(2, ObjectKind::Endpoint { target_actor_id: ui_pid }, perms::WRITE);
+			klog::info!("[wasm] Shell caps: {}", shell.caps.summary());
+		}
+
+		// VFS: Slot 2 = EP→Shell (so it can reply)
+		if let Some(vfs) = sched.get_process_mut(vfs_pid) {
+			vfs.caps.insert_at(2, ObjectKind::Endpoint { target_actor_id: shell_pid }, perms::WRITE);
+			klog::info!("[wasm] VFS caps: {}", vfs.caps.summary());
+		}
+
+		// UI Server: Slot 3 = EP→Shell (for future UI_DRAW_REPLY, Phase 10)
+		if let Some(ui) = sched.get_process_mut(ui_pid) {
+			ui.caps.insert_at(3, ObjectKind::Endpoint { target_actor_id: shell_pid }, perms::WRITE);
+			klog::info!("[wasm] UI caps: {}", ui.caps.summary());
 		}
 	}
 
-	// Perform the first schedule — this will context-switch from idle
-	// into init's prepared kernel stack, which returns to the
-	// task_entry_trampoline and then iretqs to Ring 3.
+	klog::info!("[wasm] All actors spawned and wired:");
+	klog::info!("[wasm]   VFS  (PID {}) — RAMDisk + EP→Shell", vfs_pid);
+	klog::info!("[wasm]   UI   (PID {}) — Framebuffer + EP→Shell", ui_pid);
+	klog::info!("[wasm]   Shell(PID {}) — EP→VFS + EP→UI", shell_pid);
+
+	// Perform the first schedule — context-switches from idle into
+	// the first ready actor's kernel stack trampoline.
 	klog::info!("[064] Starting scheduler...");
 	unsafe {
 		task::process::do_schedule();
@@ -454,11 +412,6 @@ unsafe extern "C" fn _start() -> ! {
 	// If we return here (all tasks exited), idle loop.
 	klog::info!("All tasks completed — entering idle loop");
 	loop {
-		// The context switch may return with IF=0 (e.g. from a timer
-		// interrupt context).  We must re-enable interrupts before HLT,
-		// otherwise the timer can never fire and we halt forever.
-		// "sti; hlt" is idiomatic on x86 — the instruction boundary
-		// between STI and HLT allows exactly one interrupt to arrive.
 		core::arch::asm!("sti; hlt", options(nomem, nostack));
 	}
 }

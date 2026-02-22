@@ -2,9 +2,26 @@
 #![no_main]
 
 use actor_sdk as sdk;
-use sdk::log;
+use sdk::{log, Message};
 
-const RAMDISK_CAP: u64 = 1;
+/// RAMDisk Memory capability (slot 1, seeded by kernel with READ|GRANT).
+const RAMDISK_CAP: i64 = 1;
+/// Endpoint to Shell actor (slot 2, seeded by kernel post-spawn).
+const EP_SHELL: i64 = 2;
+/// Permission bit: READ.
+const PERM_READ: u32 = 1 << 0;
+
+/// Maximum files we can index from the TAR archive.
+const MAX_FILES: usize = 32;
+
+/// A file index entry — name, offset in ramdisk, and size.
+struct FileEntry {
+    name: [u8; 100],
+    name_len: usize,
+    /// Byte offset of file data within the ramdisk (header + 512).
+    offset: u32,
+    size: u32,
+}
 
 fn parse_octal(bytes: &[u8]) -> usize {
     let mut val = 0;
@@ -18,58 +35,149 @@ fn parse_octal(bytes: &[u8]) -> usize {
     val
 }
 
-fn parse_string(bytes: &[u8]) -> &str {
+fn parse_string_len(bytes: &[u8]) -> usize {
     let mut len = 0;
     while len < bytes.len() && bytes[len] != 0 {
         len += 1;
     }
-    core::str::from_utf8(&bytes[..len]).unwrap_or("<invalid utf8>")
+    len
 }
 
-#[no_mangle]
+/// Unpack a null-terminated filename from Message.data (24 bytes as [u64; 3]).
+fn unpack_filename(data: &[u64; 3]) -> ([u8; 24], usize) {
+    let mut buf = [0u8; 24];
+    let b0 = data[0].to_le_bytes();
+    let b1 = data[1].to_le_bytes();
+    let b2 = data[2].to_le_bytes();
+    buf[0..8].copy_from_slice(&b0);
+    buf[8..16].copy_from_slice(&b1);
+    buf[16..24].copy_from_slice(&b2);
+    let len = parse_string_len(&buf);
+    (buf, len)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn _start() {
     log!("VFS Actor started. Initializing Zero-Allocation File System...");
 
+    // ── Phase 1: Index all files from the TAR archive ──────────
+    let mut files: [FileEntry; MAX_FILES] = unsafe { core::mem::zeroed() };
+    let mut file_count = 0usize;
     let mut block = [0u8; 512];
-    let mut offset = 0;
-    let mut file_count = 0;
+    let mut offset: i32 = 0;
 
     loop {
-        // Blit 512 bytes (one block) from the RAMDisk capability into our stack
-        let res = unsafe { sdk::sys_cap_mem_read(RAMDISK_CAP as i64, offset, block.as_mut_ptr() as i32, 512) };
+        let res = unsafe { sdk::sys_cap_mem_read(RAMDISK_CAP, offset, block.as_mut_ptr() as i32, 512) };
         if res != 0 {
             log!("VFS: Read error at offset {}", offset);
             break;
         }
 
-        // A block starting with a null byte indicates the end of the archive
         if block[0] == 0 {
             break;
         }
 
-        // Validate USTAR magic ("ustar" or "ustar\0")
         if &block[257..262] != b"ustar" {
             log!("VFS: Invalid TAR magic at offset {}", offset);
             break;
         }
 
-        let name = parse_string(&block[0..100]);
+        let name_len = parse_string_len(&block[0..100]);
         let size = parse_octal(&block[124..136]);
         let type_flag = block[156];
 
-        // Type '0' is a regular file, '5' is a directory
-        if type_flag == b'0' || type_flag == 0 {
-            log!("VFS File {}: '{}' ({} bytes) at offset {}", file_count, name, size, offset + 512);
+        if (type_flag == b'0' || type_flag == 0) && file_count < MAX_FILES {
+            let entry = &mut files[file_count];
+            // Strip leading "./" prefix from TAR filenames.
+            let (name_start, effective_len) = if name_len >= 2 && block[0] == b'.' && block[1] == b'/' {
+                (2usize, name_len - 2)
+            } else {
+                (0usize, name_len)
+            };
+            let copy_len = effective_len.min(100);
+            entry.name[..copy_len].copy_from_slice(&block[name_start..name_start + copy_len]);
+            entry.name_len = copy_len;
+            entry.offset = (offset + 512) as u32;
+            entry.size = size as u32;
+
+            if let Ok(name) = core::str::from_utf8(&entry.name[..copy_len]) {
+                log!("VFS: indexed [{}] '{}' ({} bytes @ {})", file_count, name, size, offset + 512);
+            }
             file_count += 1;
         }
 
-        // Advance offset: 1 header block + N data blocks (padded to 512)
         let data_blocks = (size + 511) / 512;
         offset += 512 + (data_blocks * 512) as i32;
     }
 
-    log!("VFS: Initialization complete. {} files indexed. Yielding...", file_count);
+    log!("VFS: {} files indexed. Entering service loop...", file_count);
 
-    // Tell the kernel this actor is done for now
-    unsafe { sdk::sys_exit(0); }
+    // ── Phase 2: Service loop — wait for IPC requests ──────────
+    loop {
+        let mut msg = Message::empty();
+        let recv_result = unsafe { sdk::sys_cap_recv(&mut msg as *mut Message as i32) };
+        if recv_result != 0 {
+            log!("VFS: recv error ({})", recv_result);
+            continue;
+        }
+
+        match msg.label {
+            sdk::VFS_READ_REQ => {
+                let (name_buf, name_len) = unpack_filename(&msg.data);
+
+                if name_len == 0 {
+                    log!("VFS: READ_REQ with empty filename");
+                    continue;
+                }
+
+                let requested = &name_buf[..name_len];
+
+                // Search the index.
+                let mut found = false;
+                for i in 0..file_count {
+                    let entry = &files[i];
+                    if entry.name_len == name_len && &entry.name[..name_len] == requested {
+                        if let Ok(name) = core::str::from_utf8(requested) {
+                            log!("VFS: READ_REQ '{}' -> offset={}, size={}", name, entry.offset, entry.size);
+                        }
+
+                        // Build reply: offset + size in data, grant READ-only ramdisk cap.
+                        let reply = Message {
+                            label: sdk::VFS_READ_REPLY,
+                            data: [entry.offset as u64, entry.size as u64, 0],
+                            cap_grant: RAMDISK_CAP as u64,   // grant our ramdisk cap
+                            cap_perms: PERM_READ,             // narrow to READ only
+                            _pad: 0,
+                        };
+                        let send_result = unsafe {
+                            sdk::sys_cap_send(EP_SHELL, &reply as *const Message as i32)
+                        };
+                        if send_result != 0 {
+                            log!("VFS: ERROR — failed to send reply ({})", send_result);
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    if let Ok(name) = core::str::from_utf8(requested) {
+                        log!("VFS: file not found: '{}'", name);
+                    }
+                    // Send error reply (size=0, no cap).
+                    let reply = Message {
+                        label: sdk::VFS_READ_REPLY,
+                        data: [0, 0, 0],
+                        cap_grant: 0,
+                        cap_perms: 0,
+                        _pad: 0,
+                    };
+                    let _ = unsafe { sdk::sys_cap_send(EP_SHELL, &reply as *const Message as i32) };
+                }
+            }
+            other => {
+                log!("VFS: unknown message label {}", other);
+            }
+        }
+    }
 }

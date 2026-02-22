@@ -269,6 +269,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442887c63f2c839b346c192d047a7c87e73d0689c9157b00b53dcc27dd5ea793"
 
 [[package]]
+name = "wasm-shell"
+version = "0.1.0"
+dependencies = [
+ "actor-sdk",
+]
+
+[[package]]
 name = "wasmparser"
 version = "0.216.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -373,6 +373,16 @@ impl Scheduler {
 		self.tasks.iter()
 	}
 
+	/// Look up a process by PID (checks current + ready queue).
+	pub fn get_process_mut(&mut self, pid: u64) -> Option<&mut Process> {
+		if let Some(ref mut cur) = self.current {
+			if cur.pid == pid {
+				return Some(cur);
+			}
+		}
+		self.tasks.iter_mut().find(|t| t.pid == pid)
+	}
+
 	/// [072] Wake any sleeping tasks whose wake_tick has passed.
 	pub fn wake_sleeping(&mut self, now: u64) {
 		for task in self.tasks.iter_mut() {

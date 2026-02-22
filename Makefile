@@ -67,8 +67,13 @@ actor-ui-server:
 	@mkdir -p ramdisk
 	cp target/wasm32-unknown-unknown/release/ui_server.wasm ramdisk/ui_server.wasm
 
+actor-shell:
+	RUSTFLAGS="-C link-arg=--no-entry" cargo build --manifest-path actors/shell/Cargo.toml --target wasm32-unknown-unknown --release
+	@mkdir -p ramdisk
+	cp target/wasm32-unknown-unknown/release/wasm_shell.wasm ramdisk/shell.wasm
+
 # Build ramdisk tar archive from ramdisk/ directory
-ramdisk: user-init user-shell user-display-server actor-vfs actor-ui-server
+ramdisk: user-init user-shell user-display-server actor-vfs actor-ui-server actor-shell
 	@mkdir -p $(DISTDIR)
 	@cp $(USER_INIT_ELF) ramdisk/init.elf
 	@cp $(USER_SHELL_ELF) ramdisk/shell.elf
