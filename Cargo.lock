@@ -171,6 +171,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ps2_mouse"
+version = "0.1.0"
+dependencies = [
+ "actor-sdk",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"

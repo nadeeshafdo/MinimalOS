@@ -407,6 +407,21 @@ unsafe extern "C" fn _start() -> ! {
 		klog::warn!("[wasm] ps2_keyboard.wasm not found in ramdisk — skipping");
 	}
 
+	// 6. Spawn PS/2 Mouse driver actor — gets hardware caps.
+	klog::info!("[wasm] Spawning ps2_mouse.wasm...");
+	let mouse_pid = wasm::spawn_wasm("ps2_mouse.wasm", |caps| {
+		// Slot 1: IRQ 12 (mouse interrupt line)
+		caps.insert_at(1, ObjectKind::IrqLine { irq: 12 }, perms::READ);
+		// Slot 2: I/O Ports 0x60–0x64 (PS/2 data + status/command)
+		caps.insert_at(2, ObjectKind::IoPort { base: 0x60, count: 5 }, perms::READ | perms::WRITE);
+		klog::info!("[wasm] MOUSE: IrqLine(12) + IoPort(0x60..0x64)");
+	});
+	if let Some(mpid) = mouse_pid {
+		klog::info!("[wasm] MOUSE (PID {}) — IRQ12 + IO(0x60) + EP→UI", mpid);
+	} else {
+		klog::warn!("[wasm] ps2_mouse.wasm not found in ramdisk — skipping");
+	}
+
 	// 4. Post-Spawn Endpoint Injection — short-lived lock.
 	//    All actors are in the ready queue but interrupts are disabled,
 	//    so none of them can execute yet.
@@ -442,6 +457,14 @@ unsafe extern "C" fn _start() -> ! {
 				klog::info!("[wasm] KBD caps: {}", kbd.caps.summary());
 			}
 		}
+
+		// Mouse: Slot 3 = EP→UI
+		if let Some(mpid) = mouse_pid {
+			if let Some(mouse) = sched.get_process_mut(mpid) {
+				mouse.caps.insert_at(3, ObjectKind::Endpoint { target_actor_id: ui_pid }, perms::WRITE);
+				klog::info!("[wasm] MOUSE caps: {}", mouse.caps.summary());
+			}
+		}
 	}
 
 	klog::info!("[wasm] All actors spawned and wired:");
@@ -450,6 +473,9 @@ unsafe extern "C" fn _start() -> ! {
 	klog::info!("[wasm]   Shell(PID {}) — EP→VFS + EP→UI + WindowMem", shell_pid);
 	if let Some(kpid) = kbd_pid {
 		klog::info!("[wasm]   KBD  (PID {}) — IRQ1 + IO(0x60) + EP→Shell", kpid);
+	}
+	if let Some(mpid) = mouse_pid {
+		klog::info!("[wasm]   MOUSE(PID {}) — IRQ12 + IO(0x60) + EP→UI", mpid);
 	}
 
 	// Release the AP gate — APs can now enter the scheduler and

@@ -256,6 +256,10 @@ static mut WIN_COUNT: usize = 0;
 static mut CURSOR_X: usize = 8;
 static mut CURSOR_Y: usize = 8;
 
+// ── Mouse pointer state ─────────────────────────────────────────
+static mut MOUSE_X: i32 = 640;
+static mut MOUSE_Y: i32 = 400;
+
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() {
     log!("UI Server Actor started.");
@@ -327,6 +331,23 @@ pub extern "C" fn _start() {
                     blit_compositor();
                 }
             }
+        } else if msg.label == sdk::MOUSE_EVENT {
+            // Unpack delta-X and delta-Y as signed i32.
+            let dx = msg.data[0] as i32;
+            let dy = msg.data[1] as i32;
+
+            unsafe {
+                MOUSE_X += dx;
+                MOUSE_Y += dy;
+
+                // Clamp to screen bounds (leave room for the 5×5 cursor).
+                if MOUSE_X < 0 { MOUSE_X = 0; }
+                if MOUSE_X > (FB_WIDTH as i32 - 5) { MOUSE_X = FB_WIDTH as i32 - 5; }
+                if MOUSE_Y < 0 { MOUSE_Y = 0; }
+                if MOUSE_Y > (FB_HEIGHT as i32 - 5) { MOUSE_Y = FB_HEIGHT as i32 - 5; }
+
+                blit_compositor();
+            }
         } else {
             log!("UI: unknown message label {}", msg.label);
         }
@@ -372,5 +393,29 @@ unsafe fn blit_compositor() {
             }
         }
     }
+
+    // ── Draw mouse cursor: 5×5 bright-green square ──────────────
+    let mx = MOUSE_X as usize;
+    let my = MOUSE_Y as usize;
+    // Green in BGRA: B=0x00, G=0xFF, R=0x00, A=0xFF
+    let green_row: [u8; 20] = [
+        0x00, 0xFF, 0x00, 0xFF,
+        0x00, 0xFF, 0x00, 0xFF,
+        0x00, 0xFF, 0x00, 0xFF,
+        0x00, 0xFF, 0x00, 0xFF,
+        0x00, 0xFF, 0x00, 0xFF,
+    ];
+    for row in 0..5usize {
+        let py = my + row;
+        if py >= FB_HEIGHT { break; }
+        let fb_off = ((py * FB_WIDTH + mx) * FB_BPP) as i32;
+        sdk::sys_cap_mem_write(
+            FB_CAP,
+            fb_off,
+            green_row.as_ptr() as i32,
+            20,
+        );
+    }
+
     log!("UI: Frame composited successfully.");
 }
