@@ -78,16 +78,16 @@
 ## 🚀 THE FRONTIER (Active Quests) 🚀
 ---
 
-## 🌪️ Rank VII: The Chaos Engine (True SMP) 🚧
+## 🌪️ Rank VII: The Chaos Engine (True SMP) ✅
 *Unleashing the full physical silicon.*
-- [ ] [042] **The Awakening:** Initialize the local APIC timer on all Application Processors (Cores 1-3).
-- [ ] [043] **The Maelstrom:** Command all APs to drop `hlt` and enter `do_schedule()` concurrently.
-- [ ] [044] **State Machine:** Implement the 2-state INIT/READY architecture in `ui_server.wasm` to survive SMP races.
+- [x] [042] **The Awakening:** Initialize the local APIC timer on all Application Processors (Cores 1-3).
+- [x] [043] **The Maelstrom:** Command all APs to drop `hlt` and enter `do_schedule()` concurrently.
+- [x] [044] **State Machine:** Implement the 2-state INIT/READY architecture in `ui_server.wasm` to survive SMP races.
 
-## 🎨 Rank VIII: The Compositor (UI & Rendering)
+## 🎨 Rank VIII: The Compositor (UI & Rendering) 🚧
 *Drawing the world from the sandbox.*
-- [ ] [045] **The Font:** `vfs.wasm` successfully reads `font.psf` and delegates memory to UI Server.
-- [ ] [046] **First Word:** The UI Server parses PSF glyphs and blits "MinimalOS" to the Framebuffer.
+- [x] [045] **The Font:** `vfs.wasm` successfully reads `font.psf` and delegates memory to UI Server.
+- [x] [046] **First Word:** The UI Server parses PSF glyphs and blits "MinimalOS" to the Framebuffer.
 - [ ] [047] **The Window:** UI Server implements a virtual window capability and delegates it to the Shell.
 - [ ] [048] **The Compositor:** UI Server merges overlapping Wasm memory buffers into the final Framebuffer natively.
 
