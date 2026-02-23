@@ -81,10 +81,36 @@ jobs:
           cp dist/minimalos.iso "dist/minimalos-${VERSION}-x86_64.iso"
           sha256sum dist/minimalos-${VERSION}-x86_64.iso > "dist/minimalos-${VERSION}-x86_64.iso.sha256"
 
+      - name: Prepare release body
+        id: release_body
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          SHA256=$(cat dist/minimalos-${VERSION}-x86_64.iso.sha256 | awk '{print $1}')
+          cat >> "$GITHUB_OUTPUT" <<EOF
+          body<<RELEASE_BODY
+          ## MinimalOS ${VERSION}
+
+          ### 📥 Download & Install
+
+          1. Download \`minimalos-${VERSION}-x86_64.iso\` from the assets below
+          2. Verify the checksum:
+             \`\`\`
+             sha256sum minimalos-${VERSION}-x86_64.iso
+             # Expected: ${SHA256}
+             \`\`\`
+          3. Boot from the ISO using QEMU, VirtualBox, or write to a USB drive
+
+          ---
+          RELEASE_BODY
+          EOF
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: true
           generate_release_notes: true
+          body: ${{ steps.release_body.outputs.body }}
+          append_body: true
           files: |
             dist/minimalos-*-x86_64.iso
             dist/minimalos-*-x86_64.iso.sha256
