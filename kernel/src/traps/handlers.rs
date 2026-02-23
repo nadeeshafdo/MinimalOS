@@ -99,59 +99,34 @@ pub extern "x86-interrupt" fn page_fault_handler(
 
 /// Keyboard interrupt handler (IRQ1 = vector 33).
 ///
-/// Reads the scancode from the PS/2 data port, feeds it through the
-/// `pc-keyboard` state machine, echoes the character to the console,
-/// and pushes it into the kernel input buffer for `sys_read`.
+/// Capability-driven: reads nothing.  Simply EOIs the APIC and
+/// wakes the Wasm actor registered in `IRQ_WAITERS[1]`.
+/// The actor itself reads the scancode via `sys_cap_io_read`.
 pub extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {
-	let status = khal::keyboard::read_status();
-	if status & 0x01 != 0 {
-		let scancode = khal::keyboard::read_scancode();
+	// EOI first so the IRQ can fire again immediately.
+	khal::apic::eoi();
 
-		// [074] Feed through the upgraded state machine.
-		if let Some(event) = khal::keyboard::handle_scancode_event(scancode) {
-			// [078] Push structured event into the EventBuffer.
-			let ch = match event.key {
-				khal::keyboard::KeyKind::Char(c) => c as u32,
-				khal::keyboard::KeyKind::Raw(_) => 0,
-			};
-			let press = event.state == khal::keyboard::KeyState::Pressed;
-			crate::task::events::push_key(press, scancode, ch);
-
-			// Echo printable chars to serial (display echo is a Wasm actor's job).
-			if press {
-				if let khal::keyboard::KeyKind::Char(c) = event.key {
-					if c == '\x08' {
-						khal::serial::write_str("\x08 \x08");
-					} else {
-						let mut utf8 = [0u8; 4];
-						let s = c.encode_utf8(&mut utf8);
-						khal::serial::write_str(s);
-					}
-				}
-			}
-		}
+	// Wake the actor blocked on IRQ 1.
+	use core::sync::atomic::Ordering;
+	let pid = crate::wasm::IRQ_WAITERS[1].swap(0, Ordering::AcqRel);
+	if pid != 0 {
+		crate::task::process::request_wake(pid);
 	}
-
-	// Send EOI via Local APIC (I/O APIC routes the interrupt).
-	khal::keyboard::send_eoi();
 }
 
 /// [075] Mouse interrupt handler (IRQ12 = vector 44).
 ///
-/// Reads the raw byte from the PS/2 data port, feeds it through the
-/// 3-byte packet decoder, and moves the software cursor.
+/// Capability-driven: reads nothing.  Simply EOIs the APIC and
+/// wakes the Wasm actor registered in `IRQ_WAITERS[12]`.
+/// The actor itself reads the data via `sys_cap_io_read`.
 pub extern "x86-interrupt" fn mouse_handler(_stack_frame: InterruptStackFrame) {
-	if khal::mouse::is_mouse_data() {
-		let byte = khal::mouse::read_data();
-		if let Some(packet) = khal::mouse::handle_byte(byte) {
-			// [078] Push mouse event into EventBuffer.
-			// Cursor rendering is now a Wasm actor's responsibility.
-			crate::task::events::push_mouse(
-				packet.dx, packet.dy, packet.buttons,
-				0, 0, // absolute position tracked by UI actor, not kernel
-			);
-		}
-	}
+	// EOI first so the IRQ can fire again immediately.
+	khal::apic::eoi();
 
-	khal::mouse::send_eoi();
+	// Wake the actor blocked on IRQ 12.
+	use core::sync::atomic::Ordering;
+	let pid = crate::wasm::IRQ_WAITERS[12].swap(0, Ordering::AcqRel);
+	if pid != 0 {
+		crate::task::process::request_wake(pid);
+	}
 }

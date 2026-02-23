@@ -16,7 +16,27 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use core::sync::atomic::{AtomicU64, Ordering};
 use tinywasm::{Extern, Imports, Module, ModuleInstance, Store};
+
+// ── IRQ → Actor Routing Table ───────────────────────────────────
+//
+// When a Wasm actor calls `sys_cap_irq_wait(irq_cap)`, the kernel
+// stores its PID in `IRQ_WAITERS[irq]` and blocks the process.
+// When the hardware IRQ fires, the handler reads the PID from
+// `IRQ_WAITERS[irq]`, atomically clears the slot, and calls
+// `request_wake(pid)` to unblock the actor.
+//
+// One waiter per IRQ line — sufficient for dedicated driver actors.
+
+/// Maximum number of IRQ lines (matches I/O APIC pin count).
+pub const MAX_IRQS: usize = 24;
+
+/// IRQ → blocked PID mapping.  0 = no waiter.
+pub static IRQ_WAITERS: [AtomicU64; MAX_IRQS] = {
+	const ZERO: AtomicU64 = AtomicU64::new(0);
+	[ZERO; MAX_IRQS]
+};
 
 // ── Boot-time RAMDisk storage ───────────────────────────────────
 //
@@ -283,6 +303,150 @@ fn build_imports(actor_pid: u64) -> Imports {
 		),
 	);
 
+	// env.sys_cap_irq_wait(cap_handle: i64) -> i64
+	//
+	// Blocks the calling actor until the IRQ associated with an
+	// IrqLine capability fires.  The handler EOIs the APIC and
+	// wakes the actor via request_wake().
+	let irq_pid = actor_pid;
+	let _ = imports.define(
+		"env",
+		"sys_cap_irq_wait",
+		Extern::typed_func(
+			move |_ctx: tinywasm::FuncContext<'_>, cap_handle: i64| -> tinywasm::Result<i64> {
+				// 1. Validate the cap is IrqLine and has READ permission.
+				let irq = {
+					let sched = crate::task::process::SCHEDULER.lock();
+					let cap = match find_process_cap(&sched, irq_pid, cap_handle as u64) {
+						Some(c) => c,
+						None => return Ok(-1),
+					};
+					if !cap.has_perms(crate::cap::perms::READ) {
+						return Ok(-1);
+					}
+					match &cap.object {
+						crate::cap::ObjectKind::IrqLine { irq } => *irq,
+						_ => return Ok(-1),
+					}
+				};
+				if irq as usize >= MAX_IRQS {
+					return Ok(-1);
+				}
+
+				// 2. Loop until a real IRQ fires.
+				//
+				// The IRQ handler atomically swaps IRQ_WAITERS[irq] to 0
+				// and calls request_wake(pid).  If do_schedule() returns
+				// without a real IRQ (spurious wake because this core had
+				// no other Ready tasks), IRQ_WAITERS[irq] still holds our
+				// PID — re-block and try again.
+				loop {
+					// Register as the waiter for this IRQ line.
+					IRQ_WAITERS[irq as usize].store(irq_pid, Ordering::Release);
+
+					// Block and yield.
+					{
+						let mut sched = crate::task::process::SCHEDULER.lock();
+						if let Some(current) = sched.current_mut() {
+							if current.pid == irq_pid {
+								current.state = crate::task::process::ProcessState::Blocked;
+							}
+						}
+					}
+					unsafe { crate::task::process::do_schedule() };
+
+					// Check if the IRQ handler consumed our registration.
+					// If IRQ_WAITERS[irq] == 0, the handler fired and swapped
+					// it to 0 — a real IRQ occurred, break out.
+					// If it still holds our PID, we were spuriously woken.
+					let waiter = IRQ_WAITERS[irq as usize].load(Ordering::Acquire);
+					if waiter != irq_pid {
+						// The handler cleared the slot — real IRQ.
+						break;
+					}
+					// Spurious wake — re-block.
+				}
+				Ok(0)
+			},
+		),
+	);
+
+	// env.sys_cap_io_read(cap_handle: i64, port_offset: i32, size: i32) -> i32
+	// NOTE: tinywasm LIFO bug: (i64, i32, i32) → (cap, size, port_offset)
+	let ior_pid = actor_pid;
+	let _ = imports.define(
+		"env",
+		"sys_cap_io_read",
+		Extern::typed_func(
+			move |_ctx: tinywasm::FuncContext<'_>, args: (i64, i32, i32)| -> tinywasm::Result<i32> {
+				let (cap_handle, size, port_offset) = args;
+				let port = {
+					let sched = crate::task::process::SCHEDULER.lock();
+					let cap = match find_process_cap(&sched, ior_pid, cap_handle as u64) {
+						Some(c) => c,
+						None => return Ok(-1),
+					};
+					if !cap.has_perms(crate::cap::perms::READ) {
+						return Ok(-1);
+					}
+					match &cap.object {
+						crate::cap::ObjectKind::IoPort { base, count } => {
+							let off = port_offset as u16;
+							if off >= *count {
+								return Ok(-1);
+							}
+							base + off
+						}
+						_ => return Ok(-1),
+					}
+				};
+				let val = match size {
+					1 => unsafe { khal::port::inb(port) as i32 },
+					_ => return Ok(-1), // only byte-width supported for now
+				};
+				Ok(val)
+			},
+		),
+	);
+
+	// env.sys_cap_io_write(cap_handle: i64, port_offset: i32, size: i32, value: i32) -> i32
+	// NOTE: tinywasm LIFO bug: (i64, i32, i32, i32) → (cap, value, size, port_offset)
+	let iow_pid = actor_pid;
+	let _ = imports.define(
+		"env",
+		"sys_cap_io_write",
+		Extern::typed_func(
+			move |_ctx: tinywasm::FuncContext<'_>, args: (i64, i32, i32, i32)| -> tinywasm::Result<i32> {
+				let (cap_handle, value, size, port_offset) = args;
+				let port = {
+					let sched = crate::task::process::SCHEDULER.lock();
+					let cap = match find_process_cap(&sched, iow_pid, cap_handle as u64) {
+						Some(c) => c,
+						None => return Ok(-1),
+					};
+					if !cap.has_perms(crate::cap::perms::WRITE) {
+						return Ok(-1);
+					}
+					match &cap.object {
+						crate::cap::ObjectKind::IoPort { base, count } => {
+							let off = port_offset as u16;
+							if off >= *count {
+								return Ok(-1);
+							}
+							base + off
+						}
+						_ => return Ok(-1),
+					}
+				};
+				match size {
+					1 => unsafe { khal::port::outb(port, value as u8) },
+					_ => return Ok(-1),
+				};
+				Ok(0)
+			},
+		),
+	);
+
 	imports
 }
 
@@ -302,6 +466,7 @@ fn find_process_cap<'a>(
 /// Read `len` bytes from a Memory capability at `offset`.
 ///
 /// Validates: cap exists, is Memory, has READ, offset+len in bounds.
+/// Uses `checked_add` to prevent integer overflow exploits.
 /// Returns the data as a Vec, or None on error.
 fn internal_cap_mem_read(actor_pid: u64, cap_handle: u64, offset: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
 	let sched = crate::task::process::SCHEDULER.lock();
@@ -326,8 +491,15 @@ fn internal_cap_mem_read(actor_pid: u64, cap_handle: u64, offset: u64, len: usiz
 		}
 	};
 
-	let cap_size = pages * 4096;
-	if offset as usize + len > cap_size {
+	let cap_size = (pages as u64) * 4096;
+	let end_offset = match offset.checked_add(len as u64) {
+		Some(val) => val,
+		None => {
+			klog::warn!("[blit] cap_mem_read: integer overflow in bounds check");
+			return None;
+		}
+	};
+	if end_offset > cap_size {
 		klog::warn!("[blit] cap_mem_read: offset+len exceeds cap bounds");
 		return None;
 	}
@@ -344,6 +516,7 @@ fn internal_cap_mem_read(actor_pid: u64, cap_handle: u64, offset: u64, len: usiz
 /// Write `data` to a Memory capability at `offset`.
 ///
 /// Validates: cap exists, is Memory, has WRITE, offset+len in bounds.
+/// Uses `checked_add` to prevent integer overflow exploits.
 fn internal_cap_mem_write(actor_pid: u64, cap_handle: u64, offset: u64, data: &[u8]) -> bool {
 	let sched = crate::task::process::SCHEDULER.lock();
 	let cap = match find_process_cap(&sched, actor_pid, cap_handle) {
@@ -364,8 +537,15 @@ fn internal_cap_mem_write(actor_pid: u64, cap_handle: u64, offset: u64, data: &[
 		}
 	};
 
-	let cap_size = pages * 4096;
-	if offset as usize + data.len() > cap_size {
+	let cap_size = (pages as u64) * 4096;
+	let end_offset = match offset.checked_add(data.len() as u64) {
+		Some(val) => val,
+		None => {
+			klog::warn!("[blit] cap_mem_write: integer overflow in bounds check");
+			return false;
+		}
+	};
+	if end_offset > cap_size {
 		klog::warn!("[blit] cap_mem_write: offset+len exceeds cap bounds");
 		return false;
 	}

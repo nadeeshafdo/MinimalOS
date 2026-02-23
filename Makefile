@@ -19,7 +19,7 @@ RAMDISK := $(DISTDIR)/ramdisk.tar
 LIMINE_DIR := limine
 LIMINE_BRANCH := v8.x-binary
 
-.PHONY: all kernel clean iso qemu qemu-bios qemu-uefi run limine help distclean ramdisk actor-vfs actor-ui-server actor-shell
+.PHONY: all kernel clean iso qemu qemu-bios qemu-uefi run limine help distclean ramdisk actor-vfs actor-ui-server actor-shell actor-chaos actor-ps2-keyboard
 
 # Default target
 all: kernel
@@ -43,8 +43,18 @@ actor-shell:
 	@mkdir -p ramdisk
 	cp target/wasm32-unknown-unknown/release/wasm_shell.wasm ramdisk/shell.wasm
 
+actor-chaos:
+	RUSTFLAGS="-C link-arg=--no-entry" cargo build --manifest-path actors/chaos/Cargo.toml --target wasm32-unknown-unknown --release
+	@mkdir -p ramdisk
+	cp target/wasm32-unknown-unknown/release/chaos.wasm ramdisk/chaos.wasm
+
+actor-ps2-keyboard:
+	RUSTFLAGS="-C link-arg=--no-entry" cargo build --manifest-path actors/ps2_keyboard/Cargo.toml --target wasm32-unknown-unknown --release
+	@mkdir -p ramdisk
+	cp target/wasm32-unknown-unknown/release/ps2_keyboard.wasm ramdisk/ps2_keyboard.wasm
+
 # Build ramdisk tar archive from ramdisk/ directory
-ramdisk: actor-vfs actor-ui-server actor-shell
+ramdisk: actor-vfs actor-ui-server actor-shell actor-chaos actor-ps2-keyboard
 	@mkdir -p $(DISTDIR)
 	cp assets/font.psf ramdisk/font.psf
 	tar cf $(RAMDISK) -C ramdisk .

@@ -84,18 +84,18 @@
 - [x] [043] **The Maelstrom:** Command all APs to drop `hlt` and enter `do_schedule()` concurrently.
 - [x] [044] **State Machine:** Implement the 2-state INIT/READY architecture in `ui_server.wasm` to survive SMP races.
 
-## 🎨 Rank VIII: The Compositor (UI & Rendering) 🚧
+## 🎨 Rank VIII: The Compositor (UI & Rendering) ✅
 *Drawing the world from the sandbox.*
 - [x] [045] **The Font:** `vfs.wasm` successfully reads `font.psf` and delegates memory to UI Server.
 - [x] [046] **First Word:** The UI Server parses PSF glyphs and blits "MinimalOS" to the Framebuffer.
-- [ ] [047] **The Window:** UI Server implements a virtual window capability and delegates it to the Shell.
-- [ ] [048] **The Compositor:** UI Server merges overlapping Wasm memory buffers into the final Framebuffer natively.
+- [x] [047] **The Window:** UI Server implements a virtual window capability and delegates it to the Shell.
+- [x] [048] **The Compositor:** UI Server merges overlapping Wasm memory buffers into the final Framebuffer natively.
 
-## 📡 Rank IX: The Senses (Input Routing)
+## 📡 Rank IX: The Senses (Input Routing) 🚧
 *Talking to the real world using hardware capabilities.*
-- [ ] [049] **The IRQ Token:** Implement `SYS_CAP_IRQ_WAIT` allowing actors to block on hardware interrupts.
-- [ ] [050] **The Typist:** Write `ps2_keyboard.wasm`. Grant it `ObjectKind::IrqLine { 1 }` and `ObjectKind::IoPort { 0x60 }`.
-- [ ] [051] **The Terminal:** Route keyboard IPC events from the Typist actor to the Shell actor.
+- [x] [049] **The IRQ Token:** Implement `SYS_CAP_IRQ_WAIT` allowing actors to block on hardware interrupts.
+- [x] [050] **The Typist:** Write `ps2_keyboard.wasm`. Grant it `ObjectKind::IrqLine { 1 }` and `ObjectKind::IoPort { 0x60 }`.
+- [x] [051] **The Terminal:** Route keyboard IPC events from the Typist actor to the Shell actor.
 - [ ] [052] **The Pointer:** Write `ps2_mouse.wasm`. Route IRQ 12. Send coordinates to the UI Server to draw a cursor.
 
 ## ⚡ Rank X: Speed of Light (AOT/JIT Compilation)

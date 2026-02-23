@@ -118,6 +118,90 @@ pub extern "C" fn _start() {
         log!("Shell: UI_DRAW_REQ sent successfully.");
     }
 
-    log!("Shell: capability IPC test complete.");
-    unsafe { sdk::sys_exit(0); }
+    // ── Paint a graphical window into the Window Memory cap ─────
+    log!("Shell: Painting native window buffer...");
+    const WIN_W: usize = 400;
+    const WIN_H: usize = 300;
+    const WIN_CAP: i64 = 3; // Window Memory capability (slot 3)
+
+    let mut row_buf = [0u8; WIN_W * 4];
+    for y in 0..WIN_H {
+        for x in 0..WIN_W {
+            let offset = x * 4;
+            if x < 5 || y < 5 || x >= WIN_W - 5 || y >= WIN_H - 5 {
+                // Red border (BGRA)
+                row_buf[offset]     = 0x00; // B
+                row_buf[offset + 1] = 0x00; // G
+                row_buf[offset + 2] = 0xFF; // R
+                row_buf[offset + 3] = 0xFF; // A
+            } else {
+                // Blue interior (BGRA)
+                row_buf[offset]     = 0xFF; // B
+                row_buf[offset + 1] = 0x00; // G
+                row_buf[offset + 2] = 0x00; // R
+                row_buf[offset + 3] = 0xFF; // A
+            }
+        }
+        unsafe {
+            sdk::sys_cap_mem_write(
+                WIN_CAP,
+                (y * WIN_W * 4) as i32,
+                row_buf.as_ptr() as i32,
+                row_buf.len() as i32,
+            );
+        }
+    }
+    log!("Shell: Window painted ({}x{}, {} bytes)", WIN_W, WIN_H, WIN_W * WIN_H * 4);
+
+    // ── Delegate Window Capability to UI Server ────────────────
+    log!("Shell: Delegating Window Capability to UI Server...");
+    let win_req = Message {
+        label: sdk::UI_CREATE_WINDOW,
+        data: [WIN_W as u64, WIN_H as u64, 0],
+        cap_grant: 3,  // Pass the window capability (slot 3)
+        cap_perms: 1,  // Narrow to READ-only for the compositor
+        _pad: 0,
+    };
+    let send_result = unsafe { sdk::sys_cap_send(EP_UI, &win_req as *const Message as i32) };
+    if send_result != 0 {
+        log!("Shell: ERROR — UI_CREATE_WINDOW failed ({})", send_result as i64);
+    } else {
+        log!("Shell: Window delegated successfully.");
+    }
+
+    log!("Shell: GUI delegation complete. Entering terminal loop...");
+
+    // ── Persistent terminal loop — receive keys, echo to screen ──
+    //
+    // Scancode Set 1 → ASCII map (printable subset).
+    // Index = scancode, value = ASCII char ('?' = unmapped).
+    let qwerty: &[u8] = b"??1234567890-=\x08\tqwertyuiop[]\n?asdfghjkl;'`?\\zxcvbnm,./?*? ?";
+
+    loop {
+        let mut msg = Message::empty();
+        unsafe { sdk::sys_cap_recv(&mut msg as *mut Message as i32); }
+
+        if msg.label == sdk::KEY_EVENT {
+            let scancode = msg.data[0] as usize;
+
+            if scancode < qwerty.len() {
+                let ascii = qwerty[scancode];
+                if ascii != b'?' {
+                    log!("Shell: key '{}' (sc=0x{:02X})", ascii as char, scancode);
+
+                    // Pack the single character into a UI_DRAW_REQ.
+                    let text = [ascii, 0, 0, 0, 0, 0, 0, 0];
+                    let d0 = u64::from_le_bytes(text);
+                    let draw_msg = Message {
+                        label: sdk::UI_DRAW_REQ,
+                        data: [d0, 0, 0],
+                        cap_grant: 0,
+                        cap_perms: 0,
+                        _pad: 0,
+                    };
+                    unsafe { sdk::sys_cap_send(EP_UI, &draw_msg as *const Message as i32); }
+                }
+            }
+        }
+    }
 }

@@ -13,7 +13,6 @@
 //!   global heap — memory is genuinely recycled.
 
 use core::alloc::{GlobalAlloc, Layout};
-use core::cell::RefCell;
 use core::ptr;
 
 use linked_list_allocator::Heap;
@@ -42,26 +41,27 @@ const ARENA_MAX_ALLOC: usize = 4096;
 // ── Per-Core Arena ──────────────────────────────────────────────
 
 /// A per-core heap backed by `linked_list_allocator::Heap`.
-/// Uses `RefCell` — safe because each core only accesses its own arena
-/// with interrupts disabled during allocation.
+/// Uses `spin::Mutex` — required because the deallocation path can
+/// route cross-core (core Y freeing a pointer from core X's arena).
 struct LocalHeap {
-	inner: RefCell<Heap>,
+	inner: spin::Mutex<Heap>,
 	/// Virtual base of this arena (for containment checks).
 	base: u64,
 	/// Virtual end of this arena.
 	end: u64,
 }
 
-// Safety: each core only accesses its own LocalHeap.  The global
-// allocator routes by `smp::core_id()`.  Context switches never
-// happen inside the allocator because interrupt handlers don't
-// allocate, and the scheduler is not invoked mid-alloc.
+// Safety: each LocalHeap is protected by a spin::Mutex.
+// Cross-core access is safe because:
+//   1. Interrupts are disabled by the caller (SmpAllocator)
+//   2. The Mutex prevents concurrent access to the same arena
+//   3. Contention is rare (most allocs/deallocs hit the local core)
 unsafe impl Sync for LocalHeap {}
 
 impl LocalHeap {
 	const fn empty() -> Self {
 		Self {
-			inner: RefCell::new(Heap::empty()),
+			inner: spin::Mutex::new(Heap::empty()),
 			base: 0,
 			end: 0,
 		}
@@ -69,7 +69,7 @@ impl LocalHeap {
 
 	fn alloc(&self, layout: Layout) -> *mut u8 {
 		self.inner
-			.borrow_mut()
+			.lock()
 			.allocate_first_fit(layout)
 			.ok()
 			.map_or(ptr::null_mut(), |ptr| ptr.as_ptr())
@@ -78,7 +78,7 @@ impl LocalHeap {
 	unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
 		unsafe {
 			self.inner
-				.borrow_mut()
+				.lock()
 				.deallocate(core::ptr::NonNull::new_unchecked(ptr), layout);
 		}
 	}
@@ -320,7 +320,7 @@ pub unsafe fn init_arenas() {
 		// Initialise the per-core linked-list heap.
 		unsafe {
 			let arena = &CORE_ARENAS[core_id] as *const LocalHeap as *mut LocalHeap;
-			(*arena).inner.borrow_mut().init(arena_virt as *mut u8, ARENA_SIZE);
+			(*arena).inner.lock().init(arena_virt as *mut u8, ARENA_SIZE);
 			(*arena).base = arena_virt;
 			(*arena).end = arena_virt + ARENA_SIZE as u64;
 		}

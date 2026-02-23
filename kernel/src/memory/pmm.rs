@@ -284,6 +284,49 @@ pub fn free_frame(phys_addr: u64) {
 	free_to_global(phys_addr);
 }
 
+/// Allocate `count` physically contiguous 4 KiB frames.
+///
+/// Scans the global bitmap (bypassing per-core caches) for a run of
+/// `count` consecutive free frames.  Returns the physical address of the
+/// first frame, or `None` if insufficient contiguous space exists.
+pub fn alloc_contiguous(count: usize) -> Option<u64> {
+	if count == 0 { return None; }
+	let mut guard = PMM.lock();
+	let alloc = guard.as_mut()?;
+
+	if count == 1 {
+		return alloc_from_bitmap(alloc);
+	}
+
+	let mut run_start: usize = 0;
+	let mut run_len: usize = 0;
+
+	for frame in 0..alloc.total_frames {
+		let byte_idx = frame / 8;
+		let bit_idx = frame % 8;
+		let used = unsafe { *alloc.bitmap.add(byte_idx) } & (1u8 << bit_idx) != 0;
+
+		if used {
+			run_start = frame + 1;
+			run_len = 0;
+		} else {
+			run_len += 1;
+			if run_len == count {
+				// Mark all frames in the run as used.
+				for f in run_start..run_start + count {
+					let bi = f / 8;
+					let bt = f % 8;
+					unsafe { *alloc.bitmap.add(bi) |= 1u8 << bt; }
+				}
+				alloc.free_frames -= count;
+				alloc.search_hint = (run_start + count) / 8;
+				return Some(run_start as u64 * FRAME_SIZE);
+			}
+		}
+	}
+	None
+}
+
 /// Return the current number of free frames (approximate — excludes
 /// frames held in per-core caches).
 pub fn free_frame_count() -> usize {

@@ -235,6 +235,23 @@ fn unpack_text(data: &[u64; 3]) -> [u8; 24] {
     buf
 }
 
+// ── Window Compositor State ──────────────────────────────────────
+
+/// A registered zero-copy window backed by a shared Memory capability.
+struct Window {
+    /// Capability handle for the window's pixel buffer (READ).
+    cap: u64,
+    /// Window dimensions in pixels.
+    w: usize,
+    h: usize,
+    /// Position on the framebuffer.
+    x: usize,
+    y: usize,
+}
+
+static mut WINDOWS: [Option<Window>; 4] = [None, None, None, None];
+static mut WIN_COUNT: usize = 0;
+
 // ── Cursor state (persistent across draw requests) ──────────────
 static mut CURSOR_X: usize = 8;
 static mut CURSOR_Y: usize = 8;
@@ -264,31 +281,90 @@ pub extern "C" fn _start() {
             continue;
         }
 
-        match msg.label {
-            sdk::UI_DRAW_REQ => {
-                let text = unpack_text(&msg.data);
-                // Find text length (null-terminated).
-                let len = text.iter().position(|&b| b == 0).unwrap_or(24);
-                if len > 0 {
-                    if let Ok(s) = core::str::from_utf8(&text[..len]) {
-                        log!("UI: Rendering text -> '{}'", s);
-                    }
-                    let cx = unsafe { CURSOR_X };
-                    let cy = unsafe { CURSOR_Y };
-                    draw_text(&font, &text[..len], cx, cy);
+        if msg.label == sdk::UI_DRAW_REQ {
+            let text = unpack_text(&msg.data);
+            // Find text length (null-terminated).
+            let len = text.iter().position(|&b| b == 0).unwrap_or(24);
+            if len > 0 {
+                if let Ok(s) = core::str::from_utf8(&text[..len]) {
+                    log!("UI: Rendering text -> '{}'", s);
+                }
+                let cx = unsafe { CURSOR_X };
+                let cy = unsafe { CURSOR_Y };
+                draw_text(&font, &text[..len], cx, cy);
 
-                    // Advance cursor Y by one line.
-                    unsafe {
-                        CURSOR_Y += font.height as usize;
-                        if CURSOR_Y + font.height as usize > FB_HEIGHT {
-                            CURSOR_Y = 8; // wrap
-                        }
+                // Advance cursor Y by one line.
+                unsafe {
+                    CURSOR_Y += font.height as usize;
+                    if CURSOR_Y + font.height as usize > FB_HEIGHT {
+                        CURSOR_Y = 8; // wrap
                     }
                 }
             }
-            other => {
-                log!("UI: unknown message label {}", other);
+        } else if msg.label == sdk::UI_CREATE_WINDOW {
+            let w = msg.data[0] as usize;
+            let h = msg.data[1] as usize;
+            let granted_cap = msg.cap_grant;
+
+            log!("UI: Received Window ({}x{}) on cap {}", w, h, granted_cap);
+
+            unsafe {
+                if WIN_COUNT < 4 {
+                    WINDOWS[WIN_COUNT] = Some(Window {
+                        cap: granted_cap,
+                        w,
+                        h,
+                        x: 150 + (WIN_COUNT * 50),
+                        y: 150 + (WIN_COUNT * 50),
+                    });
+                    WIN_COUNT += 1;
+                    blit_compositor();
+                }
+            }
+        } else {
+            log!("UI: unknown message label {}", msg.label);
+        }
+    }
+}
+
+/// Composite all registered windows onto the hardware framebuffer.
+///
+/// For each window, reads pixel rows from the window's Memory capability
+/// (zero-copy shared buffer) and writes them to the framebuffer capability.
+unsafe fn blit_compositor() {
+    log!("UI: Compositing frame ({} window(s))...", WIN_COUNT);
+
+    for i in 0..WIN_COUNT {
+        if let Some(win) = &WINDOWS[i] {
+            // Row buffer: max 400 pixels × 4 bytes = 1600 bytes
+            let mut row_buf = [0u8; 1600];
+            let row_bytes = win.w * FB_BPP;
+
+            for y in 0..win.h {
+                let fb_y = win.y + y;
+                if fb_y >= FB_HEIGHT {
+                    break;
+                }
+
+                // 1. Read one row from the Shell's Window capability
+                let win_offset = (y * row_bytes) as i32;
+                sdk::sys_cap_mem_read(
+                    win.cap as i64,
+                    win_offset,
+                    row_buf.as_mut_ptr() as i32,
+                    row_bytes as i32,
+                );
+
+                // 2. Write the row to the hardware Framebuffer capability
+                let fb_offset = ((fb_y * FB_WIDTH + win.x) * FB_BPP) as i32;
+                sdk::sys_cap_mem_write(
+                    FB_CAP,
+                    fb_offset,
+                    row_buf.as_ptr() as i32,
+                    row_bytes as i32,
+                );
             }
         }
     }
+    log!("UI: Frame composited successfully.");
 }

@@ -8,6 +8,12 @@ pub const VFS_READ_REQ: u64 = 1;
 pub const VFS_READ_REPLY: u64 = 2;
 /// Shell → UI: "draw these bytes" (reserved for Phase 10)
 pub const UI_DRAW_REQ: u64 = 3;
+/// Shell → UI: "here is my window" (cap_grant = Window Memory, data[0]=w, data[1]=h)
+pub const UI_CREATE_WINDOW: u64 = 4;
+/// Keyboard → Shell: "key event" (data[0]=scancode)
+pub const KEY_EVENT: u64 = 5;
+/// Mouse → UI: "mouse event" (data[0]=dx|dy, data[1]=buttons)
+pub const MOUSE_EVENT: u64 = 6;
 
 // ── IPC Message ─────────────────────────────────────────────────
 
@@ -50,6 +56,12 @@ extern "C" {
     pub fn sys_cap_recv(buf: i32) -> i64;
     pub fn sys_cap_mem_read(cap: i64, off: i32, dst: i32, len: i32) -> i64;
     pub fn sys_cap_mem_write(cap: i64, off: i32, src: i32, len: i32) -> i64;
+    /// Block until the IRQ associated with the IrqLine cap fires.
+    pub fn sys_cap_irq_wait(cap: i64) -> i64;
+    /// Read a byte from an IoPort capability (port_offset within range, size=1).
+    pub fn sys_cap_io_read(cap: i64, port_offset: i32, size: i32) -> i32;
+    /// Write a byte to an IoPort capability (port_offset within range, size=1, value).
+    pub fn sys_cap_io_write(cap: i64, port_offset: i32, size: i32, value: i32) -> i32;
 }
 
 // ── Buffered Logger ─────────────────────────────────────────────

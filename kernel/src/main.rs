@@ -364,11 +364,48 @@ unsafe extern "C" fn _start() -> ! {
 		}
 	}).expect("FATAL: failed to spawn ui_server.wasm");
 
+	// Allocate a contiguous 480 KiB region (120 frames) for the Shell's window buffer.
+	let win_pages = 120usize;
+	let win_phys = memory::pmm::alloc_contiguous(win_pages)
+		.expect("FATAL: could not allocate contiguous window buffer");
+	klog::info!("[wasm] Window buffer: {} frames at phys {:#x}", win_pages, win_phys);
+
 	// 3. Spawn Shell actor — caps are injected below.
 	klog::info!("[wasm] Spawning shell.wasm...");
 	let shell_pid = wasm::spawn_wasm("shell.wasm", |_caps| {
-		// Endpoints will be injected in the post-spawn wiring step.
+		// Endpoints + Window Memory will be injected in the post-spawn wiring step.
 	}).expect("FATAL: failed to spawn shell.wasm");
+
+	// 4. Spawn Chaos actor — adversarial stress test.
+	//    Gets minimal caps: EP→VFS (slot 1, WRITE) and a tiny 1-page
+	//    Memory cap (slot 2, READ|WRITE) for OOB exploit testing.
+	let chaos_mem_phys = memory::pmm::alloc_frame()
+		.expect("FATAL: could not allocate chaos test frame");
+	klog::info!("[wasm] Spawning chaos.wasm...");
+	let chaos_pid = wasm::spawn_wasm("chaos.wasm", |caps| {
+		caps.insert_at(1, ObjectKind::Endpoint { target_actor_id: vfs_pid }, perms::WRITE);
+		caps.insert_at(2, ObjectKind::Memory { phys: chaos_mem_phys, pages: 1 }, perms::READ | perms::WRITE);
+	});
+	if let Some(cpid) = chaos_pid {
+		klog::info!("[wasm] Chaos (PID {}) — EP→VFS + Mem(1pg)", cpid);
+	} else {
+		klog::warn!("[wasm] chaos.wasm not found in ramdisk — skipping");
+	}
+
+	// 5. Spawn PS/2 Keyboard driver actor — gets hardware caps.
+	klog::info!("[wasm] Spawning ps2_keyboard.wasm...");
+	let kbd_pid = wasm::spawn_wasm("ps2_keyboard.wasm", |caps| {
+		// Slot 1: IRQ 1 (keyboard interrupt line)
+		caps.insert_at(1, ObjectKind::IrqLine { irq: 1 }, perms::READ);
+		// Slot 2: I/O Ports 0x60–0x64 (PS/2 data + status/command)
+		caps.insert_at(2, ObjectKind::IoPort { base: 0x60, count: 5 }, perms::READ | perms::WRITE);
+		klog::info!("[wasm] KBD: IrqLine(1) + IoPort(0x60..0x64)");
+	});
+	if let Some(kpid) = kbd_pid {
+		klog::info!("[wasm] KBD (PID {}) — IRQ1 + IO(0x60) + EP→Shell", kpid);
+	} else {
+		klog::warn!("[wasm] ps2_keyboard.wasm not found in ramdisk — skipping");
+	}
 
 	// 4. Post-Spawn Endpoint Injection — short-lived lock.
 	//    All actors are in the ready queue but interrupts are disabled,
@@ -376,10 +413,11 @@ unsafe extern "C" fn _start() -> ! {
 	{
 		let mut sched = task::process::SCHEDULER.lock();
 
-		// Shell: Slot 1 = EP→VFS, Slot 2 = EP→UI
+		// Shell: Slot 1 = EP→VFS, Slot 2 = EP→UI, Slot 3 = Window Memory
 		if let Some(shell) = sched.get_process_mut(shell_pid) {
 			shell.caps.insert_at(1, ObjectKind::Endpoint { target_actor_id: vfs_pid }, perms::WRITE);
 			shell.caps.insert_at(2, ObjectKind::Endpoint { target_actor_id: ui_pid }, perms::WRITE);
+			shell.caps.insert_at(3, ObjectKind::Memory { phys: win_phys, pages: win_pages }, perms::READ | perms::WRITE | perms::GRANT);
 			klog::info!("[wasm] Shell caps: {}", shell.caps.summary());
 		}
 
@@ -396,12 +434,23 @@ unsafe extern "C" fn _start() -> ! {
 			ui.caps.insert_at(3, ObjectKind::Endpoint { target_actor_id: shell_pid }, perms::WRITE);
 			klog::info!("[wasm] UI caps: {}", ui.caps.summary());
 		}
+
+		// Keyboard: Slot 3 = EP→Shell
+		if let Some(kpid) = kbd_pid {
+			if let Some(kbd) = sched.get_process_mut(kpid) {
+				kbd.caps.insert_at(3, ObjectKind::Endpoint { target_actor_id: shell_pid }, perms::WRITE);
+				klog::info!("[wasm] KBD caps: {}", kbd.caps.summary());
+			}
+		}
 	}
 
 	klog::info!("[wasm] All actors spawned and wired:");
 	klog::info!("[wasm]   VFS  (PID {}) — RAMDisk + EP→Shell + EP→UI", vfs_pid);
 	klog::info!("[wasm]   UI   (PID {}) — EP→VFS + Framebuffer + EP→Shell", ui_pid);
-	klog::info!("[wasm]   Shell(PID {}) — EP→VFS + EP→UI", shell_pid);
+	klog::info!("[wasm]   Shell(PID {}) — EP→VFS + EP→UI + WindowMem", shell_pid);
+	if let Some(kpid) = kbd_pid {
+		klog::info!("[wasm]   KBD  (PID {}) — IRQ1 + IO(0x60) + EP→Shell", kpid);
+	}
 
 	// Release the AP gate — APs can now enter the scheduler and
 	// pick up fully-wired actors from the ready queue.
