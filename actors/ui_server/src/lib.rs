@@ -270,6 +270,9 @@ pub extern "C" fn _start() {
                 // Find text length (null-terminated).
                 let len = text.iter().position(|&b| b == 0).unwrap_or(24);
                 if len > 0 {
+                    if let Ok(s) = core::str::from_utf8(&text[..len]) {
+                        log!("UI: Rendering text -> '{}'", s);
+                    }
                     let cx = unsafe { CURSOR_X };
                     let cy = unsafe { CURSOR_Y };
                     draw_text(&font, &text[..len], cx, cy);
