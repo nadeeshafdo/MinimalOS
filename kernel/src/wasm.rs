@@ -603,7 +603,9 @@ pub fn internal_cap_send(endpoint_handle: u64, mut msg: crate::ipc::Message) -> 
 	let mut target_woken = false;
 	let found;
 	if let Some(target) = sched.get_process_mut(target_actor_id) {
-		if target.ipc_queue.is_full() { return u64::MAX; }
+		// Return a distinct "queue full" error so the sender knows
+		// the message was dropped (not a cap/perm failure).
+		if target.ipc_queue.is_full() { return u64::MAX - 1; }
 
 		if let Some((obj, perms)) = cap_transfer {
 			match target.caps.insert(obj, perms) {

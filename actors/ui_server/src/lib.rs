@@ -302,9 +302,15 @@ pub extern "C" fn _start() {
                 }
             }
         } else if msg.label == sdk::UI_CREATE_WINDOW {
-            let w = msg.data[0] as usize;
-            let h = msg.data[1] as usize;
+            let mut w = msg.data[0] as usize;
+            let mut h = msg.data[1] as usize;
             let granted_cap = msg.cap_grant;
+
+            // SECURITY CLAMP: reject windows larger than the physical screen.
+            // A malicious actor sending huge dimensions would cause the
+            // compositor's nested blit loop to starve this core.
+            if w > FB_WIDTH  { w = FB_WIDTH; }
+            if h > FB_HEIGHT { h = FB_HEIGHT; }
 
             log!("UI: Received Window ({}x{}) on cap {}", w, h, granted_cap);
 

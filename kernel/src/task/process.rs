@@ -422,11 +422,17 @@ impl Scheduler {
 
 /// Pending wake requests from IRQ context.
 /// Each slot holds a PID to wake (0 = empty).
-static PENDING_WAKES: [AtomicU64; 8] = [
-	AtomicU64::new(0), AtomicU64::new(0),
-	AtomicU64::new(0), AtomicU64::new(0),
-	AtomicU64::new(0), AtomicU64::new(0),
-	AtomicU64::new(0), AtomicU64::new(0),
+///
+/// 32 slots gives ample headroom for IRQ bursts across 4 cores.
+static PENDING_WAKES: [AtomicU64; 32] = [
+	AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+	AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+	AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+	AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+	AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+	AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+	AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+	AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
 ];
 
 /// Request that a blocked process be woken on the next schedule() call.
@@ -438,7 +444,8 @@ pub fn request_wake(pid: u64) {
 			return;
 		}
 	}
-	// All slots full — best-effort; shouldn't happen with few processes.
+	// All 32 slots full — this should never happen.  Log so we know.
+	klog::error!("PENDING_WAKES overflow! PID {} wake lost.", pid);
 }
 
 /// Drain pending wake requests.  Called while holding the scheduler lock.
