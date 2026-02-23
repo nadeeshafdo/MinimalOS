@@ -14,6 +14,7 @@
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use linked_list_allocator::Heap;
 use spin::Mutex;
@@ -99,7 +100,7 @@ static CORE_ARENAS: [LocalHeap; smp::MAX_CORES] = [
 ];
 
 /// Whether per-core arenas are active.
-static mut ARENAS_ACTIVE: bool = false;
+static ARENAS_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 // ── Global Heap ─────────────────────────────────────────────────
 
@@ -134,7 +135,7 @@ unsafe impl GlobalAlloc for SmpAllocator {
 		let flags = save_and_disable_interrupts();
 
 		// ── Fast path: per-core arena ──
-		if unsafe { ARENAS_ACTIVE } && layout.size() <= ARENA_MAX_ALLOC {
+		if ARENAS_ACTIVE.load(Ordering::Acquire) && layout.size() <= ARENA_MAX_ALLOC {
 			let core = smp::core_id() as usize;
 			if core < smp::MAX_CORES {
 				let ptr = CORE_ARENAS[core].alloc(layout);
@@ -196,7 +197,7 @@ unsafe impl GlobalAlloc for SmpAllocator {
 
 		// Route deallocation to the correct arena if the pointer belongs
 		// to one — this is what makes memory actually recyclable.
-		if unsafe { ARENAS_ACTIVE } {
+		if ARENAS_ACTIVE.load(Ordering::Acquire) {
 			for i in 0..smp::MAX_CORES {
 				if CORE_ARENAS[i].contains(ptr) {
 					unsafe { CORE_ARENAS[i].dealloc(ptr, layout) };
@@ -228,7 +229,7 @@ fn save_and_disable_interrupts() -> u64 {
 		core::arch::asm!(
 			"pushfq; pop {}; cli",
 			out(reg) flags,
-			options(nomem, preserves_flags)
+			options(nomem)
 		);
 	}
 	flags
@@ -328,7 +329,7 @@ pub unsafe fn init_arenas() {
 	}
 
 	if cores_done > 0 {
-		unsafe { ARENAS_ACTIVE = true; }
+		ARENAS_ACTIVE.store(true, Ordering::Release);
 		klog::info!(
 			"Heap: per-core arenas activated ({} MiB/core, {}/{} cores)",
 			ARENA_SIZE / (1024 * 1024),

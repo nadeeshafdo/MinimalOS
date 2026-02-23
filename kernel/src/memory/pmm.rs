@@ -7,6 +7,9 @@
 //! frames.  `alloc_frame()` pops from the cache with zero locking; the global
 //! bitmap is only touched when the cache is empty or full.
 
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use limine::memory_map::{Entry, EntryType};
 use spin::Mutex;
 
@@ -92,25 +95,38 @@ impl FrameCache {
 	}
 }
 
+/// Sync wrapper for per-core frame caches.
+///
+/// Each core only touches its own `UnsafeCell<FrameCache>` (indexed by
+/// `smp::core_id()`), so there is no cross-core aliasing.  The `UnsafeCell`
+/// tells the Rust compiler that interior mutation occurs, eliminating the
+/// `static mut` aliasing UB that would otherwise arise.
+struct CoreCaches {
+	inner: [UnsafeCell<FrameCache>; smp::MAX_CORES],
+}
+
+// Safety: each core only ever accesses its own element (indexed by core_id).
+// No two cores share the same UnsafeCell.
+unsafe impl Sync for CoreCaches {}
+
+/// Constant initializer for `UnsafeCell<FrameCache>`.
+#[allow(clippy::declare_interior_mutable_const)]
+const EMPTY_CACHE: UnsafeCell<FrameCache> = UnsafeCell::new(FrameCache::new());
+
 /// Per-core frame caches.  Indexed by `smp::core_id()`.
-static mut CORE_CACHES: [FrameCache; smp::MAX_CORES] = [
-	FrameCache::new(),
-	FrameCache::new(),
-	FrameCache::new(),
-	FrameCache::new(),
-];
+static CORE_CACHES: CoreCaches = CoreCaches {
+	inner: [EMPTY_CACHE, EMPTY_CACHE, EMPTY_CACHE, EMPTY_CACHE],
+};
 
 /// Whether the SMP per-core caches have been activated.
 /// Before SMP init, we fall back to the global bitmap directly.
-static mut CACHES_ACTIVE: bool = false;
+static CACHES_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Activate per-core frame caches.
 ///
 /// Called after SMP init, once `smp::core_id()` is valid on the BSP.
 pub fn activate_caches() {
-	unsafe {
-		CACHES_ACTIVE = true;
-	}
+	CACHES_ACTIVE.store(true, Ordering::Release);
 	klog::info!("PMM: per-core frame caches activated ({} frames/core)", CACHE_SIZE);
 }
 
@@ -236,16 +252,14 @@ pub unsafe fn init(hhdm_offset: u64, entries: &[&Entry]) {
 /// **Slow path**: locks the global bitmap and refills the cache.
 pub fn alloc_frame() -> Option<u64> {
 	// Fast path: per-core cache (after SMP is initialized).
-	unsafe {
-		if CACHES_ACTIVE {
-			let core = smp::core_id() as usize;
-			let cache = &mut CORE_CACHES[core];
-			if let Some(frame) = cache.pop() {
-				return Some(frame);
-			}
-			// Cache empty — refill from global bitmap.
-			return refill_and_alloc(cache);
+	if CACHES_ACTIVE.load(Ordering::Acquire) {
+		let core = smp::core_id() as usize;
+		let cache = unsafe { &mut *CORE_CACHES.inner[core].get() };
+		if let Some(frame) = cache.pop() {
+			return Some(frame);
 		}
+		// Cache empty — refill from global bitmap.
+		return refill_and_alloc(cache);
 	}
 
 	// Pre-SMP path: global bitmap directly.
@@ -262,22 +276,20 @@ pub fn alloc_frame() -> Option<u64> {
 /// Panics on double-free or out-of-range address.
 pub fn free_frame(phys_addr: u64) {
 	// Fast path: per-core cache.
-	unsafe {
-		if CACHES_ACTIVE {
-			let core = smp::core_id() as usize;
-			let cache = &mut CORE_CACHES[core];
-			if cache.push(phys_addr) {
-				// If cache is getting full, drain half back to bitmap.
-				if cache.is_full() {
-					drain_cache(cache);
-				}
-				return;
+	if CACHES_ACTIVE.load(Ordering::Acquire) {
+		let core = smp::core_id() as usize;
+		let cache = unsafe { &mut *CORE_CACHES.inner[core].get() };
+		if cache.push(phys_addr) {
+			// If cache is getting full, drain half back to bitmap.
+			if cache.is_full() {
+				drain_cache(cache);
 			}
-			// Cache was full even before push — drain and retry.
-			drain_cache(cache);
-			cache.push(phys_addr);
 			return;
 		}
+		// Cache was full even before push — drain and retry.
+		drain_cache(cache);
+		cache.push(phys_addr);
+		return;
 	}
 
 	// Pre-SMP path: global bitmap directly.
