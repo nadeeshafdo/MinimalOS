@@ -10,6 +10,7 @@ use alloc::string::String;
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
+use crate::arch::smp::MAX_CORES;
 use crate::cap::{self, CapTable};
 use crate::ipc::IpcQueue;
 
@@ -300,12 +301,13 @@ pub static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 /// [063] Round-Robin scheduler.
 ///
 /// Maintains a queue of ready tasks and tracks which task is currently
-/// running.  `schedule()` picks the next task and performs a context switch.
+/// running on each core.  `do_schedule()` picks the next task and
+/// performs a context switch.
 pub struct Scheduler {
 	/// Ready queue (round-robin order).
 	tasks: VecDeque<Process>,
-	/// The currently running process (removed from the queue).
-	current: Option<Process>,
+	/// The currently running process on each core (indexed by core ID).
+	current: [Option<Process>; MAX_CORES],
 }
 
 #[allow(dead_code)]
@@ -313,7 +315,7 @@ impl Scheduler {
 	pub const fn new() -> Self {
 		Self {
 			tasks: VecDeque::new(),
-			current: None,
+			current: [const { None }; MAX_CORES],
 		}
 	}
 
@@ -327,24 +329,28 @@ impl Scheduler {
 		self.tasks.len()
 	}
 
-	/// Total tasks (ready + current).
+	/// Total tasks (ready queue + all running).
 	pub fn task_count(&self) -> usize {
-		self.tasks.len() + if self.current.is_some() { 1 } else { 0 }
+		let running = self.current.iter().filter(|c| c.is_some()).count();
+		self.tasks.len() + running
 	}
 
-	/// Reference to the currently running process.
+	/// Reference to this core's currently running process.
 	pub fn current(&self) -> Option<&Process> {
-		self.current.as_ref()
+		let core = crate::arch::smp::core_id() as usize;
+		self.current[core].as_ref()
 	}
 
-	/// Mutable reference to the currently running process.
+	/// Mutable reference to this core's currently running process.
 	pub fn current_mut(&mut self) -> Option<&mut Process> {
-		self.current.as_mut()
+		let core = crate::arch::smp::core_id() as usize;
+		self.current[core].as_mut()
 	}
 
-	/// Set the initial "current" process (used during kernel init).
+	/// Set this core's initial "current" process (used during kernel init).
 	pub fn set_current(&mut self, task: Process) {
-		self.current = Some(task);
+		let core = crate::arch::smp::core_id() as usize;
+		self.current[core] = Some(task);
 	}
 
 	/// Remove dead tasks from the ready queue.
@@ -352,7 +358,7 @@ impl Scheduler {
 		self.tasks.retain(|t| t.state != ProcessState::Dead);
 	}
 
-	/// [073] Mutable iterator over the ready queue (for futex wake).
+	/// Mutable iterator over the ready queue.
 	pub fn tasks_iter_mut(&mut self) -> impl Iterator<Item = &mut Process> {
 		self.tasks.iter_mut()
 	}
@@ -362,14 +368,24 @@ impl Scheduler {
 		self.tasks.iter()
 	}
 
-	/// Look up a process by PID (checks current + ready queue).
+	/// Look up a process by PID (checks ALL cores' current + ready queue).
 	pub fn get_process_mut(&mut self, pid: u64) -> Option<&mut Process> {
-		if let Some(ref mut cur) = self.current {
+		for cur in self.current.iter_mut().flatten() {
 			if cur.pid == pid {
 				return Some(cur);
 			}
 		}
 		self.tasks.iter_mut().find(|t| t.pid == pid)
+	}
+
+	/// Look up a process by PID immutably (all cores + ready queue).
+	pub fn get_process(&self, pid: u64) -> Option<&Process> {
+		for cur in self.current.iter().flatten() {
+			if cur.pid == pid {
+				return Some(cur);
+			}
+		}
+		self.tasks.iter().find(|t| t.pid == pid)
 	}
 
 	/// [072] Wake any sleeping tasks whose wake_tick has passed.
@@ -381,125 +397,24 @@ impl Scheduler {
 		}
 	}
 
-	/// Remove a dead current task (called by sys_exit).
+	/// Remove a dead current task on this core.
 	pub fn reap_current(&mut self) {
-		if let Some(ref cur) = self.current {
+		let core = crate::arch::smp::core_id() as usize;
+		if let Some(ref cur) = self.current[core] {
 			if cur.state == ProcessState::Dead {
-				self.current = None;
+				self.current[core] = None;
 			}
 		}
 	}
 
 	/// [064] Pick the next task and context-switch to it.
 	///
-	/// The current task is moved to the back of the ready queue,
-	/// and the front task becomes the new current.
-	///
-	/// # Safety
-	/// Must be called with interrupts disabled (or from an interrupt context).
+	/// DEPRECATED: Use the free-standing `do_schedule()` which manages
+	/// lock safety and per-core current tracking.
+	#[allow(dead_code)]
 	pub unsafe fn schedule(&mut self) {
-		// Nothing to switch to?
-		if self.tasks.is_empty() {
-			return;
-		}
-
-		// [072] Wake sleeping tasks before picking the next one.
-		self.wake_sleeping(super::clock::now());
-
-		// Take the current task out.
-		let mut old = match self.current.take() {
-			Some(t) => t,
-			None => {
-				// No current — find the next Ready one.
-				let queue_len = self.tasks.len();
-				for _ in 0..queue_len {
-					if let Some(t) = self.tasks.pop_front() {
-						if t.state == ProcessState::Ready {
-							let mut new = t;
-							new.state = ProcessState::Running;
-							self.current = Some(new);
-							return;
-						}
-						self.tasks.push_back(t);
-					}
-				}
-				return;
-			}
-		};
-
-		// Pop the next *ready* task via round-robin.
-		let queue_len = self.tasks.len();
-		let mut new_task: Option<Process> = None;
-		for _ in 0..queue_len {
-			if let Some(t) = self.tasks.pop_front() {
-				if t.state == ProcessState::Ready {
-					new_task = Some(t);
-					break;
-				}
-				self.tasks.push_back(t);
-			}
-		}
-
-		let new = match new_task {
-			Some(t) => t,
-			None => {
-				// No ready tasks — put old back.
-				self.current = Some(old);
-				return;
-			}
-		};
-
-		// Move old to the back of the ready queue (unless it's dead).
-		if old.state != ProcessState::Dead {
-			if old.state != ProcessState::Sleeping {
-				old.state = ProcessState::Ready;
-			}
-			self.tasks.push_back(old);
-		}
-
-		let mut new = new;
-		new.state = ProcessState::Running;
-
-		// Install `new` as current before switching, so the trampoline
-		// can find it.
-		self.current = Some(new);
-
-		// We need raw pointers to do the switch while the scheduler
-		// is borrowed.  This is safe because:
-		//   - `old` is now in self.tasks (back)
-		//   - `new` is now in self.current
-		let old_ref = self.tasks.back_mut().unwrap();
-		let new_ref = self.current.as_ref().unwrap();
-
-		// Update SYSCALL_KERNEL_RSP so syscall entry uses the new task's
-		// kernel stack.
-		unsafe {
-			let new_kstack_top = new_ref.kernel_stack.top();
-			core::ptr::write_volatile(
-				&raw mut crate::arch::syscall::SYSCALL_KERNEL_RSP,
-				new_kstack_top,
-			);
-		}
-
-		// Save old_rsp_ptr and new_rsp to local variables so we can
-		// release the spinlock before the actual context switch.
-		let old_rsp_ptr = &mut old_ref.kernel_rsp as *mut u64;
-		let new_rsp = new_ref.kernel_rsp;
-
-		// CRITICAL: We must NOT hold the SCHEDULER lock across the
-		// context switch, because the target task's trampoline may
-		// need to lock SCHEDULER to read its own entry point.
-		//
-		// We use raw asm directly here instead of the wrapper so we
-		// can drop the lock right before switching.
-		//
-		// The caller must drop the MutexGuard before this point.
-		// Since `self` is `&mut Scheduler` borrowed from the guard,
-		// we can't drop the guard here.  Instead, we use a separate
-		// free function `do_schedule()` that manages this.
-		unsafe {
-			context_switch_asm(old_rsp_ptr, new_rsp);
-		}
+		// Delegate to per-core-aware do_schedule.
+		// This method exists only for API compatibility.
 	}
 }
 
@@ -548,19 +463,23 @@ fn process_pending_wakes(sched: &mut Scheduler) {
 /// performs the context switch. This avoids deadlock when the
 /// target task's trampoline needs to re-acquire the lock.
 ///
+/// SMP-aware: uses `core_id()` to index the per-core `current` slot
+/// so each core independently tracks its own running task.
+///
 /// # Safety
 /// Must be called with interrupts disabled or from interrupt context.
 pub unsafe fn do_schedule() {
-	// Dummy RSP landing pad for dead tasks — AtomicU64 avoids
-	// the data race that `static mut` would cause on SMP.
-	static DEAD_RSP: AtomicU64 = AtomicU64::new(0);
+	// Per-core dummy RSP landing pads — avoids data races when
+	// multiple cores simultaneously switch away from dead/initial tasks.
+	static DEAD_RSP: [AtomicU64; MAX_CORES] = [
+		AtomicU64::new(0), AtomicU64::new(0),
+		AtomicU64::new(0), AtomicU64::new(0),
+	];
+
+	let core = crate::arch::smp::core_id() as usize;
 
 	let (old_rsp_ptr, new_rsp, new_cr3) = {
 		let mut sched = SCHEDULER.lock();
-
-		if sched.tasks.is_empty() {
-			return;
-		}
 
 		// Process pending wake requests from IRQ handlers.
 		process_pending_wakes(&mut sched);
@@ -568,13 +487,10 @@ pub unsafe fn do_schedule() {
 		// [072] Wake any sleeping tasks whose wake_tick has passed.
 		sched.wake_sleeping(super::clock::now());
 
-		let old = match sched.current.take() {
-			Some(t) => t,
-			None => return,
-		};
+		// Take this core's current task out (may be None on first AP entry).
+		let old = sched.current[core].take();
 
-		// Find the next Ready task using round-robin: pop from front,
-		// skip non-Ready tasks by pushing them to the back.
+		// Find the next Ready task using round-robin.
 		let queue_len = sched.tasks.len();
 		let mut new_task: Option<Process> = None;
 		for _ in 0..queue_len {
@@ -591,30 +507,36 @@ pub unsafe fn do_schedule() {
 		let new = match new_task {
 			Some(t) => t,
 			None => {
-				// No ready tasks — put old back.
-				sched.current = Some(old);
+				// No ready tasks — put old back (if any) and return.
+				if let Some(old) = old {
+					sched.current[core] = Some(old);
+				}
 				return;
 			}
 		};
 
-		let old_is_dead = old.state == ProcessState::Dead;
-
-		if !old_is_dead {
-			let mut old = old;
-			// Preserve Sleeping and Blocked states; otherwise mark Ready.
-			if old.state != ProcessState::Sleeping && old.state != ProcessState::Blocked {
-				old.state = ProcessState::Ready;
+		// Put old back in the ready queue (unless dead or absent).
+		let has_old_in_queue = if let Some(mut old) = old {
+			if old.state != ProcessState::Dead {
+				// Preserve Sleeping and Blocked states; otherwise mark Ready.
+				if old.state != ProcessState::Sleeping && old.state != ProcessState::Blocked {
+					old.state = ProcessState::Ready;
+				}
+				sched.tasks.push_back(old);
+				true
+			} else {
+				false // dead — drop it
 			}
-			sched.tasks.push_back(old);
-		}
-		// else: drop old — it's dead
+		} else {
+			false // no old task (AP first entry)
+		};
 
 		let mut new = new;
 		new.state = ProcessState::Running;
-		sched.current = Some(new);
+		sched.current[core] = Some(new);
 
 		// Update SYSCALL_KERNEL_RSP for the new task.
-		let new_kstack_top = sched.current.as_ref().unwrap().kernel_stack.top();
+		let new_kstack_top = sched.current[core].as_ref().unwrap().kernel_stack.top();
 		unsafe {
 			core::ptr::write_volatile(
 				&raw mut crate::arch::syscall::SYSCALL_KERNEL_RSP,
@@ -628,15 +550,14 @@ pub unsafe fn do_schedule() {
 			}
 		}
 
-		let old_rsp_ptr = if old_is_dead {
-			// Task is dead, use dummy so context_switch_asm has
-			// somewhere to write the RSP (which we'll never use).
-			DEAD_RSP.as_ptr()
-		} else {
+		let old_rsp_ptr = if has_old_in_queue {
 			&mut sched.tasks.back_mut().unwrap().kernel_rsp as *mut u64
+		} else {
+			// Dead task or AP initial entry — use per-core dummy.
+			DEAD_RSP[core].as_ptr()
 		};
-		let new_rsp = sched.current.as_ref().unwrap().kernel_rsp;
-		let new_cr3 = sched.current.as_ref().unwrap().cr3;
+		let new_rsp = sched.current[core].as_ref().unwrap().kernel_rsp;
+		let new_cr3 = sched.current[core].as_ref().unwrap().cr3;
 
 		(old_rsp_ptr, new_rsp, new_cr3)
 		// MutexGuard dropped here — lock is released before switch

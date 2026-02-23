@@ -117,10 +117,9 @@ pub extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame
 			let press = event.state == khal::keyboard::KeyState::Pressed;
 			crate::task::events::push_key(press, scancode, ch);
 
-			// Legacy: echo printable chars to console + input buffer.
+			// Echo printable chars to serial (display echo is a Wasm actor's job).
 			if press {
 				if let khal::keyboard::KeyKind::Char(c) = event.key {
-					// Echo to serial (display echo is now a Wasm actor's job).
 					if c == '\x08' {
 						khal::serial::write_str("\x08 \x08");
 					} else {
@@ -128,7 +127,6 @@ pub extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame
 						let s = c.encode_utf8(&mut utf8);
 						khal::serial::write_str(s);
 					}
-					crate::task::input::push_char(c);
 				}
 			}
 		}

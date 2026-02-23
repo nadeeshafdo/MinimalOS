@@ -5,7 +5,7 @@
 //! its own GDT and TSS to avoid the TSS "Busy" bit #GP fault.
 
 use core::arch::asm;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::arch::gdt::{Gdt, Selectors};
 use crate::arch::tss::Tss;
@@ -22,6 +22,11 @@ static AP_READY_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Total number of cores detected (set by BSP during init).
 static CORE_COUNT: AtomicU32 = AtomicU32::new(1);
+
+/// Gate flag: APs spin until the BSP sets this after actors are
+/// fully spawned and wired.  Prevents APs from entering the
+/// scheduler before capabilities are in place.
+static AP_GO: AtomicBool = AtomicBool::new(false);
 
 // ── Per-Core Local Storage ──────────────────────────────────────
 
@@ -202,6 +207,14 @@ pub fn core_count() -> u32 {
 	CORE_COUNT.load(Ordering::Relaxed)
 }
 
+/// Signal APs that it is safe to enter the scheduler.
+///
+/// Called by the BSP after all Wasm actors have been spawned
+/// and their capabilities fully wired.
+pub fn signal_ap_go() {
+	AP_GO.store(true, Ordering::Release);
+}
+
 /// Wake all Application Processors using the Limine SMP protocol.
 ///
 /// # Arguments
@@ -214,8 +227,8 @@ pub fn core_count() -> u32 {
 /// 2. Load the shared IDT
 /// 3. Set GS base to its CoreLocal
 /// 4. Init its Local APIC
-/// 5. Start its APIC timer
-/// 6. Enter an idle loop
+/// 5. Start its APIC timer (for preemption)
+/// 6. Enter the scheduler (picks up ready tasks)
 pub unsafe fn wake_aps(smp_response: &limine::response::MpResponse) {
 	let cpus = smp_response.cpus();
 	let total = cpus.len().min(MAX_CORES);
@@ -319,23 +332,32 @@ extern "C" fn ap_entry(smp_info: &limine::mp::Cpu) -> ! {
 		let hhdm = crate::memory::paging::hhdm_offset();
 		khal::apic::init(hhdm);
 
-		// NOTE: We intentionally do NOT enable the APIC timer on APs.
-		// The timer interrupt handler calls do_schedule() which uses
-		// the global single-core scheduler.  If an AP fires a timer
-		// interrupt, it will try to context-switch with no CURRENT_TASK,
-		// corrupting the scheduler and causing double faults.
-		// AP timers will be enabled in Phase 5 when per-core runqueues
-		// are implemented.
+		// Enable the APIC timer on this AP so it receives preemption
+		// interrupts and can participate in scheduling.
+		khal::apic::init_timer();
 
-		klog::info!("SMP: AP {} (APIC ID {}) started — GDT, TSS, IDT, APIC OK",
+		klog::info!("SMP: AP {} (APIC ID {}) started — GDT, TSS, IDT, APIC, Timer OK",
 			core_idx, lapic_id);
 
 		// Signal that we're ready.
 		AP_READY_COUNT.fetch_add(1, Ordering::Release);
 
-		// Enable interrupts and enter idle loop.
+		// Spin-wait with interrupts DISABLED until the BSP signals
+		// that all actors are spawned and wired.  We must NOT sti
+		// before this point — otherwise timer interrupts would enter
+		// do_schedule() and pick up partially-wired actors.
+		while !AP_GO.load(Ordering::Acquire) {
+			core::hint::spin_loop();
+		}
+
+		// NOW enable interrupts and enter the scheduler.
+		asm!("sti", options(nomem, nostack));
+		crate::task::process::do_schedule();
+
+		// If do_schedule returned (no ready tasks), idle until the
+		// APIC timer fires and the handler reschedules us.
 		loop {
-			asm!("sti; hlt", options(nomem, nostack));
+			asm!("hlt", options(nomem, nostack));
 		}
 	}
 }

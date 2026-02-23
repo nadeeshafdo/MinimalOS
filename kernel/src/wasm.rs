@@ -288,25 +288,15 @@ fn build_imports(actor_pid: u64) -> Imports {
 
 // ── Capability Memory Blit ───────────────────────────────────────
 
-/// Find a process in the scheduler by PID (checks current + ready queue).
+/// Find a process's capability by PID and handle.
+///
+/// Searches all cores' current tasks and the ready queue.
 fn find_process_cap<'a>(
 	sched: &'a crate::task::process::Scheduler,
 	pid: u64,
 	cap_handle: u64,
 ) -> Option<&'a crate::cap::Capability> {
-	// Check current task first.
-	if let Some(current) = sched.current() {
-		if current.pid == pid {
-			return current.caps.get(cap_handle);
-		}
-	}
-	// Check the ready queue (process may have been preempted).
-	for task in sched.tasks_iter() {
-		if task.pid == pid {
-			return task.caps.get(cap_handle);
-		}
-	}
-	None
+	sched.get_process(pid).and_then(|p| p.caps.get(cap_handle))
 }
 
 /// Read `len` bytes from a Memory capability at `offset`.
@@ -428,13 +418,11 @@ pub fn internal_cap_send(endpoint_handle: u64, mut msg: crate::ipc::Message) -> 
 		(target_id, transfer)
 	};
 
-	// 2. Find target, do atomic cap-before-queue.
+	// 2. Find target (may be running on another core or in the ready queue),
+	//    do atomic cap-before-queue.
 	let mut target_woken = false;
-	let mut found = false;
-	for target in sched.tasks_iter_mut() {
-		if target.pid != target_actor_id { continue; }
-		found = true;
-
+	let found;
+	if let Some(target) = sched.get_process_mut(target_actor_id) {
 		if target.ipc_queue.is_full() { return u64::MAX; }
 
 		if let Some((obj, perms)) = cap_transfer {
@@ -450,7 +438,9 @@ pub fn internal_cap_send(endpoint_handle: u64, mut msg: crate::ipc::Message) -> 
 			target.state = crate::task::process::ProcessState::Ready;
 			target_woken = true;
 		}
-		break;
+		found = true;
+	} else {
+		found = false;
 	}
 
 	if !found { return u64::MAX; }

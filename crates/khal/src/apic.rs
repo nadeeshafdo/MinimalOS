@@ -201,6 +201,14 @@ pub fn disable_timer() {
 	}
 }
 
+/// Configure the APIC timer with the same settings as the BSP.
+///
+/// Convenience wrapper used by AP cores during SMP boot so they
+/// receive periodic preemption interrupts identical to Core 0.
+pub fn init_timer() {
+	enable_timer(TIMER_VECTOR, 0x0020_0000, TimerDivide::By16);
+}
+
 // ── Inter-Processor Interrupts (IPI) ────────────────────────────
 
 /// Interrupt Command Register — low 32 bits.

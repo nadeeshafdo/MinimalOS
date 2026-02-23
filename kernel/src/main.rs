@@ -403,6 +403,10 @@ unsafe extern "C" fn _start() -> ! {
 	klog::info!("[wasm]   UI   (PID {}) — EP→VFS + Framebuffer + EP→Shell", ui_pid);
 	klog::info!("[wasm]   Shell(PID {}) — EP→VFS + EP→UI", shell_pid);
 
+	// Release the AP gate — APs can now enter the scheduler and
+	// pick up fully-wired actors from the ready queue.
+	arch::smp::signal_ap_go();
+
 	// Perform the first schedule — context-switches from idle into
 	// the first ready actor's kernel stack trampoline.
 	klog::info!("[064] Starting scheduler...");
