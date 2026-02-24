@@ -1,0 +1,13 @@
+# Build artifacts (cargo output)
+/target/
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
