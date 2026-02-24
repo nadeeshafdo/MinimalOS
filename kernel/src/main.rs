@@ -52,6 +52,12 @@
 #![no_main]
 // Allow dead code during development — foundation APIs are used in future sprints.
 #![allow(dead_code)]
+// Required for #[alloc_error_handler] in heap.rs
+#![feature(alloc_error_handler)]
+
+// Enable the `alloc` crate for heap-allocated types (Vec, Box, String, etc.).
+// This works because we provide a #[global_allocator] in memory::heap.
+extern crate alloc;
 
 // =============================================================================
 // Module declarations
@@ -88,6 +94,8 @@ mod drivers;
 use arch::boot;
 use arch::serial::SERIAL;
 use memory::address;
+use memory::pmm;
+use memory::heap;
 
 // =============================================================================
 // Linker-provided symbols
@@ -304,11 +312,62 @@ extern "C" fn kmain() -> ! {
     // =========================================================================
     // PHASE 3: "Can Remember" → Memory Management (Sprint 2)
     // =========================================================================
+    //
+    // Initialize the memory subsystem bottom-up:
+    //   1. PMM — track which physical frames are free / used
+    //   2. Kernel heap — enable alloc crate (Vec, Box, String)
+    //   3. VMM infrastructure is ready but we don't switch page tables yet
+    //      (deferred to Sprint 3 when we have IDT for debugging faults)
+    // =========================================================================
     kprintln!();
-    kprintln!("[init] Phase 3: Memory management — NOT YET IMPLEMENTED");
-    kprintln!("[init]   TODO: Physical memory manager (bitmap allocator)");
-    kprintln!("[init]   TODO: Kernel page tables (higher-half remap)");
-    kprintln!("[init]   TODO: Kernel heap allocator");
+    kprintln!("[init] Phase 3: Memory management");
+
+    // --- Physical Memory Manager ---
+    // Build the bitmap from the Limine memory map. After this call,
+    // pmm::alloc_frame() and pmm::free_frame() are available.
+    pmm::init(memory_map);
+
+    let mem_stats = pmm::stats();
+    kprintln!(
+        "[pmm] {} total frames, {} used, {} free ({} MiB free)",
+        mem_stats.total_frames,
+        mem_stats.used_frames,
+        mem_stats.free_frames,
+        mem_stats.free_frames as u64 * 4096 / 1024 / 1024,
+    );
+
+    // --- Kernel Heap ---
+    // Allocate contiguous physical pages from the PMM and set up the
+    // linked-list heap allocator. After this call, alloc::Vec and friends work.
+    heap::init();
+
+    // Verify the heap works with a quick test allocation.
+    {
+        use alloc::vec::Vec;
+        let mut v: Vec<u64> = Vec::new();
+        v.push(42);
+        v.push(1337);
+        v.push(0xDEAD_BEEF);
+        kprintln!(
+            "[heap] Test allocation OK: {:?} (heap used: {} bytes)",
+            v,
+            heap::allocated_bytes(),
+        );
+        // Vec is dropped here, memory returned to the heap.
+    }
+
+    kprintln!(
+        "[heap] After drop: {} bytes used / {} KiB total",
+        heap::allocated_bytes(),
+        heap::total_bytes() / 1024,
+    );
+
+    // --- VMM (infrastructure only) ---
+    // The page table types and manipulation functions (map_page, unmap_page,
+    // translate) are available in memory::vmm but we don't switch away from
+    // Limine's page tables yet. That requires IDT/exception handlers for
+    // safe debugging (Sprint 3).
+    kprintln!("[vmm] Page table infrastructure ready (CR3 switch deferred to Sprint 3)");
 
     // =========================================================================
     // PHASE 4: "Can Think" → Scheduler + Processes (Sprint 3-4)
@@ -349,9 +408,9 @@ extern "C" fn kmain() -> ! {
     // =========================================================================
     kprintln!();
     kprintln!("==========================================================");
-    kprintln!("  Sprint 1 complete — kernel booted successfully!");
-    kprintln!("  Serial + framebuffer output working.");
-    kprintln!("  Halting CPU. Next: Sprint 2 (memory management)");
+    kprintln!("  Sprint 2 complete — memory management initialized!");
+    kprintln!("  PMM, kernel heap, VMM infrastructure ready.");
+    kprintln!("  Halting CPU. Next: Sprint 3 (interrupts + exceptions)");
     kprintln!("==========================================================");
 
     // Halt forever. In the future, this becomes: scheduler::run()
