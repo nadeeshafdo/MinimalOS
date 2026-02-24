@@ -44,20 +44,23 @@ jobs:
       - name: Cache Limine
         uses: actions/cache@v4
         with:
-          path: limine
-          key: limine-v8.x-binary
+          path: target/limine-src
+          key: limine-v8.6.0-binary
 
-      - name: Build kernel
-        run: make kernel
+      - name: Build kernel (debug)
+        run: make
 
-      - name: Create bootable ISO
-        run: make iso
+      - name: Build kernel (release)
+        run: make release
+
+      - name: Create bootable ISO (release)
+        run: make iso-release
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
         with:
           name: minimalos-${{ github.sha }}
-          path: build/dist/minimalos.iso
+          path: target/minimalos-release.iso
           retention-days: 30
 
   release:
@@ -78,7 +81,7 @@ jobs:
       - name: Rename ISO with version
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
-          cp dist/minimalos.iso "dist/minimalos-${VERSION}-x86_64.iso"
+          cp dist/minimalos-release.iso "dist/minimalos-${VERSION}-x86_64.iso"
           sha256sum dist/minimalos-${VERSION}-x86_64.iso > "dist/minimalos-${VERSION}-x86_64.iso.sha256"
 
       - name: Prepare release body
