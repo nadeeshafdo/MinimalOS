@@ -1,0 +1,54 @@
+# =============================================================================
+# MinimalOS NextGen — Cargo Build Configuration
+# =============================================================================
+#
+# This file tells cargo HOW to build the kernel. Key decisions:
+#
+# 1. TARGET: x86_64-unknown-none
+#    We compile for bare metal x86_64 — no operating system, no libc.
+#    Rust's `core` library is rebuilt from source for this target
+#    (that's why we need the `rust-src` component).
+#
+# 2. LINKER SCRIPT: We use a custom linker script that places the kernel
+#    at the higher-half virtual address (0xFFFFFFFF80000000). The Limine
+#    bootloader maps the kernel there before jumping to our entry point.
+#
+# 3. FLAGS:
+#    - `-C code-model=kernel`: Use the kernel code model which assumes code
+#      runs in the top 2GB of virtual address space. This allows more
+#      efficient addressing for kernel symbols.
+#    - `-C relocation-model=static`: No position-independent code in kernel.
+#      We know exactly where we're loaded.
+#    - `-C target-feature=-sse,-sse2,-avx`: Disable SIMD in kernel code.
+#      Using SSE/AVX in the kernel requires saving/restoring XMM/YMM registers
+#      on every interrupt, which is expensive. The N3710 doesn't have AVX
+#      anyway, but we disable SSE too for simpler interrupt handling.
+#      (soft-float is used instead — fine for a kernel that does no FP math.)
+
+[build]
+target = "x86_64-unknown-none"
+
+[target.x86_64-unknown-none]
+rustflags = [
+    "-C", "link-arg=-T",
+    "-C", "link-arg=kernel/linker.ld",
+    "-C", "code-model=kernel",
+    "-C", "relocation-model=static",
+    "-C", "target-feature=-sse,-sse2,-avx",
+]
+
+# Use the `rust-lld` linker that ships with Rust.
+# No need for system linker — fewer external dependencies.
+linker = "rust-lld"
+
+# =============================================================================
+# Unstable cargo features we use
+# =============================================================================
+# `build-std` rebuilds the `core` and `alloc` crates for our bare-metal target.
+#   - `core`: fundamental types, traits, and functions (Option, Result, etc.)
+#   - `alloc`: heap allocation (Box, Vec, String) — we provide the allocator
+#   - `compiler_builtins`: intrinsics the compiler needs (memcpy, memset, etc.)
+#     We use the `mem` feature to get memory operation implementations.
+[unstable]
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]

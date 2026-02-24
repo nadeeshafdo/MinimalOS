@@ -1,0 +1,61 @@
+# =============================================================================
+# MinimalOS NextGen — Kernel Crate
+# =============================================================================
+#
+# This is the kernel itself — the only code that runs in Ring 0.
+# It provides exactly six things:
+#   1. Address space isolation     (page tables)
+#   2. Capability enforcement      (unforgeable tokens)
+#   3. IPC message delivery        (opaque bytes + caps)
+#   4. CPU time multiplexing       (scheduler)
+#   5. Interrupt routing           (IRQ → cap holder)
+#   6. Memory grant transfers      (zero-copy sharing)
+#
+# Everything else (drivers, filesystems, networking, GUI) runs in userspace.
+
+[package]
+name = "minimalos-kernel"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "MinimalOS NextGen capability-based microkernel"
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+#
+# We keep dependencies minimal. Every dependency is code running in Ring 0,
+# so each one must be audited and justified.
+
+[dependencies]
+# Limine boot protocol — provides a stable interface between bootloader and kernel.
+# Limine sets up long mode, provides memory map, framebuffer, ACPI tables, etc.
+# This crate provides the Rust type definitions for the Limine request/response protocol.
+limine = "0.5"
+
+# Spin-based synchronization primitives for no_std environments.
+# We use this for the early boot Mutex/Once before our own scheduler is running.
+# After scheduler init, we could replace these with sleeping locks.
+spin = "0.9"
+
+# Bitflags for capability rights, page table entry flags, etc.
+# Much safer than raw bit manipulation — gives us named, typed flag sets.
+bitflags = "2"
+
+# x86_64 CPU features: port I/O, control registers, MSRs, segment selectors.
+# Wraps inline assembly in safe Rust abstractions where possible.
+# We use specific features to avoid pulling in its page table implementation
+# (we write our own for educational clarity and full control).
+x86_64 = "0.15"
+
+[dependencies.log]
+version = "0.4"
+default-features = false
+
+# =============================================================================
+# Build configuration
+# =============================================================================
+
+# No default features — we opt in explicitly to everything.
+[features]
+default = []

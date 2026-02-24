@@ -1,0 +1,46 @@
+# =============================================================================
+# MinimalOS NextGen — Cargo Workspace Configuration
+# =============================================================================
+#
+# This is the workspace root. Currently contains only the kernel crate.
+# Future additions:
+#   - `userspace/init`    — the init process (first userspace program)
+#   - `userspace/libmnos` — userspace library for syscall wrappers
+#   - `tools/mkimage`     — tool to build bootable disk images
+#
+# Using a workspace lets all crates share a single `target/` directory and
+# lockfile, ensuring consistent dependency versions across the project.
+
+[workspace]
+resolver = "2"
+members = [
+    "kernel",
+]
+
+# =============================================================================
+# Workspace-wide settings
+# =============================================================================
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["MinimalOS NextGen Contributors"]
+repository = "https://github.com/example/MinimalOS"
+description = "A capability-based microkernel operating system written in Rust"
+
+# Optimize dependencies even in debug mode for faster kernel boot.
+# Our own code stays at debug optimization for better debugging.
+[profile.dev.package."*"]
+opt-level = 2
+
+# Release profile: maximum optimization for the kernel.
+# LTO (Link-Time Optimization) across all crates produces smaller, faster code.
+# This matters on N3710 where L2 cache is only 2MB — smaller kernel = more cache
+# available for userspace.
+[profile.release]
+opt-level = 2          # -O2 is generally better than -O3 for kernel code
+lto = true             # Link-time optimization across all crates
+codegen-units = 1      # Single codegen unit for maximum optimization
+panic = "abort"        # No unwinding in kernel — abort on panic
+strip = "none"         # Keep symbols for debugging
+debug = true           # Keep debug info even in release (stripped from binary)

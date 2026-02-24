@@ -1,0 +1,23 @@
+# =============================================================================
+# MinimalOS NextGen — Rust Toolchain Configuration
+# =============================================================================
+#
+# We use the nightly toolchain because OS development requires unstable features:
+#   - `#![no_std]`  — no standard library (we ARE the standard library)
+#   - `#![no_main]` — no Rust runtime entry point (we define our own)
+#   - `abi_x86_interrupt` — for interrupt handler function signatures
+#   - `naked_functions` — for precise control over function prologues
+#   - `asm` — inline assembly for CPU instructions (lgdt, lidt, etc.)
+#   - `alloc_error_handler` — custom behavior when heap allocation fails
+#   - Custom target specification — we compile for bare metal, not Linux
+#
+# The `rust-src` component is required so cargo can rebuild `core` and `alloc`
+# for our custom target (there are no pre-built libraries for bare metal).
+#
+# The `llvm-tools` component provides `llvm-objcopy` which we use to produce
+# the final kernel binary from the ELF output.
+
+[toolchain]
+channel = "nightly"
+components = ["rust-src", "llvm-tools"]
+targets = ["x86_64-unknown-none"]
