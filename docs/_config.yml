@@ -9,7 +9,7 @@ description: A capability-based microkernel operating system written in Rust
 url: "https://example.github.io"
 baseurl: "/MinimalOS"
 
-remote_theme: just-the-docs/just-the-docs@v0.10.0
+remote_theme: just-the-docs/just-the-docs@v0.5.2
 
 # Aux links (top-right corner)
 aux_links:
@@ -29,9 +29,6 @@ heading_anchors: true
 
 # Footer
 footer_content: "MinimalOS NextGen &mdash; Capability-based microkernel for x86_64"
-
-# Color scheme
-color_scheme: dark
 
 # Search
 search_enabled: true
