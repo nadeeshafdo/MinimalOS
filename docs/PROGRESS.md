@@ -42,24 +42,35 @@
 ### Sprint 2 — Memory Management
 > *Teach the kernel to manage physical and virtual memory.*
 
-- [ ] **Physical Memory Manager (PMM)** — bitmap allocator
-  - [ ] Parse Limine memory map, count usable pages
-  - [ ] Bitmap data structure (1 bit per 4 KiB page)
-  - [ ] `pmm::alloc_page()` → `PhysAddr`
-  - [ ] `pmm::free_page(PhysAddr)`
-  - [ ] Mark kernel, framebuffer, and ACPI regions as used
-  - [ ] Statistics: total, used, free page counts
-- [ ] **Virtual Memory Manager (VMM)** — 4-level page tables
-  - [ ] Page table entry type with permission flags (R/W/X, User, NX)
-  - [ ] `vmm::map_page(virt, phys, flags)`
-  - [ ] `vmm::unmap_page(virt)`
-  - [ ] Kernel higher-half remap (replace Limine's page tables with our own)
-  - [ ] W^X enforcement — no page is both writable and executable
-  - [ ] TLB flush helpers (single page + full flush)
-- [ ] **Kernel Heap Allocator**
-  - [ ] Implement `GlobalAlloc` trait for `#[global_allocator]`
-  - [ ] Simple linked-list or bump allocator for early boot
-  - [ ] Enable `alloc` crate (`Box`, `Vec`, `String` in kernel)
+- [x] **Physical Memory Manager (PMM)** — bitmap allocator
+  - [x] Parse Limine memory map, count usable pages
+  - [x] Bitmap data structure (1 bit per 4 KiB page)
+  - [x] `pmm::alloc_frame()` → `PhysAddr`
+  - [x] `pmm::free_frame(PhysAddr)`
+  - [x] `pmm::alloc_frame_zeroed()` — zeroed pages for page tables
+  - [x] `pmm::alloc_contiguous(count)` — physically contiguous frames
+  - [x] Mark kernel, framebuffer, ACPI, and bitmap regions as used
+  - [x] Statistics: total, used, free frame counts
+  - [x] Optimized u64-at-a-time scanning + byte-at-a-time range clear
+- [x] **Virtual Memory Manager (VMM)** — 4-level page table infrastructure
+  - [x] `PageTableFlags` bitflags (R/W, User, NX, Global, Huge, etc.)
+  - [x] `PageTableEntry` type with address/flags extraction
+  - [x] `PageTable` — 512-entry, 4 KiB-aligned table type
+  - [x] `vmm::map_page(pml4, virt, phys, flags)` — walk/create page tables
+  - [x] `vmm::unmap_page(pml4, virt)` — remove mapping
+  - [x] `vmm::translate(pml4, virt)` — virtual-to-physical translation
+  - [x] `vmm::new_table()` — allocate zeroed page table from PMM
+  - [x] TLB flush helpers (`flush()` single page, `flush_all()`)
+  - [ ] Kernel higher-half remap (deferred to Sprint 3 — needs IDT for debugging)
+  - [ ] W^X enforcement via remap (deferred to Sprint 3)
+- [x] **Kernel Heap Allocator**
+  - [x] Linked-list free-list allocator with coalescing
+  - [x] `GlobalAlloc` implementation with spinlock
+  - [x] `#[global_allocator]` + `#[alloc_error_handler]`
+  - [x] 256 KiB initial heap (64 contiguous pages via PMM + HHDM)
+  - [x] Enable `alloc` crate (`Box`, `Vec`, `String` in kernel)
+  - [x] Verified: alloc + dealloc + coalescing tested in QEMU boot
+- [x] **Linker script updated** — `.got` section handling for alloc/PMM code
 
 ---
 
