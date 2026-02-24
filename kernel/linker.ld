@@ -86,6 +86,14 @@ SECTIONS
         KEEP(*(.limine_requests))
 
         *(.rodata .rodata.*)
+
+        /* Global Offset Table — in a statically linked kernel (no dynamic
+         * linking), the GOT entries are resolved at link time and never
+         * change at runtime. Including them here prevents the linker from
+         * creating a separate non-page-aligned LOAD segment that confuses
+         * the Limine bootloader. */
+        *(.got .got.*)
+
         _rodata_end = .;
     }
 
@@ -138,6 +146,12 @@ SECTIONS
         *(.note.*)
         *(.eh_frame*)
         *(.gnu.hash)
+        *(.gnu.version*)
+        *(.dynamic)
+        *(.dynstr)
+        *(.dynsym)
+        *(.rel.*)
+        *(.rela.*)
     }
 }
 
