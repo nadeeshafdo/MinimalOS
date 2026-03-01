@@ -27,7 +27,7 @@
 use limine::BaseRevision;
 use limine::request::{
     ExecutableAddressRequest, FramebufferRequest, HhdmRequest, MemoryMapRequest,
-    RsdpRequest,
+    MpRequest, RsdpRequest,
 };
 
 // =============================================================================
@@ -144,6 +144,20 @@ static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
 #[unsafe(link_section = ".limine_requests")]
 static KERNEL_ADDRESS_REQUEST: ExecutableAddressRequest = ExecutableAddressRequest::new();
 
+/// Request for SMP (Symmetric Multi-Processing) initialization.
+///
+/// Limine handles the entire AP bringup sequence:
+///   1. Sends INIT/SIPI to each AP core
+///   2. Transitions APs from 16-bit real mode → 64-bit long mode
+///   3. Gives each AP a 64KB stack
+///   4. Parks each AP in a polling loop
+///
+/// The kernel then writes a function pointer to each AP's `goto_address`
+/// to wake it and have it execute kernel code directly in Ring 0.
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+static MP_REQUEST: MpRequest = MpRequest::new();
+
 // =============================================================================
 // Boot Information API
 // =============================================================================
@@ -254,4 +268,15 @@ pub fn get_kernel_address() -> (u64, u64) {
         .get_response()
         .expect("Limine kernel address response not available");
     (response.physical_base(), response.virtual_base())
+}
+
+/// Retrieves the SMP (Multi-Processor) response from Limine.
+///
+/// Returns a reference to the MpResponse containing information about
+/// all CPUs in the system. Use `cpus()` to iterate over them.
+///
+/// Returns `None` if the MP response is not available (single-core system
+/// or Limine didn't provide it).
+pub fn get_mp_response() -> Option<&'static limine::response::MpResponse> {
+    MP_REQUEST.get_response()
 }
