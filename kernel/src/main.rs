@@ -87,6 +87,10 @@ mod util;
 /// Contains: framebuffer text console, LAPIC timer (future).
 mod drivers;
 
+/// Scheduler subsystem.
+/// Contains: CPU-local storage, threads, context switching, scheduler.
+mod sched;
+
 // =============================================================================
 // Imports
 // =============================================================================
@@ -490,7 +494,6 @@ extern "C" fn kmain() -> ! {
         let mmio_flags = PageTableFlags::PRESENT
             | PageTableFlags::WRITABLE
             | PageTableFlags::NO_CACHE
-            | PageTableFlags::WRITE_THROUGH
             | PageTableFlags::NO_EXECUTE;
 
         // Map the LAPIC page (typically 0xFEE00000, 4K is enough)
@@ -561,10 +564,11 @@ extern "C" fn kmain() -> ! {
         arch::ioapic::enable_irq(com1_gsi, 36, 0);
     }
 
-    // --- 4g. W^X kernel remap ---
-    // Lock down kernel page permissions now that all MMIO is mapped and
-    // the IDT is live (page faults are safe to debug).
-    memory::remap::enforce_wxn();
+    // --- 4g. Pristine PML4 + CR3 swap ---
+    // Build clean page tables replacing Limine's contaminated ones.
+    // Maps HHDM (2M huge), kernel W^X (4K), MMIO (uncacheable).
+    let pristine_pml4 = memory::pml4::build();
+    unsafe { memory::pml4::activate(pristine_pml4); }
 
     // --- 4h. Enable interrupts ---
     // Everything is set up. STI allows the CPU to begin processing
@@ -580,37 +584,42 @@ extern "C" fn kmain() -> ! {
     }
 
     // =========================================================================
-    // PHASE 5: "Alive" → Userspace (Sprint 5-6)
+    // PHASE 5: Scheduler + Threads (Sprint 4)
     // =========================================================================
     kprintln!();
-    kprintln!("[init] Phase 5: Userspace — NOT YET IMPLEMENTED");
-    kprintln!("[init]   TODO: Capability subsystem");
-    kprintln!("[init]   TODO: IPC subsystem");
-    kprintln!("[init]   TODO: Process + Thread management");
-    kprintln!("[init]   TODO: Tickless scheduler");
-    kprintln!("[init]   TODO: SMP init (start AP cores)");
-    kprintln!("[init]   TODO: SYSCALL/SYSRET setup");
-    kprintln!("[init]   TODO: ELF loader");
-    kprintln!("[init]   TODO: Load init process");
-    kprintln!("[init]   TODO: Enter Ring 3");
+    kprintln!("[init] Phase 5: Scheduler initialization");
+
+    // --- 5a. BSP CpuLocal ---
+    // Set up per-core local storage on the BSP before any thread creation.
+    {
+        let mut bsp_local = alloc::boxed::Box::new(
+            sched::percpu::CpuLocal::new(0, 0) // BSP = LAPIC 0, core 0
+        );
+        unsafe { bsp_local.install(); }
+        // Leak the Box so CpuLocal lives forever (it's per-core kernel state)
+        let _ = alloc::boxed::Box::into_raw(bsp_local);
+    }
+
+    // --- 5b. Spawn test threads ---
+    sched::scheduler::spawn("test-A", sched::scheduler::test_thread_a, 0);
+    sched::scheduler::spawn("test-B", sched::scheduler::test_thread_b, 0);
+
+    // --- 5c. Initialize scheduler ---
+    sched::scheduler::init();
+
+    // --- 5d. Start Application Processors ---
+    arch::smp::init();
 
     // =========================================================================
     // HALT
     // =========================================================================
-    //
-    // We've initialized interrupts and the APIC subsystem.
-    // The LAPIC timer test should fire during the halt loop.
-    //
-    // In future sprints, this becomes: scheduler::run()
-    // =========================================================================
     kprintln!();
     kprintln!("==========================================================");
-    kprintln!("  Sprint 3 complete — interrupts & exceptions initialized!");
-    kprintln!("  GDT+TSS, IDT, LAPIC, I/O APIC all operational.");
-    kprintln!("  Halting CPU. Next: Sprint 4 (scheduler + processes)");
+    kprintln!("  Sprint 4 — scheduler + SMP framework initialized!");
+    kprintln!("  PML4+W^X, GDT/IDT, LAPIC/IOAPIC, CpuLocal, Threads, SMP");
+    kprintln!("  Next: preemptive context switching via LAPIC timer.");
     kprintln!("==========================================================");
 
-    // Halt forever. The HLT instruction yields until an interrupt fires.
-    // Our LAPIC timer interrupt should wake us briefly, then we halt again.
+    // Halt forever. In the future, this becomes scheduler::run()
     arch::cpu::halt_forever()
 }
