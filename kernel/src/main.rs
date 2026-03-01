@@ -94,6 +94,7 @@ mod drivers;
 use arch::boot;
 use arch::serial::SERIAL;
 use memory::address;
+use memory::address::PhysAddr;
 use memory::pmm;
 use memory::heap;
 
@@ -370,24 +371,224 @@ extern "C" fn kmain() -> ! {
     kprintln!("[vmm] Page table infrastructure ready (CR3 switch deferred to Sprint 3)");
 
     // =========================================================================
-    // PHASE 4: "Can Think" → Scheduler + Processes (Sprint 3-4)
+    // PHASE 4: "Can Think" → Interrupts & Exceptions (Sprint 3)
+    // =========================================================================
+    //
+    // Boot the interrupt subsystem bottom-up:
+    //   1. GDT + TSS (segments for IDT, IST stacks for double fault)
+    //   2. IDT (exception handlers become active)
+    //   3. ACPI → MADT (discover LAPIC / I/O APIC topology)
+    //   4. Disable legacy 8259 PIC
+    //   5. LAPIC enable + timer calibration
+    //   6. I/O APIC routing
+    //   7. Enable interrupts (STI)
+    //   8. Test: arm one-shot LAPIC timer
     // =========================================================================
     kprintln!();
-    kprintln!("[init] Phase 4: Scheduler — NOT YET IMPLEMENTED");
-    kprintln!("[init]   TODO: GDT + TSS");
-    kprintln!("[init]   TODO: IDT + exception handlers");
-    kprintln!("[init]   TODO: LAPIC + I/O APIC");
-    kprintln!("[init]   TODO: Capability subsystem");
-    kprintln!("[init]   TODO: IPC subsystem");
-    kprintln!("[init]   TODO: Process + Thread management");
-    kprintln!("[init]   TODO: Tickless scheduler");
-    kprintln!("[init]   TODO: SMP init (start AP cores)");
+    kprintln!("[init] Phase 4: Interrupts & exceptions");
+
+    // --- 4a. GDT + TSS ---
+    // Must come before IDT — the IDT entries reference the GDT's kernel CS
+    // selector, and the TSS provides the IST1 stack for double fault.
+    arch::gdt::init();
+
+    // --- 4b. IDT ---
+    // Exception handlers (divide error, GPF, page fault, double fault) and
+    // IRQ stubs (vectors 32-47) are now armed.
+    // Note: interrupts are still disabled (IF=0). The IDT is loaded but
+    // no interrupts will fire until we STI.
+    arch::idt::init();
+
+    // --- 4c. Map ACPI regions into HHDM ---
+    // Limine base revision 3 only maps Usable/Bootloader/Kernel regions in
+    // the HHDM. ACPI Reclaimable, ACPI NVS, and Reserved regions (which
+    // contain RSDP, XSDT, MADT, and LAPIC/IOAPIC MMIO) are NOT mapped.
+    // We must map them before the ACPI parser can safely dereference them.
+    {
+        use memory::vmm::{self, PageTableFlags};
+
+        let cr3 = PhysAddr::new(arch::cpu::read_cr3() & !0xFFF);
+        let mut mapped_pages = 0u64;
+
+        for entry in memory_map.iter() {
+            let et = entry.entry_type;
+            // Only map ACPI Reclaimable and ACPI NVS — these hold RSDP/XSDT/MADT.
+            // Reserved regions include huge MMIO ranges (12+ TB) that we
+            // must NOT try to map page-by-page. LAPIC/IOAPIC MMIO regions
+            // are mapped on-demand by their respective drivers.
+            let needs_mapping =
+                et == limine::memory_map::EntryType::ACPI_RECLAIMABLE ||
+                et == limine::memory_map::EntryType::ACPI_NVS;
+
+            if !needs_mapping || entry.length > 16 * 1024 * 1024 {
+                continue;
+            }
+
+            // Map each 4K page in this region into the HHDM.
+            let base = entry.base & !0xFFF; // page-align down
+            let end = (entry.base + entry.length + 0xFFF) & !0xFFF; // page-align up
+            let mut phys = base;
+            while phys < end {
+                let pa = PhysAddr::new(phys);
+                let va = pa.to_virt();
+                // SAFETY: Single-core early boot, mapping read-only ACPI data.
+                let result = unsafe {
+                    vmm::map_page(
+                        cr3,
+                        va,
+                        pa,
+                        PageTableFlags::PRESENT | PageTableFlags::NO_EXECUTE,
+                    )
+                };
+                match result {
+                    Ok(()) => {
+                        // Flush TLB for this page
+                        arch::cpu::invlpg(va.as_u64());
+                        mapped_pages += 1;
+                    }
+                    Err(vmm::MapError::AlreadyMapped) => {
+                        // Already mapped (e.g., by Limine's huge pages) — fine
+                    }
+                    Err(vmm::MapError::HugePageConflict) => {
+                        // A parent is a huge page covering this range — fine
+                    }
+                    Err(e) => {
+                        kprintln!("[vmm] WARNING: Failed to map ACPI page @ {:#010X}: {:?}",
+                            phys, e);
+                    }
+                }
+                phys += 0x1000;
+            }
+        }
+
+        if mapped_pages > 0 {
+            kprintln!("[vmm] Mapped {} ACPI/Reserved pages into HHDM", mapped_pages);
+        }
+    }
+
+    // --- 4d. ACPI → MADT ---
+    // Parse the MADT to discover LAPIC and I/O APIC topology.
+    // XSDT is used exclusively for ACPI 2.0+ (64-bit pointers).
+    let madt_info = if let Some(rsdp) = boot::get_rsdp_address() {
+        let info = arch::acpi::parse_madt(rsdp);
+        kprintln!("[acpi] Summary: LAPIC @ {:#010X}, {} CPUs, {} I/O APICs, {} overrides",
+            info.lapic_addr, info.cpu_count, info.ioapic_count, info.override_count);
+        Some(info)
+    } else {
+        kprintln!("[acpi] WARNING: No RSDP found — cannot configure APIC");
+        None
+    };
+
+    // --- 4e. Map LAPIC / I/O APIC MMIO into HHDM ---
+    // Limine rev3 does not map device MMIO regions. The LAPIC (0xFEE00000)
+    // and I/O APIC(s) must be explicitly mapped with uncacheable attributes
+    // before their drivers can read/write the hardware registers.
+    if let Some(ref madt) = madt_info {
+        use memory::vmm::{self, PageTableFlags};
+
+        let cr3 = PhysAddr::new(arch::cpu::read_cr3() & !0xFFF);
+        let mmio_flags = PageTableFlags::PRESENT
+            | PageTableFlags::WRITABLE
+            | PageTableFlags::NO_CACHE
+            | PageTableFlags::WRITE_THROUGH
+            | PageTableFlags::NO_EXECUTE;
+
+        // Map the LAPIC page (typically 0xFEE00000, 4K is enough)
+        let lapic_phys = PhysAddr::new(madt.lapic_addr & !0xFFF);
+        let lapic_virt = lapic_phys.to_virt();
+        match unsafe { vmm::map_page(cr3, lapic_virt, lapic_phys, mmio_flags) } {
+            Ok(()) => {
+                arch::cpu::invlpg(lapic_virt.as_u64());
+                kprintln!("[vmm] Mapped LAPIC MMIO at {:#010X}", lapic_phys.as_u64());
+            }
+            Err(vmm::MapError::AlreadyMapped) | Err(vmm::MapError::HugePageConflict) => {}
+            Err(e) => kprintln!("[vmm] WARNING: Failed to map LAPIC MMIO: {:?}", e),
+        }
+
+        // Map each I/O APIC page
+        for i in 0..madt.ioapic_count {
+            let ioapic_phys = PhysAddr::new(madt.ioapics[i].address & !0xFFF);
+            let ioapic_virt = ioapic_phys.to_virt();
+            match unsafe { vmm::map_page(cr3, ioapic_virt, ioapic_phys, mmio_flags) } {
+                Ok(()) => {
+                    arch::cpu::invlpg(ioapic_virt.as_u64());
+                    kprintln!("[vmm] Mapped I/O APIC #{} MMIO at {:#010X}",
+                        madt.ioapics[i].id, ioapic_phys.as_u64());
+                }
+                Err(vmm::MapError::AlreadyMapped) | Err(vmm::MapError::HugePageConflict) => {}
+                Err(e) => kprintln!("[vmm] WARNING: Failed to map I/O APIC MMIO: {:?}", e),
+            }
+        }
+    }
+
+    // --- 4f. Disable legacy 8259 PIC ---
+    // Must happen before enabling I/O APIC to prevent spurious legacy IRQs.
+    arch::ioapic::disable_pic();
+
+    // --- 4e. LAPIC ---
+    // Enable the local APIC and calibrate the timer.
+    if let Some(ref madt) = madt_info {
+        arch::lapic::init(PhysAddr::new(madt.lapic_addr));
+        arch::lapic::calibrate_timer();
+    } else {
+        kprintln!("[lapic] SKIPPED — no MADT available");
+    }
+
+    // --- 4f. I/O APIC ---
+    // Initialize each I/O APIC from the MADT and route interrupts.
+    if let Some(ref madt) = madt_info {
+        for i in 0..madt.ioapic_count {
+            let ioapic = &madt.ioapics[i];
+            arch::ioapic::init(
+                PhysAddr::new(ioapic.address),
+                ioapic.gsi_base,
+                &madt.overrides[..madt.override_count],
+            );
+        }
+
+        // Enable COM1 serial interrupt (IRQ 4).
+        // Check if there's an ISO override for IRQ 4.
+        let com1_gsi = {
+            let mut gsi = 4u32; // Default: IRQ 4 → GSI 4
+            for j in 0..madt.override_count {
+                if madt.overrides[j].irq_source == 4 {
+                    gsi = madt.overrides[j].gsi;
+                    break;
+                }
+            }
+            gsi
+        };
+        arch::ioapic::enable_irq(com1_gsi, 36, 0);
+    }
+
+    // --- 4g. W^X kernel remap ---
+    // Lock down kernel page permissions now that all MMIO is mapped and
+    // the IDT is live (page faults are safe to debug).
+    memory::remap::enforce_wxn();
+
+    // --- 4h. Enable interrupts ---
+    // Everything is set up. STI allows the CPU to begin processing
+    // hardware interrupts.
+    unsafe { core::arch::asm!("sti"); }
+    kprintln!("[init] Interrupts ENABLED");
+
+    // --- 4h. Test: arm the LAPIC timer ---
+    // Fire a one-shot interrupt in 100ms to verify the whole chain works.
+    if madt_info.is_some() {
+        arch::lapic::set_timer_oneshot(100_000); // 100ms
+        kprintln!("[lapic] One-shot timer armed (100ms test)");
+    }
 
     // =========================================================================
     // PHASE 5: "Alive" → Userspace (Sprint 5-6)
     // =========================================================================
     kprintln!();
     kprintln!("[init] Phase 5: Userspace — NOT YET IMPLEMENTED");
+    kprintln!("[init]   TODO: Capability subsystem");
+    kprintln!("[init]   TODO: IPC subsystem");
+    kprintln!("[init]   TODO: Process + Thread management");
+    kprintln!("[init]   TODO: Tickless scheduler");
+    kprintln!("[init]   TODO: SMP init (start AP cores)");
     kprintln!("[init]   TODO: SYSCALL/SYSRET setup");
     kprintln!("[init]   TODO: ELF loader");
     kprintln!("[init]   TODO: Load init process");
@@ -397,22 +598,19 @@ extern "C" fn kmain() -> ! {
     // HALT
     // =========================================================================
     //
-    // For now, we've done all we can. The kernel has successfully:
-    //   ✓ Initialized serial output
-    //   ✓ Parsed boot information (memory map, kernel location)
-    //   ✓ Initialized framebuffer console
-    //   ✓ Displayed boot information
+    // We've initialized interrupts and the APIC subsystem.
+    // The LAPIC timer test should fire during the halt loop.
     //
-    // We halt the CPU in a loop. In future sprints, this is where we'd
-    // enter the scheduler loop instead.
+    // In future sprints, this becomes: scheduler::run()
     // =========================================================================
     kprintln!();
     kprintln!("==========================================================");
-    kprintln!("  Sprint 2 complete — memory management initialized!");
-    kprintln!("  PMM, kernel heap, VMM infrastructure ready.");
-    kprintln!("  Halting CPU. Next: Sprint 3 (interrupts + exceptions)");
+    kprintln!("  Sprint 3 complete — interrupts & exceptions initialized!");
+    kprintln!("  GDT+TSS, IDT, LAPIC, I/O APIC all operational.");
+    kprintln!("  Halting CPU. Next: Sprint 4 (scheduler + processes)");
     kprintln!("==========================================================");
 
-    // Halt forever. In the future, this becomes: scheduler::run()
+    // Halt forever. The HLT instruction yields until an interrupt fires.
+    // Our LAPIC timer interrupt should wake us briefly, then we halt again.
     arch::cpu::halt_forever()
 }
