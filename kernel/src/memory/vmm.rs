@@ -443,6 +443,74 @@ pub unsafe fn map_page(
     Ok(())
 }
 
+/// Maps a 2 MiB virtual region to a 2 MiB-aligned physical frame using a
+/// huge page PD entry. This skips the PT level entirely.
+///
+/// Used for the HHDM: mapping 512 MB of RAM needs only 256 PD entries
+/// instead of 131,072 PT entries.
+///
+/// # Parameters
+/// - `pml4_phys`: Root PML4 physical address.
+/// - `virt`: Virtual address (must be 2 MiB aligned).
+/// - `phys`: Physical address (must be 2 MiB aligned).
+/// - `flags`: Leaf flags. `HUGE_PAGE` is ORed automatically.
+///
+/// # Safety
+/// Same as `map_page`.
+pub unsafe fn map_huge_page_2m(
+    pml4_phys: PhysAddr,
+    virt: VirtAddr,
+    phys: PhysAddr,
+    flags: PageTableFlags,
+) -> Result<(), MapError> {
+    debug_assert!(
+        virt.as_u64() & 0x1F_FFFF == 0,
+        "VMM: virt address not 2M-aligned"
+    );
+    debug_assert!(
+        phys.as_u64() & 0x1F_FFFF == 0,
+        "VMM: phys address not 2M-aligned"
+    );
+
+    let indices = virt.page_table_indices();
+
+    let inter_flags = if flags.contains(PageTableFlags::USER) {
+        PageTableFlags::INTERMEDIATE_USER
+    } else {
+        PageTableFlags::INTERMEDIATE
+    };
+
+    // Walk PML4 → PDPT
+    let pml4 = unsafe { &mut *pml4_phys.to_virt().as_mut_ptr::<PageTable>() };
+    let pdpt_phys = get_or_create_next_table(
+        &mut pml4[indices[3] as usize],
+        inter_flags,
+    )?;
+
+    // Walk PDPT → PD
+    let pdpt = unsafe { &mut *pdpt_phys.to_virt().as_mut_ptr::<PageTable>() };
+    let pdpt_entry = &pdpt[indices[2] as usize];
+    if pdpt_entry.is_present() && pdpt_entry.is_huge() {
+        return Err(MapError::HugePageConflict);
+    }
+    let pd_phys = get_or_create_next_table(
+        &mut pdpt[indices[2] as usize],
+        inter_flags,
+    )?;
+
+    // Set the PD entry as a 2 MiB huge page (leaf at level 2)
+    let pd = unsafe { &mut *pd_phys.to_virt().as_mut_ptr::<PageTable>() };
+    let pd_entry = &mut pd[indices[1] as usize];
+
+    if pd_entry.is_present() {
+        return Err(MapError::AlreadyMapped);
+    }
+
+    // OR in HUGE_PAGE flag to mark this as a 2M leaf
+    pd_entry.set(phys, flags.union(PageTableFlags::HUGE_PAGE));
+    Ok(())
+}
+
 /// Unmaps a 4 KiB virtual page, returning the physical frame it was mapped to.
 ///
 /// Does NOT free the physical frame — the caller decides what to do with it
