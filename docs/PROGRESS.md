@@ -108,24 +108,26 @@
 ### Sprint 4 — Processes & Scheduler
 > *Run multiple threads of execution, share the CPU fairly.*
 
-- [ ] **Process & Thread structures**
-  - [ ] Process: address space, capability table, thread list
-  - [ ] Thread: kernel stack, saved registers, state (Ready/Running/Blocked/Dead)
-  - [ ] Per-thread kernel stack allocation
-- [ ] **Context Switching**
-  - [ ] Save/restore registers (GPRs, RSP, RIP, RFLAGS, FS/GS base)
-  - [ ] Switch page tables (CR3)
-  - [ ] FPU/SSE state lazy save/restore (if needed by userspace)
-- [ ] **Tickless Scheduler**
-  - [ ] Per-core run queues with priority levels
-  - [ ] Work-stealing across cores
-  - [ ] `scheduler::yield_now()`, `scheduler::block()`, `scheduler::wake()`
-  - [ ] Idle thread per core (halts CPU when nothing to run)
-- [ ] **SMP Initialization**
-  - [ ] Parse MADT for AP (Application Processor) entries
-  - [ ] Send INIT/SIPI to boot AP cores
-  - [ ] Per-core GDT, IDT, TSS, LAPIC setup
-  - [ ] Per-core scheduler run queue
+- [x] **Pristine PML4 + CR3 Swap** (Sprint 3 debt fixed)
+  - [x] Fresh page tables replacing Limine's contaminated ones
+  - [x] HHDM: 2M huge pages, kernel W^X 4K pages, MMIO PCD=1/PWT=0
+  - [x] `KERNEL_PML4` AtomicU64 for AP access
+- [x] **CPU-Local Storage (IA32_GS_BASE)**
+  - [x] CpuLocal struct per core (LAPIC ID, core index, thread pointers)
+  - [x] MSR 0xC0000101 setup on BSP + all APs
+- [x] **Thread Control Block**
+  - [x] TCB: saved RSP, CR3, 16 KiB kernel stack, state machine
+  - [x] Synthetic stack frame for switch_context compatibility
+- [x] **Context Switch Assembly**
+  - [x] `switch_context` naked asm (push/pop callee-saved, swap RSP)
+  - [x] `thread_entry_trampoline` with `sti` (IF re-enable for preemption)
+- [x] **Scheduler Framework**
+  - [x] RunQueue (VecDeque-based round-robin), spawn(), test threads
+  - [ ] Wire LAPIC timer ISR → schedule() (preemptive switching)
+- [x] **SMP via Limine MpRequest**
+  - [x] Naked AP trampoline with immediate CR3 sync
+  - [x] Per-AP GDT/IDT/TSS/LAPIC/GS_BASE
+  - [x] All 3 APs online (4 cores total, verified in QEMU)
 
 ---
 
