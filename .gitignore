@@ -1,6 +1,9 @@
 # Build artifacts (cargo output)
 /target/
 
+# Agent
+.github/copilot-instructions.md
+
 # Editor files
 *.swp
 *.swo
