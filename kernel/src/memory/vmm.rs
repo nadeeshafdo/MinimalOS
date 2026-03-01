@@ -586,6 +586,167 @@ pub unsafe fn flush_all() {
 }
 
 // =============================================================================
+// Page table modification (remap / split)
+// =============================================================================
+
+/// Error returned when a remap operation fails.
+#[derive(Debug)]
+pub enum RemapError {
+    /// The virtual address is not mapped at all.
+    NotMapped,
+    /// A 1 GiB huge page covers this address — splitting not supported.
+    GigaPageConflict,
+    /// A 2 MiB huge page covers this address — must split first.
+    HugePageNeedsSplit,
+    /// Out of physical memory when allocating a new page table for splitting.
+    OutOfMemory,
+}
+
+/// Changes the permission flags on an existing 4 KiB page mapping.
+///
+/// Walks the page table hierarchy to the leaf PT entry, then overwrites
+/// the flags while preserving the physical address. Does NOT allocate
+/// any new page tables — the mapping must already exist as a 4 KiB page.
+///
+/// # Parameters
+/// - `pml4_phys`: Physical address of the root PML4 table.
+/// - `virt`: The virtual address to remap (must be page-aligned).
+/// - `new_flags`: The new permission flags to apply.
+///
+/// # Returns
+/// `Ok(())` on success.
+/// `Err(RemapError)` if the page is not mapped or is a huge page.
+///
+/// # Safety
+/// - `pml4_phys` must point to a valid PML4 table accessible via HHDM.
+/// - The caller must ensure the new flags don't break currently-executing code
+///   (e.g., don't remove PRESENT from the page containing this function).
+/// - Caller must flush the TLB for `virt` after this call.
+pub unsafe fn remap_page(
+    pml4_phys: PhysAddr,
+    virt: VirtAddr,
+    new_flags: PageTableFlags,
+) -> Result<(), RemapError> {
+    debug_assert!(virt.is_page_aligned(), "VMM: virt address not page-aligned");
+
+    let indices = virt.page_table_indices();
+
+    // Walk PML4
+    let pml4 = unsafe { &*pml4_phys.to_virt().as_ptr::<PageTable>() };
+    let pml4_entry = &pml4[indices[3] as usize];
+    if !pml4_entry.is_present() {
+        return Err(RemapError::NotMapped);
+    }
+
+    // Walk PDPT
+    let pdpt = unsafe { &*pml4_entry.addr().to_virt().as_ptr::<PageTable>() };
+    let pdpt_entry = &pdpt[indices[2] as usize];
+    if !pdpt_entry.is_present() {
+        return Err(RemapError::NotMapped);
+    }
+    if pdpt_entry.is_huge() {
+        return Err(RemapError::GigaPageConflict);
+    }
+
+    // Walk PD
+    let pd = unsafe { &*pdpt_entry.addr().to_virt().as_ptr::<PageTable>() };
+    let pd_entry = &pd[indices[1] as usize];
+    if !pd_entry.is_present() {
+        return Err(RemapError::NotMapped);
+    }
+    if pd_entry.is_huge() {
+        return Err(RemapError::HugePageNeedsSplit);
+    }
+
+    // Walk PT — leaf entry
+    let pt = unsafe { &mut *pd_entry.addr().to_virt().as_mut_ptr::<PageTable>() };
+    let leaf = &mut pt[indices[0] as usize];
+    if !leaf.is_present() {
+        return Err(RemapError::NotMapped);
+    }
+
+    // Preserve the physical address, update only the flags.
+    let phys = leaf.addr();
+    leaf.set(phys, new_flags);
+    Ok(())
+}
+
+/// Splits a 2 MiB huge page into 512 individual 4 KiB page table entries.
+///
+/// This is required for W^X enforcement when section boundaries fall within a
+/// 2 MiB page: we need different permissions for each 4 KiB page, which is
+/// impossible with a single 2 MiB PD entry.
+///
+/// # Algorithm
+/// 1. Read the 2 MiB PD entry (huge bit set)
+/// 2. Allocate a new 4 KiB page table (PT) from PMM
+/// 3. Fill 512 entries, each pointing to consecutive 4 KiB frames within the
+///    original 2 MiB range, inheriting the original flags (minus HUGE_PAGE)
+/// 4. Replace the PD entry to point to the new PT (clear HUGE_PAGE)
+///
+/// # Parameters
+/// - `pml4_phys`: Physical address of the root PML4 table.
+/// - `virt`: Any virtual address within the 2 MiB huge page to split.
+///
+/// # Safety
+/// - `pml4_phys` must point to a valid PML4 table accessible via HHDM.
+/// - Caller must flush TLB after this call.
+pub unsafe fn split_huge_page(
+    pml4_phys: PhysAddr,
+    virt: VirtAddr,
+) -> Result<(), RemapError> {
+    let indices = virt.page_table_indices();
+
+    // Walk to the PD entry
+    let pml4 = unsafe { &*pml4_phys.to_virt().as_ptr::<PageTable>() };
+    let pml4_entry = &pml4[indices[3] as usize];
+    if !pml4_entry.is_present() {
+        return Err(RemapError::NotMapped);
+    }
+
+    let pdpt = unsafe { &*pml4_entry.addr().to_virt().as_ptr::<PageTable>() };
+    let pdpt_entry = &pdpt[indices[2] as usize];
+    if !pdpt_entry.is_present() {
+        return Err(RemapError::NotMapped);
+    }
+    if pdpt_entry.is_huge() {
+        return Err(RemapError::GigaPageConflict);
+    }
+
+    let pd = unsafe { &mut *pdpt_entry.addr().to_virt().as_mut_ptr::<PageTable>() };
+    let pd_entry = &mut pd[indices[1] as usize];
+    if !pd_entry.is_present() {
+        return Err(RemapError::NotMapped);
+    }
+    if !pd_entry.is_huge() {
+        // Already a non-huge entry — already split or 4K-mapped. Nothing to do.
+        return Ok(());
+    }
+
+    // Read the original 2 MiB entry
+    let huge_phys_base = pd_entry.addr().as_u64() & !0x1F_FFFF; // 2 MiB aligned
+    let orig_flags = pd_entry.flags();
+    // Leaf flags = original flags minus HUGE_PAGE
+    let leaf_flags = orig_flags.difference(PageTableFlags::HUGE_PAGE);
+
+    // Allocate a new PT
+    let new_pt_phys = pmm::alloc_frame_zeroed().ok_or(RemapError::OutOfMemory)?;
+    let new_pt = unsafe { &mut *new_pt_phys.to_virt().as_mut_ptr::<PageTable>() };
+
+    // Fill 512 entries: each maps a 4 KiB frame within the original 2 MiB range
+    for i in 0..512u64 {
+        let frame_phys = PhysAddr::new(huge_phys_base + i * 4096);
+        new_pt[i as usize].set(frame_phys, leaf_flags);
+    }
+
+    // Replace the PD entry: point to the new PT, PRESENT + WRITABLE (intermediate)
+    // The intermediate flags must be maximally permissive — restrictions are at the leaf.
+    pd_entry.set(new_pt_phys, PageTableFlags::INTERMEDIATE);
+
+    Ok(())
+}
+
+// =============================================================================
 // Internal helpers
 // =============================================================================
 
