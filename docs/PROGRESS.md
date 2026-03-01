@@ -61,8 +61,8 @@
   - [x] `vmm::translate(pml4, virt)` — virtual-to-physical translation
   - [x] `vmm::new_table()` — allocate zeroed page table from PMM
   - [x] TLB flush helpers (`flush()` single page, `flush_all()`)
-  - [ ] Kernel higher-half remap (deferred to Sprint 3 — needs IDT for debugging)
-  - [ ] W^X enforcement via remap (deferred to Sprint 3)
+  - [x] Kernel higher-half remap (completed in Sprint 3)
+  - [x] W^X enforcement via remap (completed in Sprint 3)
 - [x] **Kernel Heap Allocator**
   - [x] Linked-list free-list allocator with coalescing
   - [x] `GlobalAlloc` implementation with spinlock
@@ -74,25 +74,34 @@
 
 ---
 
-### Sprint 3 — Interrupts & Exceptions
+### Sprint 3 — Interrupts & Exceptions ✅
 > *Handle CPU exceptions and hardware interrupts safely.*
 
-- [ ] **GDT (Global Descriptor Table)**
-  - [ ] Kernel code/data segments (Ring 0)
-  - [ ] User code/data segments (Ring 3)
-  - [ ] TSS (Task State Segment) — per-core, with IST stacks
-- [ ] **IDT (Interrupt Descriptor Table)**
-  - [ ] Exception handlers (0–31): divide error, page fault, GPF, double fault, etc.
-  - [ ] Page fault handler with detailed diagnostics (CR2 + error code)
-  - [ ] Double fault handler on separate IST stack
-- [ ] **LAPIC (Local APIC)**
-  - [ ] LAPIC timer calibration using PIT or TSC
-  - [ ] One-shot timer mode for tickless scheduling
-  - [ ] Spurious interrupt handler
-- [ ] **I/O APIC**
-  - [ ] Parse MADT (ACPI table) for I/O APIC configuration
-  - [ ] IRQ routing table
-  - [ ] Redirect legacy IRQs (keyboard, serial, etc.)
+- [x] **GDT (Global Descriptor Table)**
+  - [x] Kernel code/data segments (Ring 0)
+  - [x] User code/data segments (Ring 3) — SYSRET-compatible layout
+  - [x] TSS (Task State Segment) — IST1 stack with guard page
+- [x] **IDT (Interrupt Descriptor Table)**
+  - [x] 15 exception handlers (0–31): divide error, page fault, GPF, double fault, etc.
+  - [x] Page fault handler with detailed diagnostics (CR2 + error code decode)
+  - [x] Double fault handler on separate IST1 stack
+  - [x] 16 IRQ stubs (vectors 32–47) + spurious @255
+  - [x] swapgs + System V ABI compliant naked asm stubs
+- [x] **ACPI Parser**
+  - [x] XSDT-first MADT parser (64-bit physical pointers)
+  - [x] Limine rev3 HHDM gap fix — maps ACPI Reclaimable/NVS pages
+- [x] **LAPIC (Local APIC)**
+  - [x] LAPIC timer calibration (CPUID 0x15 + PIT fallback)
+  - [x] One-shot timer mode for tickless scheduling
+  - [x] Spurious interrupt handler (vector 255)
+- [x] **I/O APIC**
+  - [x] Parse MADT for I/O APIC configuration
+  - [x] IRQ routing with polarity/trigger override support
+  - [x] Disable legacy 8259 PIC, redirect IRQs (COM1 serial)
+- [x] **W^X Kernel Remap** (Sprint 2 debt)
+  - [x] In-place page table permission update with split_huge_page support
+  - [x] .text=R+X, .rodata=R, .data/.bss=R+W+NX
+- [x] Verified: full QEMU boot through Phase 4, all subsystems operational
 
 ---
 
@@ -202,4 +211,4 @@ make help         # Show all targets
 
 ---
 
-*Last updated: 2026-02-24*
+*Last updated: 2026-03-01*
