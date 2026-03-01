@@ -33,4 +33,4 @@ pub mod gdt;
 pub mod idt;
 pub mod lapic;
 pub mod ioapic;
-
+pub mod smp;
