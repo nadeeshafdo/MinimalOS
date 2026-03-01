@@ -28,4 +28,9 @@
 pub mod serial;
 pub mod cpu;
 pub mod boot;
+pub mod acpi;
+pub mod gdt;
+pub mod idt;
+pub mod lapic;
+pub mod ioapic;
 
