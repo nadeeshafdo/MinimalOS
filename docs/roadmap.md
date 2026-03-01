@@ -25,7 +25,7 @@ Development plan from bare-metal boot to self-hosting OS.
 |:-------|:------|:-------|:------------|
 | 1 | [Boot & Serial]({% link subsystems/boot.md %}) | ✅ Complete | Toolchain, bootloader, serial UART, framebuffer console |
 | 2 | [Memory]({% link subsystems/memory.md %}) | ✅ Complete | PMM bitmap allocator, VMM page tables, kernel heap |
-| 3 | [Interrupts]({% link subsystems/interrupts.md %}) | 🔲 Planned | GDT/IDT, LAPIC, I/O APIC, exception handlers |
+| 3 | [Interrupts]({% link subsystems/interrupts.md %}) | ✅ Complete | GDT/TSS, IDT, ACPI/MADT, LAPIC, I/O APIC, W^X remap |
 | 4 | [Scheduler]({% link subsystems/scheduler.md %}) | 🔲 Planned | Processes, threads, tickless scheduler, SMP |
 | 5 | [Capabilities]({% link subsystems/capabilities.md %}) | 🔲 Planned | Capability tables, IPC channels, memory grants |
 | 6 | [Syscalls]({% link subsystems/syscalls.md %}) | 🔲 Planned | SYSCALL/SYSRET, ELF loader, Ring 3 entry |
@@ -61,23 +61,24 @@ Development plan from bare-metal boot to self-hosting OS.
 > *Teach the kernel to manage physical and virtual memory.*
 
 - [x] **Physical Memory Manager** — bitmap allocator (alloc, free, zeroed, contiguous)
-- [x] **Virtual Memory Manager** — 4-level page table infrastructure (map, unmap, translate)
+- [x] **VMM page table infrastructure** (map, unmap, translate)
 - [x] **Kernel Heap** — linked-list allocator with coalescing, enables `alloc` crate
 - [x] **Linker script fix** — `.got` section handling
-- [ ] Kernel higher-half remap (deferred to Sprint 3)
-- [ ] W^X enforcement via remap (deferred to Sprint 3)
+- [x] Kernel higher-half remap (completed in Sprint 3)
+- [x] W^X enforcement via remap (completed in Sprint 3)
 
 ---
 
-## Sprint 3 — Interrupts & Exceptions 🔲
+## Sprint 3 — Interrupts & Exceptions ✅
 
 > *Handle CPU exceptions and hardware interrupts safely.*
 
-- [ ] **GDT** — kernel/user segments, per-core TSS with IST stacks
-- [ ] **IDT** — exception handlers (divide error, page fault, GPF, double fault)
-- [ ] **Page fault handler** — detailed diagnostics (CR2 + error code)
-- [ ] **LAPIC** — timer calibration, one-shot mode, spurious handler
-- [ ] **I/O APIC** — MADT parsing, IRQ routing, legacy redirect
+- [x] **GDT** — kernel/user segments, TSS with IST1 guard page, SYSRET layout
+- [x] **IDT** — 15 exception handlers + 16 IRQ stubs + spurious @255 (swapgs + SysV ABI)
+- [x] **ACPI** — XSDT-first MADT parser, Limine rev3 HHDM gap fix
+- [x] **LAPIC** — CPUID 0x15 + PIT calibration, one-shot mode, spurious handler
+- [x] **I/O APIC** — MADT parsing, IRQ routing, legacy PIC disable
+- [x] **W^X remap** — in-place page table update (.text=R+X, .rodata=R, .data/.bss=R+W+NX)
 
 ---
 
