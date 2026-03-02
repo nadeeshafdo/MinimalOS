@@ -26,6 +26,14 @@ const IA32_GS_BASE: u32 = 0xC000_0101;
 ///
 /// The `self_ptr` field at offset 0 allows fast `gs:0` access to verify
 /// the GS base is correctly set.
+///
+/// ## Field offsets (used by syscall_entry naked assembly)
+///   - `user_rsp_scratch`:  offset 48  — temp save for user RSP during SYSCALL entry
+///   - `kernel_stack_top`:  offset 56  — kernel stack top for SYSCALL RSP swap
+///
+/// CRITICAL: Changing field order or inserting fields before these two will
+/// break the hardcoded offsets in `arch::x86_64::syscall::syscall_entry`.
+/// Always verify with the compile-time assertions below after any modification.
 #[repr(C)]
 pub struct CpuLocal {
     /// Pointer to self — allows `mov rax, gs:[0]` to get the CpuLocal address.
@@ -42,7 +50,28 @@ pub struct CpuLocal {
     pub run_queue: *mut super::scheduler::RunQueue,
     /// Whether this core is fully initialized and running the scheduler.
     pub online: bool,
+
+    // ─── Sprint 6: Userspace support ────────────────────────────────────────
+    // These fields are accessed by naked assembly via gs:[offset].
+    // Their offsets are hardcoded — see compile-time assertions below.
+
+    /// Scratch space for saving user RSP during SYSCALL entry.
+    /// Between `swapgs` and kernel stack load, we have no free register to hold
+    /// the user RSP. This field provides a per-core save slot.
+    pub user_rsp_scratch: u64,
+
+    /// Kernel stack top for the currently running thread.
+    /// SYSCALL entry loads RSP from this field (the CPU does NOT use TSS.rsp0
+    /// for SYSCALL — only for interrupts). Updated on every context switch.
+    pub kernel_stack_top: u64,
 }
+
+// Compile-time assertions: verify naked assembly offset assumptions.
+// If these fail, update the constants in arch::x86_64::syscall.
+const _: () = {
+    assert!(core::mem::offset_of!(CpuLocal, user_rsp_scratch) == 48);
+    assert!(core::mem::offset_of!(CpuLocal, kernel_stack_top) == 56);
+};
 
 // SAFETY: CpuLocal is only accessed from the core it belongs to (via gs:).
 // Inter-core access requires explicit synchronization via atomics.
@@ -60,6 +89,8 @@ impl CpuLocal {
             idle_thread: ptr::null_mut(),
             run_queue: ptr::null_mut(),
             online: false,
+            user_rsp_scratch: 0,
+            kernel_stack_top: 0,
         }
     }
 
