@@ -17,6 +17,8 @@
 
 use alloc::boxed::Box;
 
+use crate::cap::cnode::CNode;
+use crate::ipc::message::IpcMessage;
 use crate::kprintln;
 use crate::memory::address::PAGE_SIZE;
 use crate::memory::pmm;
@@ -37,8 +39,12 @@ pub enum ThreadState {
     Ready,
     /// Currently executing on a core.
     Running,
-    /// Waiting for an event (IPC, timer, I/O).
-    Blocked,
+    /// Blocked on an IPC endpoint, waiting for a receiver.
+    /// Ownership of the Box<Thread> is held by the Endpoint.
+    BlockedSend,
+    /// Blocked on an IPC endpoint, waiting for a sender.
+    /// Ownership of the Box<Thread> is held by the Endpoint.
+    BlockedRecv,
     /// Terminated, waiting for cleanup.
     Dead,
 }
@@ -61,6 +67,16 @@ pub struct Thread {
     /// Name for debugging.
     pub name: [u8; 32],
     pub name_len: usize,
+
+    /// Per-thread capability table (64 slots).
+    /// This is the thread's security context — all access to kernel objects
+    /// is mediated through capabilities stored here.
+    pub cnode: CNode,
+
+    /// IPC message buffer for send/recv.
+    /// Senders write their message here before blocking (slowpath),
+    /// or the kernel copies directly between buffers (fastpath).
+    pub ipc_buffer: IpcMessage,
 }
 
 impl Thread {
@@ -128,6 +144,8 @@ impl Thread {
             kernel_stack_size: stack_size,
             name: name_buf,
             name_len: copy_len,
+            cnode: CNode::new(),
+            ipc_buffer: IpcMessage::EMPTY,
         });
 
         kprintln!("[thread] Created thread {} '{}' (stack={:#018X}—{:#018X}, rsp={:#018X})",
