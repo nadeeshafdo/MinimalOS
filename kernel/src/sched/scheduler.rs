@@ -77,6 +77,16 @@ pub fn spawn(name: &str, entry: extern "C" fn(u64), arg: u64) {
     BOOT_QUEUE.lock().push(thread);
 }
 
+/// Enqueues a pre-built thread (e.g., from syscall::spawn_user) into the boot queue.
+///
+/// The thread must be fully configured (CNode capabilities, user_rip, user_rsp)
+/// before calling this. Used for user threads that need custom setup before spawning.
+pub fn spawn_thread(thread: Box<Thread>) {
+    kprintln!("[sched] Spawned thread {} '{}' (pre-built)",
+        thread.id, thread.name_str());
+    BOOT_QUEUE.lock().push(thread);
+}
+
 /// Initializes the scheduler on the BSP.
 ///
 /// 1. Allocates a RunQueue for the BSP's CpuLocal
@@ -109,6 +119,8 @@ pub fn init() {
         name_len: 8,
         cnode: CNode::new(),
         ipc_buffer: IpcMessage::EMPTY,
+        user_rip: 0,
+        user_rsp: 0,
     });
     // Convert to raw pointer via the canonical API — Box::into_raw.
     // schedule() will later reconstruct via Box::from_raw to requeue.
@@ -244,6 +256,19 @@ pub unsafe fn schedule() {
 
     // Install next thread as current and re-arm the timer
     cpu_local.current_thread = next_ptr;
+
+    // Update kernel stack pointers for Ring 3 support.
+    // TSS.rsp[0]: loaded by CPU on Ring 3 → Ring 0 interrupt/exception.
+    // CpuLocal.kernel_stack_top: loaded by syscall_entry on SYSCALL.
+    // Both must point to the TOP of the next thread's kernel stack.
+    let kstack_base = unsafe { (*next_ptr).kernel_stack_base };
+    let kstack_size = unsafe { (*next_ptr).kernel_stack_size };
+    if kstack_base != 0 {
+        let stack_top = kstack_base + kstack_size as u64;
+        crate::arch::gdt::set_rsp0(stack_top);
+        cpu_local.kernel_stack_top = stack_top;
+    }
+
     crate::arch::lapic::set_timer_oneshot(10_000);
 
     // Execute the hardware context switch.
