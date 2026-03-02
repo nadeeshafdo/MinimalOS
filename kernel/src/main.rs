@@ -601,41 +601,179 @@ extern "C" fn kmain() -> ! {
         let _ = alloc::boxed::Box::into_raw(bsp_local);
     }
 
-    // --- 5b. Create IPC test endpoint ---
+    // =========================================================================
+    // PHASE 6: Userspace & Syscalls (Sprint 6)
+    // =========================================================================
+    //
+    // Ring 0 → Ring 3 privilege transition. We push execution down into
+    // Ring 3 where the CPU will trap and fault on any unauthorized action,
+    // forcing user threads to use SYSCALL to request IPC through capabilities.
+    //
+    //   1. Configure SYSCALL MSRs (STAR, LSTAR, FMASK)
+    //   2. Create IPC endpoint + register in syscall table
+    //   3. Map user code + stack pages at user-accessible addresses
+    //   4. Spawn kernel receiver + user sender threads
+    //   5. User sender executes SYSCALL → capability validation → IPC
+    //
+    // =========================================================================
+    kprintln!();
+    kprintln!("[init] Phase 6: Userspace & Syscalls");
+
+    // --- 6a. SYSCALL MSR initialization ---
+    // Configure IA32_STAR, IA32_LSTAR, IA32_FMASK on the BSP.
+    // APs will call this in ap_rust_entry (smp.rs).
+    arch::syscall::init();
+
+    // --- 6b. Create IPC endpoint + register in syscall table ---
+    // Endpoint ID=1, used by both the kernel receiver and user sender.
     let test_ep = alloc::boxed::Box::new(ipc::endpoint::Endpoint::new(1));
     let test_ep_ptr = alloc::boxed::Box::into_raw(test_ep);
-    // Store the endpoint pointer in a static so test threads can find it.
-    // SAFETY: Written once here before threads run, read-only after.
+    // Register in the global endpoint table so syscall_dispatch can find it.
+    unsafe { arch::syscall::register_endpoint(test_ep_ptr); }
+    // Also keep a raw pointer for the kernel receiver thread.
     unsafe { IPC_TEST_ENDPOINT = test_ep_ptr; }
 
-    // --- 5c. Spawn test threads ---
-    sched::scheduler::spawn("ipc-recv", ipc_test_receiver, 0);
-    sched::scheduler::spawn("ipc-send", ipc_test_sender, 0);
+    // --- 6c. Map user code page ---
+    // Allocate a physical frame, map it at a user-accessible virtual address,
+    // and write the user test program (raw x86_64 machine code) into it.
+    let user_code_virt = {
+        use memory::vmm::{self, PageTableFlags};
 
-    // --- 5d. Initialize scheduler ---
+        let code_phys = memory::pmm::alloc_frame_zeroed()
+            .expect("[init] FATAL: cannot allocate user code page");
+        let code_virt = memory::address::VirtAddr::new(0x0000_0000_0040_0000);
+        let cr3 = memory::address::PhysAddr::new(arch::cpu::read_cr3() & !0xFFF);
+
+        // Map with USER + PRESENT (executable, not writable).
+        // NX is intentionally NOT set — this is a code page.
+        unsafe {
+            vmm::map_page(cr3, code_virt, code_phys,
+                PageTableFlags::PRESENT | PageTableFlags::USER,
+            ).expect("[init] FATAL: cannot map user code page");
+            arch::cpu::invlpg(code_virt.as_u64());
+        }
+
+        // Write user test program directly to the mapped page via HHDM.
+        //
+        // User program: sends 2 IPC messages via SYSCALL, then loops forever.
+        //
+        //   mov rax, 1          ; SYS_SEND
+        //   mov rdi, 0          ; CNode slot 0 (endpoint capability)
+        //   mov rsi, 0xBEEF     ; message label
+        //   mov rdx, 0x1111     ; data[0]
+        //   mov r10, 0x2222     ; data[1]
+        //   syscall
+        //
+        //   mov rax, 1          ; SYS_SEND (second message)
+        //   mov rdi, 0          ; slot 0
+        //   mov rsi, 0xCAFE     ; label
+        //   mov rdx, 0x3333     ; data[0]
+        //   mov r10, 0x4444     ; data[1]
+        //   syscall
+        //
+        //   jmp $               ; infinite loop (can't HLT in Ring 3)
+        //
+        let user_code_bytes: &[u8] = &[
+            // --- Message 1: label=0xBEEF, data=[0x1111, 0x2222] ---
+            0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,  // mov rax, 1
+            0x48, 0xC7, 0xC7, 0x00, 0x00, 0x00, 0x00,  // mov rdi, 0
+            0x48, 0xC7, 0xC6, 0xEF, 0xBE, 0x00, 0x00,  // mov rsi, 0xBEEF
+            0x48, 0xC7, 0xC2, 0x11, 0x11, 0x00, 0x00,  // mov rdx, 0x1111
+            0x49, 0xC7, 0xC2, 0x22, 0x22, 0x00, 0x00,  // mov r10, 0x2222
+            0x0F, 0x05,                                  // syscall
+            // --- Message 2: label=0xCAFE, data=[0x3333, 0x4444] ---
+            0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,  // mov rax, 1
+            0x48, 0xC7, 0xC7, 0x00, 0x00, 0x00, 0x00,  // mov rdi, 0
+            0x48, 0xC7, 0xC6, 0xFE, 0xCA, 0x00, 0x00,  // mov rsi, 0xCAFE
+            0x48, 0xC7, 0xC2, 0x33, 0x33, 0x00, 0x00,  // mov rdx, 0x3333
+            0x49, 0xC7, 0xC2, 0x44, 0x44, 0x00, 0x00,  // mov r10, 0x4444
+            0x0F, 0x05,                                  // syscall
+            // --- Done: loop forever ---
+            0xEB, 0xFE,                                  // jmp $ (infinite loop)
+        ];
+
+        // Copy code to the physical frame (via HHDM virtual mapping)
+        let code_dst = code_phys.to_virt().as_u64() as *mut u8;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                user_code_bytes.as_ptr(),
+                code_dst,
+                user_code_bytes.len(),
+            );
+        }
+
+        kprintln!("[init] User code page: {:#018X} → phys {:#010X} ({} bytes)",
+            code_virt.as_u64(), code_phys.as_u64(), user_code_bytes.len());
+
+        code_virt.as_u64()
+    };
+
+    // --- 6d. Map user stack page ---
+    let user_stack_top = {
+        use memory::vmm::{self, PageTableFlags};
+
+        let stack_phys = memory::pmm::alloc_frame_zeroed()
+            .expect("[init] FATAL: cannot allocate user stack page");
+        let stack_virt = memory::address::VirtAddr::new(0x0000_0000_0080_0000);
+        let cr3 = memory::address::PhysAddr::new(arch::cpu::read_cr3() & !0xFFF);
+
+        // Map with USER + WRITABLE + NO_EXECUTE (data page, not code).
+        unsafe {
+            vmm::map_page(cr3, stack_virt, stack_phys,
+                PageTableFlags::PRESENT | PageTableFlags::WRITABLE
+                    | PageTableFlags::USER | PageTableFlags::NO_EXECUTE,
+            ).expect("[init] FATAL: cannot map user stack page");
+            arch::cpu::invlpg(stack_virt.as_u64());
+        }
+
+        // Stack grows down. RSP starts at the top of the page.
+        let top = stack_virt.as_u64() + memory::address::PAGE_SIZE as u64;
+        kprintln!("[init] User stack page: {:#018X} — {:#018X} (RSP={:#018X})",
+            stack_virt.as_u64(), top, top);
+        top
+    };
+
+    // --- 6e. Spawn kernel receiver thread ---
+    // This kernel thread uses the proven ep.recv() to receive messages
+    // sent by the Ring 3 user thread. Proves the full path:
+    //   Ring 3 → SYSCALL → capability validation → IPC send → kernel recv
+    sched::scheduler::spawn("kern-recv", userspace_test_receiver, 0);
+
+    // --- 6f. Create user sender thread with capabilities ---
+    {
+        use cap::cnode::{CapObject, CapRights, Capability};
+
+        let mut user_sender = arch::syscall::spawn_user(
+            "user-send", user_code_virt, user_stack_top);
+
+        // Install Endpoint capability at CNode slot 0.
+        // The user code references slot 0 in its SYSCALL (mov rdi, 0).
+        // WRITE right allows SYS_SEND on this endpoint.
+        user_sender.cnode.insert_at(0, Capability::new(
+            CapObject::Endpoint { id: 1 },
+            CapRights::WRITE,
+        )).expect("[init] FATAL: cannot install endpoint capability");
+
+        kprintln!("[init] User sender: CNode slot 0 = Endpoint(id=1, WRITE)");
+        sched::scheduler::spawn_thread(user_sender);
+    }
+
+    // --- 6g. Initialize scheduler ---
+    // Drains BOOT_QUEUE into BSP run queue, arms LAPIC timer.
     sched::scheduler::init();
 
-    // --- 5e. Start Application Processors ---
+    // --- 6h. Start Application Processors ---
     arch::smp::init();
 
     // =========================================================================
     // BSP IDLE LOOP
     // =========================================================================
-    //
-    // The BSP "main" thread is now a scheduled entity. When the LAPIC timer
-    // fires, schedule() will preempt us and run test threads. When we get
-    // scheduled back, we just hlt again.
-    //
-    // CRITICAL: Use `sti; hlt` — NOT halt_forever().
-    // halt_forever() disables interrupts (cli), which would prevent the
-    // LAPIC timer from ever firing again, silently killing the scheduler.
-    // `hlt` with IF=1 yields the CPU until the next interrupt.
-    // =========================================================================
     kprintln!();
     kprintln!("==========================================================");
-    kprintln!("  Sprint 5 — Capabilities + Synchronous IPC LIVE!");
-    kprintln!("  CNode (64 slots), IPC Endpoints, Box<Thread> hand-offs");
-    kprintln!("  BSP entering idle loop. IPC test threads running.");
+    kprintln!("  Sprint 6 — Userspace & Syscalls LIVE!");
+    kprintln!("  SYSCALL/SYSRET, Ring 3 execution, capability-gated IPC");
+    kprintln!("  User sender (Ring 3) → SYSCALL → EP1 → kernel receiver");
+    kprintln!("  BSP entering idle loop.");
     kprintln!("==========================================================");
 
     loop {
@@ -644,58 +782,42 @@ extern "C" fn kmain() -> ! {
 }
 
 // =============================================================================
-// IPC Test Infrastructure
+// IPC Test Infrastructure (Sprint 6: Ring 3 → Ring 0 IPC)
 // =============================================================================
 
-/// Global pointer to the test endpoint. Written once during init (Phase 5b),
-/// read by IPC test threads. Not a SpinLock because it's write-once/read-many.
+/// Global pointer to the test endpoint. Written once during Phase 6b,
+/// read by the kernel receiver thread.
 static mut IPC_TEST_ENDPOINT: *mut ipc::endpoint::Endpoint = core::ptr::null_mut();
 
 /// Returns a reference to the global test endpoint.
 ///
 /// # Safety
-/// Must only be called after Phase 5b has initialized IPC_TEST_ENDPOINT.
+/// Must only be called after Phase 6b has initialized IPC_TEST_ENDPOINT.
 unsafe fn get_test_endpoint() -> &'static ipc::endpoint::Endpoint {
     unsafe { &*IPC_TEST_ENDPOINT }
 }
 
-/// IPC test: Receiver thread.
+/// Kernel receiver thread — receives IPC messages from the Ring 3 sender.
 ///
-/// Blocks on recv() waiting for a message from the sender.
-/// When it receives a message, it prints the contents and loops.
-pub extern "C" fn ipc_test_receiver(_arg: u64) {
-    kprintln!("[ipc-test] Receiver thread started");
+/// This runs in Ring 0 and uses the direct ep.recv() API (no syscall needed).
+/// It proves the full userspace IPC path:
+///   Ring 3 user code → SYSCALL → syscall_dispatch → capability check → ep.send()
+///   → this thread's ep.recv() → message printed to serial
+pub extern "C" fn userspace_test_receiver(_arg: u64) {
+    kprintln!("[ring3-test] Kernel receiver thread started (Ring 0)");
 
-    for i in 0..3 {
-        kprintln!("[ipc-test] Receiver: calling recv() (iteration {})", i);
+    for i in 0..2 {
+        kprintln!("[ring3-test] Receiver: calling recv() (iteration {})", i);
         let ep = unsafe { get_test_endpoint() };
         let msg = ep.recv();
-        kprintln!("[ipc-test] Receiver: got message! label={}, regs=[{}, {}, {}, {}]",
+        kprintln!("[ring3-test] Receiver: GOT MESSAGE from Ring 3!");
+        kprintln!("[ring3-test]   label={:#X}, data=[{:#X}, {:#X}, {:#X}, {:#X}]",
             msg.label, msg.regs[0], msg.regs[1], msg.regs[2], msg.regs[3]);
     }
 
-    kprintln!("[ipc-test] Receiver: DONE — all 3 messages received successfully!");
-    loop { arch::cpu::halt(); }
-}
-
-/// IPC test: Sender thread.
-///
-/// Sends 3 messages to the receiver through the test endpoint.
-/// Each message has a unique label and data to verify correctness.
-pub extern "C" fn ipc_test_sender(_arg: u64) {
-    kprintln!("[ipc-test] Sender thread started");
-
-    for i in 0..3u64 {
-        let msg = ipc::message::IpcMessage::with_data(
-            100 + i,                                    // label
-            [i * 10, i * 20, i * 30, 0xCAFE_0000 + i], // data regs
-        );
-        kprintln!("[ipc-test] Sender: sending message {} (label={})", i, msg.label);
-        let ep = unsafe { get_test_endpoint() };
-        ep.send(&msg);
-        kprintln!("[ipc-test] Sender: message {} delivered", i);
-    }
-
-    kprintln!("[ipc-test] Sender: DONE — all 3 messages sent successfully!");
+    kprintln!("[ring3-test] ================================================");
+    kprintln!("[ring3-test] SUCCESS: 2 messages received from Ring 3 sender!");
+    kprintln!("[ring3-test] Ring 3 → SYSCALL → Capability → IPC PROVEN!");
+    kprintln!("[ring3-test] ================================================");
     loop { arch::cpu::halt(); }
 }
