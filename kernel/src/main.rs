@@ -576,13 +576,6 @@ extern "C" fn kmain() -> ! {
     unsafe { core::arch::asm!("sti"); }
     kprintln!("[init] Interrupts ENABLED");
 
-    // --- 4h. Test: arm the LAPIC timer ---
-    // Fire a one-shot interrupt in 100ms to verify the whole chain works.
-    if madt_info.is_some() {
-        arch::lapic::set_timer_oneshot(100_000); // 100ms
-        kprintln!("[lapic] One-shot timer armed (100ms test)");
-    }
-
     // =========================================================================
     // PHASE 5: Scheduler + Threads (Sprint 4)
     // =========================================================================
@@ -611,15 +604,26 @@ extern "C" fn kmain() -> ! {
     arch::smp::init();
 
     // =========================================================================
-    // HALT
+    // BSP IDLE LOOP
+    // =========================================================================
+    //
+    // The BSP "main" thread is now a scheduled entity. When the LAPIC timer
+    // fires, schedule() will preempt us and run test threads. When we get
+    // scheduled back, we just hlt again.
+    //
+    // CRITICAL: Use `sti; hlt` — NOT halt_forever().
+    // halt_forever() disables interrupts (cli), which would prevent the
+    // LAPIC timer from ever firing again, silently killing the scheduler.
+    // `hlt` with IF=1 yields the CPU until the next interrupt.
     // =========================================================================
     kprintln!();
     kprintln!("==========================================================");
-    kprintln!("  Sprint 4 — scheduler + SMP framework initialized!");
+    kprintln!("  Sprint 4 — preemptive scheduler LIVE!");
     kprintln!("  PML4+W^X, GDT/IDT, LAPIC/IOAPIC, CpuLocal, Threads, SMP");
-    kprintln!("  Next: preemptive context switching via LAPIC timer.");
+    kprintln!("  BSP entering idle loop. Threads will preempt via LAPIC.");
     kprintln!("==========================================================");
 
-    // Halt forever. In the future, this becomes scheduler::run()
-    arch::cpu::halt_forever()
+    loop {
+        arch::cpu::halt(); // hlt with IF=1 — LAPIC timer will wake us
+    }
 }
