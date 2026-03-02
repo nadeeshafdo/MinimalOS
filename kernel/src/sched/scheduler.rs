@@ -1,15 +1,20 @@
 // =============================================================================
-// MinimalOS NextGen — Tickless Scheduler
+// MinimalOS NextGen — Preemptive Round-Robin Scheduler
 // =============================================================================
 //
-// A simple round-robin scheduler for Sprint 4. Per-core run queues are
-// stored in CpuLocal (accessed via IA32_GS_BASE — no locking needed for
-// the local queue).
-//
 // FLOW:
-//   LAPIC timer fires → IDT stub → irq_dispatch → schedule()
-//   schedule() picks the next Ready thread, calls switch_context()
-//   switch_context() swaps RSP, execution continues on the new thread
+//   LAPIC timer fires → IDT stub (IF=0) → irq_dispatch:
+//     1. Send EOI immediately (before schedule!)
+//     2. Call schedule()
+//     3. Return early (skip second EOI)
+//
+//   schedule():
+//     1. Read CpuLocal via gs:0
+//     2. Pop next thread from run queue
+//     3. Requeue current thread (if Running)
+//     4. Update CpuLocal.current_thread
+//     5. Call switch_context(prev_rsp, next_rsp)
+//     6. switch_context returns when this thread is resumed later
 //
 // =============================================================================
 
@@ -17,11 +22,14 @@ extern crate alloc;
 use alloc::collections::VecDeque;
 use alloc::boxed::Box;
 
+
+
 use crate::kprintln;
+use crate::sched::thread::{Thread, ThreadState};
+use crate::sched::context;
+use crate::sched::percpu::CpuLocal;
 
-use super::thread::Thread;
-
-/// Per-core run queue. Stored inside CpuLocal, one per core.
+/// Per-core run queue. One per core, stored via raw pointer in CpuLocal.
 pub struct RunQueue {
     /// Ready threads waiting for CPU time (FIFO round-robin).
     pub ready: VecDeque<Box<Thread>>,
@@ -40,74 +48,173 @@ impl RunQueue {
         self.ready.push_back(thread);
     }
 
-    /// Removes the next ready thread from the front of the queue.
+    /// Removes the next ready thread from the front.
     pub fn pop(&mut self) -> Option<Box<Thread>> {
         self.ready.pop_front()
     }
 
-    /// Returns the number of threads in the ready queue.
+    /// Number of threads in the ready queue.
     pub fn len(&self) -> usize {
         self.ready.len()
     }
 
-    /// Returns true if the ready queue is empty.
+    /// True if no threads are ready.
     pub fn is_empty(&self) -> bool {
         self.ready.is_empty()
     }
 }
 
-/// The main scheduling function. Called from the LAPIC timer ISR.
-///
-/// Picks the next Ready thread from the run queue and context-switches to it.
-/// The current thread is placed back in the Ready queue (round-robin).
-///
-/// # Safety
-/// - Must be called with interrupts disabled (inside ISR context).
-/// - CpuLocal must be initialized on this core.
-pub unsafe fn schedule() {
-    // For now, this is a simplified scheduler that will be expanded.
-    // The full implementation requires CpuLocal access via GS base.
-    // This stub exists to allow compilation and basic testing.
-}
+/// Temporary global queue for threads spawned before CpuLocal is ready.
+static BOOT_QUEUE: crate::sync::spinlock::SpinLock<RunQueue> =
+    crate::sync::spinlock::SpinLock::new(RunQueue::new());
 
-/// Spawns a new kernel thread and adds it to the BSP's run queue.
-///
-/// This is the user-facing API for creating threads during boot.
+/// Spawns a new kernel thread and adds it to the boot queue.
 pub fn spawn(name: &str, entry: extern "C" fn(u64), arg: u64) {
     let thread = Thread::new(name, entry, arg);
     kprintln!("[sched] Spawned thread {} '{}'", thread.id, name);
     BOOT_QUEUE.lock().push(thread);
 }
 
-/// Temporary global queue used during boot before CpuLocal is initialized.
-/// Will be drained into per-core run queues during scheduler startup.
-static BOOT_QUEUE: crate::sync::spinlock::SpinLock<RunQueue> =
-    crate::sync::spinlock::SpinLock::new(RunQueue::new());
-
 /// Initializes the scheduler on the BSP.
 ///
-/// Sets up the BSP's CpuLocal, creates the idle thread, and starts
-/// scheduling any threads that were spawned during boot.
+/// 1. Allocates a RunQueue for the BSP's CpuLocal
+/// 2. Creates a "BSP main" thread to represent the currently executing context
+/// 3. Drains BOOT_QUEUE into the BSP's local run queue
+/// 4. Arms the LAPIC timer for preemptive scheduling
 pub fn init() {
-    kprintln!("[sched] Initializing scheduler on BSP");
+    kprintln!("[sched] Initializing preemptive scheduler on BSP");
 
-    let ready_count = BOOT_QUEUE.lock().len();
-    kprintln!("[sched] {} threads in boot queue", ready_count);
+    // 1. Allocate a per-core RunQueue on the heap, leak it into CpuLocal
+    let rq = Box::new(RunQueue::new());
+    let rq_ptr = Box::into_raw(rq);
+
+    // 2. Create the "BSP main" thread — represents the current execution context.
+    //    This thread doesn't need a synthetic stack frame because it IS the running
+    //    context. Its RSP will be saved by switch_context when it gets preempted.
+    let mut bsp_thread = Box::new(Thread {
+        id: 0,
+        state: ThreadState::Running,
+        rsp: 0, // Will be filled by switch_context on first preemption
+        cr3: crate::memory::pml4::KERNEL_PML4.load(core::sync::atomic::Ordering::SeqCst),
+        kernel_stack_base: 0, // Using Limine's original stack
+        kernel_stack_size: 0,
+        name: {
+            let mut buf = [0u8; 32];
+            let name = b"bsp-main";
+            buf[..name.len()].copy_from_slice(name);
+            buf
+        },
+        name_len: 8,
+    });
+    let bsp_thread_ptr = &mut *bsp_thread as *mut Thread;
+    // Leak — the BSP thread lives forever
+    core::mem::forget(bsp_thread);
+
+    // 3. Install RunQueue and current thread into CpuLocal
+    unsafe {
+        let cpu_local = CpuLocal::get_mut();
+        cpu_local.run_queue = rq_ptr;
+        cpu_local.current_thread = bsp_thread_ptr;
+        cpu_local.online = true;
+    }
+
+    // 4. Drain BOOT_QUEUE into the BSP's local run queue
+    {
+        let mut boot_q = BOOT_QUEUE.lock();
+        let mut drained = 0u32;
+        while let Some(thread) = boot_q.pop() {
+            unsafe { (*rq_ptr).push(thread); }
+            drained += 1;
+        }
+        kprintln!("[sched] Drained {} threads from boot queue to BSP run queue", drained);
+    }
+
+    // 5. Arm the LAPIC timer for periodic preemption (10ms quantum)
+    crate::arch::lapic::set_timer_oneshot(10_000); // 10ms
+    kprintln!("[sched] LAPIC timer armed (10ms quantum)");
+    kprintln!("[sched] Preemptive scheduler active on BSP");
 }
 
-/// A test entry point for verifying context switching works.
+/// The main scheduling function. Called from the LAPIC timer ISR (vector 32).
+///
+/// Picks the next Ready thread from the run queue and context-switches to it.
+/// The current thread is placed back in the Ready queue (round-robin).
+///
+/// # Safety
+/// - Must be called with interrupts disabled (IF=0, inside ISR after interrupt gate).
+/// - EOI must have been sent BEFORE calling this function.
+/// - CpuLocal must be initialized on this core.
+pub unsafe fn schedule() {
+    let cpu_local = unsafe { CpuLocal::get_mut() };
+
+    // If no threads are ready, just re-arm the timer and return.
+    let rq = unsafe { &mut *cpu_local.run_queue };
+    if rq.is_empty() {
+        crate::arch::lapic::set_timer_oneshot(10_000);
+        return;
+    }
+
+    // Pop the next Ready thread
+    let mut next_box = rq.pop().unwrap();
+    next_box.state = ThreadState::Running;
+    let next_ptr = Box::into_raw(next_box);
+
+    // Get current thread pointer
+    let current_ptr = cpu_local.current_thread;
+    if current_ptr.is_null() {
+        cpu_local.current_thread = next_ptr;
+        crate::arch::lapic::set_timer_oneshot(10_000);
+        return;
+    }
+
+    // Grab prev RSP pointer BEFORE requeueing (raw pointer stays valid)
+    let prev_rsp_ptr = unsafe { &raw mut (*current_ptr).rsp };
+    let next_rsp_val = unsafe { (*next_ptr).rsp };
+
+    // Requeue current thread
+    unsafe { (*current_ptr).state = ThreadState::Ready; }
+    let current_box = unsafe { Box::from_raw(current_ptr) };
+    rq.push(current_box);
+
+    // Update CpuLocal
+    cpu_local.current_thread = next_ptr;
+
+    // Re-arm timer BEFORE switching (new thread needs preemption too)
+    crate::arch::lapic::set_timer_oneshot(10_000);
+
+    // Execute the hardware context switch
+    unsafe { context::switch_context(prev_rsp_ptr, next_rsp_val); }
+
+    // We reach here when THIS thread gets scheduled back
+}
+
+/// Test thread A — prints iterations to verify preemption.
 pub extern "C" fn test_thread_a(_arg: u64) {
     for i in 0..5 {
         kprintln!("[thread-A] iteration {}", i);
-        // Yield to let other threads run
-        for _ in 0..1_000_000 { core::hint::spin_loop(); }
+        busy_wait();
     }
+    kprintln!("[thread-A] DONE");
 }
 
-/// A test entry point for verifying context switching works.
+/// Test thread B — prints iterations to verify preemption.
 pub extern "C" fn test_thread_b(_arg: u64) {
     for i in 0..5 {
         kprintln!("[thread-B] iteration {}", i);
-        for _ in 0..1_000_000 { core::hint::spin_loop(); }
+        busy_wait();
     }
+    kprintln!("[thread-B] DONE");
+}
+
+/// Busy-wait that actually burns CPU time (~50ms at typical clock speeds).
+/// Uses volatile reads so the compiler can't optimize away the loop.
+#[inline(never)]
+fn busy_wait() {
+    let mut x: u64 = 0;
+    for _ in 0..5_000_000u64 {
+        unsafe { core::ptr::read_volatile(&x); }
+        x = x.wrapping_add(1);
+    }
+    // Prevent the compiler from removing x entirely
+    unsafe { core::ptr::write_volatile(&mut x, x); }
 }
