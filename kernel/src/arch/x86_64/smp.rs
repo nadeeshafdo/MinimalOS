@@ -134,6 +134,10 @@ extern "C" fn ap_rust_entry(cpu_info: &limine::mp::Cpu) -> ! {
     // LAPIC is at the standard 0xFEE00000 for all x86_64 cores
     lapic::init(crate::memory::address::PhysAddr::new(0xFEE0_0000));
 
+    // --- 5. SYSCALL MSR configuration ---
+    // Each core needs its own STAR/LSTAR/FMASK MSRs (MSRs are per-core).
+    crate::arch::syscall::init();
+
     kprintln!("[smp] AP core {} (LAPIC {}) online", core_index, lapic_id);
 
     // --- 5. Enter idle loop ---
