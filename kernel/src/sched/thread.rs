@@ -77,6 +77,16 @@ pub struct Thread {
     /// Senders write their message here before blocking (slowpath),
     /// or the kernel copies directly between buffers (fastpath).
     pub ipc_buffer: IpcMessage,
+
+    // ─── Sprint 6: Userspace fields ─────────────────────────────────────────
+
+    /// User-space entry point (RIP for iretq transition to Ring 3).
+    /// Zero means this is a kernel-only thread.
+    pub user_rip: u64,
+
+    /// User-space stack pointer (top of allocated user stack).
+    /// Used by the ring3_entry trampoline to build the iretq frame.
+    pub user_rsp: u64,
 }
 
 impl Thread {
@@ -146,6 +156,8 @@ impl Thread {
             name_len: copy_len,
             cnode: CNode::new(),
             ipc_buffer: IpcMessage::EMPTY,
+            user_rip: 0,
+            user_rsp: 0,
         });
 
         kprintln!("[thread] Created thread {} '{}' (stack={:#018X}—{:#018X}, rsp={:#018X})",
