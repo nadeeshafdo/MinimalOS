@@ -93,7 +93,7 @@ pub fn init() {
     // 2. Create the "BSP main" thread — represents the current execution context.
     //    This thread doesn't need a synthetic stack frame because it IS the running
     //    context. Its RSP will be saved by switch_context when it gets preempted.
-    let mut bsp_thread = Box::new(Thread {
+    let bsp_thread = Box::new(Thread {
         id: 0,
         state: ThreadState::Running,
         rsp: 0, // Will be filled by switch_context on first preemption
@@ -110,9 +110,9 @@ pub fn init() {
         cnode: CNode::new(),
         ipc_buffer: IpcMessage::EMPTY,
     });
-    let bsp_thread_ptr = &mut *bsp_thread as *mut Thread;
-    // Leak — the BSP thread lives forever
-    core::mem::forget(bsp_thread);
+    // Convert to raw pointer via the canonical API — Box::into_raw.
+    // schedule() will later reconstruct via Box::from_raw to requeue.
+    let bsp_thread_ptr = Box::into_raw(bsp_thread);
 
     // 3. Install RunQueue and current thread into CpuLocal
     unsafe {
