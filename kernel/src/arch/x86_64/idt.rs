@@ -427,8 +427,22 @@ pub extern "C" fn irq_dispatch(frame: &InterruptFrame) {
 
     match vector {
         32 => {
-            // LAPIC timer interrupt
-            kprintln!("[irq] LAPIC timer fired (vector 32)");
+            // LAPIC timer interrupt — preemptive scheduler tick.
+            //
+            // CRITICAL: Send EOI BEFORE calling schedule().
+            // If we call schedule() first, switch_context will jump to another
+            // thread before reaching the EOI at the bottom. The LAPIC will never
+            // receive the End-of-Interrupt signal and will never fire again.
+            //
+            // This is safe because interrupt gates set IF=0 — no re-entrant
+            // interrupt can occur between EOI and the context switch.
+            crate::arch::lapic::eoi();
+
+            // Trigger the context switch (picks next thread, swaps RSP)
+            unsafe { crate::sched::scheduler::schedule(); }
+
+            // Return early — do NOT fall through to the second EOI below
+            return;
         }
 
         255 => {
