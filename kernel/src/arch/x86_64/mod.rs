@@ -34,3 +34,4 @@ pub mod idt;
 pub mod lapic;
 pub mod ioapic;
 pub mod smp;
+pub mod syscall;
