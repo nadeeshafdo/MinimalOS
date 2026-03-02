@@ -88,29 +88,31 @@ impl Thread {
         let stack_size = KERNEL_STACK_PAGES * PAGE_SIZE as usize;
         let stack_top = stack_base + stack_size as u64;
 
-        // Build the synthetic stack frame that switch_context expects
-        // Layout (growing downward):
-        //   [stack_top - 8]   thread_entry_trampoline  (return address for ret)
-        //   [stack_top - 16]  r15 = 0
-        //   [stack_top - 24]  r14 = arg
-        //   [stack_top - 32]  r13 = entry_fn
-        //   [stack_top - 40]  r12 = 0
-        //   [stack_top - 48]  rbp = 0
-        //   [stack_top - 56]  rbx = 0
-        //   <- initial RSP saved in TCB
+        // Build the synthetic stack frame that switch_context expects.
+        //
+        // switch_context PUSHES in this order: rbx, rbp, r12, r13, r14, r15
+        // switch_context POPS in reverse:      r15, r14, r13, r12, rbp, rbx, then ret
+        //
+        // Pops read from lowest address (RSP) upward:
+        //   [rsp + 0]  = offset(-7) → pop r15
+        //   [rsp + 8]  = offset(-6) → pop r14  (= arg for trampoline)
+        //   [rsp + 16] = offset(-5) → pop r13  (= entry_fn for trampoline)
+        //   [rsp + 24] = offset(-4) → pop r12
+        //   [rsp + 32] = offset(-3) → pop rbp
+        //   [rsp + 40] = offset(-2) → pop rbx
+        //   [rsp + 48] = offset(-1) → ret      (= thread_entry_trampoline)
+        //
         let frame_ptr = stack_top as *mut u64;
         unsafe {
-            // Return address — where `ret` in switch_context will jump
-            *frame_ptr.offset(-1) = super::context::thread_entry_trampoline as *const () as u64;
-            // Callee-saved registers (popped by switch_context in reverse)
-            *frame_ptr.offset(-2) = 0;                     // r15
-            *frame_ptr.offset(-3) = arg;                    // r14 = argument
-            *frame_ptr.offset(-4) = entry_fn as u64;        // r13 = payload fn
-            *frame_ptr.offset(-5) = 0;                      // r12
-            *frame_ptr.offset(-6) = 0;                      // rbp
-            *frame_ptr.offset(-7) = 0;                      // rbx
+            *frame_ptr.offset(-7) = 0;                                                           // r15
+            *frame_ptr.offset(-6) = arg;                                                         // r14 = argument
+            *frame_ptr.offset(-5) = entry_fn as *const () as u64;                                // r13 = payload fn
+            *frame_ptr.offset(-4) = 0;                                                           // r12
+            *frame_ptr.offset(-3) = 0;                                                           // rbp
+            *frame_ptr.offset(-2) = 0;                                                           // rbx
+            *frame_ptr.offset(-1) = super::context::thread_entry_trampoline as *const () as u64; // ret target
         }
-        let initial_rsp = stack_top - 7 * 8; // 7 pushes of 8 bytes each
+        let initial_rsp = stack_top - 7 * 8; // 7 slots × 8 bytes
 
         let mut name_buf = [0u8; 32];
         let name_bytes = name.as_bytes();
