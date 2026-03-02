@@ -91,6 +91,14 @@ mod drivers;
 /// Contains: CPU-local storage, threads, context switching, scheduler.
 mod sched;
 
+/// Capability subsystem.
+/// Contains: CNode (per-thread capability table), rights, kernel object references.
+mod cap;
+
+/// Inter-process communication subsystem.
+/// Contains: IPC message format, synchronous endpoints.
+mod ipc;
+
 // =============================================================================
 // Imports
 // =============================================================================
@@ -593,14 +601,21 @@ extern "C" fn kmain() -> ! {
         let _ = alloc::boxed::Box::into_raw(bsp_local);
     }
 
-    // --- 5b. Spawn test threads ---
-    sched::scheduler::spawn("test-A", sched::scheduler::test_thread_a, 0);
-    sched::scheduler::spawn("test-B", sched::scheduler::test_thread_b, 0);
+    // --- 5b. Create IPC test endpoint ---
+    let test_ep = alloc::boxed::Box::new(ipc::endpoint::Endpoint::new(1));
+    let test_ep_ptr = alloc::boxed::Box::into_raw(test_ep);
+    // Store the endpoint pointer in a static so test threads can find it.
+    // SAFETY: Written once here before threads run, read-only after.
+    unsafe { IPC_TEST_ENDPOINT = test_ep_ptr; }
 
-    // --- 5c. Initialize scheduler ---
+    // --- 5c. Spawn test threads ---
+    sched::scheduler::spawn("ipc-recv", ipc_test_receiver, 0);
+    sched::scheduler::spawn("ipc-send", ipc_test_sender, 0);
+
+    // --- 5d. Initialize scheduler ---
     sched::scheduler::init();
 
-    // --- 5d. Start Application Processors ---
+    // --- 5e. Start Application Processors ---
     arch::smp::init();
 
     // =========================================================================
@@ -618,12 +633,69 @@ extern "C" fn kmain() -> ! {
     // =========================================================================
     kprintln!();
     kprintln!("==========================================================");
-    kprintln!("  Sprint 4 — preemptive scheduler LIVE!");
-    kprintln!("  PML4+W^X, GDT/IDT, LAPIC/IOAPIC, CpuLocal, Threads, SMP");
-    kprintln!("  BSP entering idle loop. Threads will preempt via LAPIC.");
+    kprintln!("  Sprint 5 — Capabilities + Synchronous IPC LIVE!");
+    kprintln!("  CNode (64 slots), IPC Endpoints, Box<Thread> hand-offs");
+    kprintln!("  BSP entering idle loop. IPC test threads running.");
     kprintln!("==========================================================");
 
     loop {
         arch::cpu::halt(); // hlt with IF=1 — LAPIC timer will wake us
     }
+}
+
+// =============================================================================
+// IPC Test Infrastructure
+// =============================================================================
+
+/// Global pointer to the test endpoint. Written once during init (Phase 5b),
+/// read by IPC test threads. Not a SpinLock because it's write-once/read-many.
+static mut IPC_TEST_ENDPOINT: *mut ipc::endpoint::Endpoint = core::ptr::null_mut();
+
+/// Returns a reference to the global test endpoint.
+///
+/// # Safety
+/// Must only be called after Phase 5b has initialized IPC_TEST_ENDPOINT.
+unsafe fn get_test_endpoint() -> &'static ipc::endpoint::Endpoint {
+    unsafe { &*IPC_TEST_ENDPOINT }
+}
+
+/// IPC test: Receiver thread.
+///
+/// Blocks on recv() waiting for a message from the sender.
+/// When it receives a message, it prints the contents and loops.
+pub extern "C" fn ipc_test_receiver(_arg: u64) {
+    kprintln!("[ipc-test] Receiver thread started");
+
+    for i in 0..3 {
+        kprintln!("[ipc-test] Receiver: calling recv() (iteration {})", i);
+        let ep = unsafe { get_test_endpoint() };
+        let msg = ep.recv();
+        kprintln!("[ipc-test] Receiver: got message! label={}, regs=[{}, {}, {}, {}]",
+            msg.label, msg.regs[0], msg.regs[1], msg.regs[2], msg.regs[3]);
+    }
+
+    kprintln!("[ipc-test] Receiver: DONE — all 3 messages received successfully!");
+    loop { arch::cpu::halt(); }
+}
+
+/// IPC test: Sender thread.
+///
+/// Sends 3 messages to the receiver through the test endpoint.
+/// Each message has a unique label and data to verify correctness.
+pub extern "C" fn ipc_test_sender(_arg: u64) {
+    kprintln!("[ipc-test] Sender thread started");
+
+    for i in 0..3u64 {
+        let msg = ipc::message::IpcMessage::with_data(
+            100 + i,                                    // label
+            [i * 10, i * 20, i * 30, 0xCAFE_0000 + i], // data regs
+        );
+        kprintln!("[ipc-test] Sender: sending message {} (label={})", i, msg.label);
+        let ep = unsafe { get_test_endpoint() };
+        ep.send(&msg);
+        kprintln!("[ipc-test] Sender: message {} delivered", i);
+    }
+
+    kprintln!("[ipc-test] Sender: DONE — all 3 messages sent successfully!");
+    loop { arch::cpu::halt(); }
 }
