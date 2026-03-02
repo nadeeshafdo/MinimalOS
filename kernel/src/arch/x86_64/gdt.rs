@@ -383,3 +383,20 @@ pub fn init() {
     kprintln!("[gdt] GDT loaded: null + KERNEL_CS({:#04X}) + KERNEL_DS({:#04X}) + USER_DS({:#04X}) + USER_CS({:#04X}) + TSS({:#04X})",
         KERNEL_CS, KERNEL_DS, USER_DS, USER_CS, TSS_SELECTOR);
 }
+
+/// Updates TSS.rsp[0] — the kernel stack pointer loaded by the CPU on
+/// a Ring 3 → Ring 0 transition (interrupt/exception from user mode).
+///
+/// Must be called on every context switch to a thread that may execute
+/// in Ring 3. The CPU loads RSP from TSS.rsp[0] when an interrupt gate
+/// fires while CPL=3.
+///
+/// # Safety
+/// - `rsp0` must point to a valid, mapped kernel stack top.
+/// - On SMP, each core shares the global TSS — a proper per-core TSS
+///   is needed for multi-core Ring 3 support (future sprint).
+pub fn set_rsp0(rsp0: u64) {
+    // SAFETY: Single-writer guarantee — only the current core's scheduler
+    // calls this, and schedule() runs with interrupts disabled.
+    unsafe { TSS.rsp[0] = rsp0; }
+}
