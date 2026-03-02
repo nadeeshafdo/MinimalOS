@@ -123,7 +123,9 @@
   - [x] `thread_entry_trampoline` with `sti` (IF re-enable for preemption)
 - [x] **Scheduler Framework**
   - [x] RunQueue (VecDeque-based round-robin), spawn(), test threads
-  - [ ] Wire LAPIC timer ISR → schedule() (preemptive switching)
+  - [x] Wire LAPIC timer ISR → schedule() (preemptive switching)
+  - [x] EOI-before-schedule, boot queue drain, BSP idle loop
+  - [x] Verified: 30+ ticks of round-robin rotation in QEMU
 - [x] **SMP via Limine MpRequest**
   - [x] Naked AP trampoline with immediate CR3 sync
   - [x] Per-AP GDT/IDT/TSS/LAPIC/GS_BASE
