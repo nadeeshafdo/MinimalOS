@@ -38,6 +38,8 @@ pub struct CpuLocal {
     pub current_thread: *mut super::thread::Thread,
     /// Pointer to this core's idle thread TCB.
     pub idle_thread: *mut super::thread::Thread,
+    /// Pointer to this core's run queue (heap-allocated).
+    pub run_queue: *mut super::scheduler::RunQueue,
     /// Whether this core is fully initialized and running the scheduler.
     pub online: bool,
 }
@@ -56,6 +58,7 @@ impl CpuLocal {
             core_index,
             current_thread: ptr::null_mut(),
             idle_thread: ptr::null_mut(),
+            run_queue: ptr::null_mut(),
             online: false,
         }
     }
