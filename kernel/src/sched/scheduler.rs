@@ -28,6 +28,8 @@ use crate::kprintln;
 use crate::sched::thread::{Thread, ThreadState};
 use crate::sched::context;
 use crate::sched::percpu::CpuLocal;
+use crate::cap::cnode::CNode;
+use crate::ipc::message::IpcMessage;
 
 /// Per-core run queue. One per core, stored via raw pointer in CpuLocal.
 pub struct RunQueue {
@@ -105,6 +107,8 @@ pub fn init() {
             buf
         },
         name_len: 8,
+        cnode: CNode::new(),
+        ipc_buffer: IpcMessage::EMPTY,
     });
     let bsp_thread_ptr = &mut *bsp_thread as *mut Thread;
     // Leak — the BSP thread lives forever
@@ -135,23 +139,55 @@ pub fn init() {
     kprintln!("[sched] Preemptive scheduler active on BSP");
 }
 
-/// The main scheduling function. Called from the LAPIC timer ISR (vector 32).
+/// The main scheduling function. Called from:
+///   1. LAPIC timer ISR (vector 32) — preemptive context switch
+///   2. IPC endpoint send/recv — voluntary yield when blocking
 ///
 /// Picks the next Ready thread from the run queue and context-switches to it.
-/// The current thread is placed back in the Ready queue (round-robin).
+/// Handles the current thread based on its state:
+///   - Running → mark Ready, requeue (normal preemption)
+///   - BlockedSend/BlockedRecv → don't touch (ownership transferred to Endpoint)
+///   - Dead → don't requeue (leak for now, proper cleanup later)
 ///
 /// # Safety
-/// - Must be called with interrupts disabled (IF=0, inside ISR after interrupt gate).
-/// - EOI must have been sent BEFORE calling this function.
+/// - Must be called with interrupts disabled (IF=0).
+///   For timer ISR: interrupt gate clears IF automatically.
+///   For IPC: caller must `cli` before calling.
+/// - EOI must have been sent BEFORE calling (for timer path).
 /// - CpuLocal must be initialized on this core.
+///
+/// # Ownership Model
+/// `cpu_local.current_thread` is a raw `*mut Thread` — the memory is
+/// heap-allocated but NOT wrapped in a Box. When the thread state is:
+///   - Running: schedule() reconstructs Box via `Box::from_raw` to requeue.
+///   - Blocked*: an Endpoint already holds the Box. schedule() must NOT
+///     reconstruct another Box (that would be a double-free).
+///   - Dead: schedule() reconstructs Box to allow eventual deallocation.
 pub unsafe fn schedule() {
     let cpu_local = unsafe { CpuLocal::get_mut() };
-
-    // If no threads are ready, just re-arm the timer and return.
     let rq = unsafe { &mut *cpu_local.run_queue };
+    let current_ptr = cpu_local.current_thread;
+
+    // Determine current thread state (needed before we check RunQueue)
+    let current_state = if !current_ptr.is_null() {
+        unsafe { (*current_ptr).state }
+    } else {
+        ThreadState::Dead
+    };
+
+    // --- Handle empty RunQueue ---
     if rq.is_empty() {
-        crate::arch::lapic::set_timer_oneshot(10_000);
-        return;
+        if current_state == ThreadState::Running {
+            // Normal preemption with nothing to switch to — let current keep running.
+            crate::arch::lapic::set_timer_oneshot(10_000);
+            return;
+        }
+        // Current thread is blocked/dead — no runnable threads exist.
+        // Spin-wait: on multi-core, another core's IPC wakeup may push here.
+        // On single-core with all threads blocked, this is a legitimate deadlock.
+        while rq.is_empty() {
+            core::hint::spin_loop();
+        }
     }
 
     // Pop the next Ready thread
@@ -159,33 +195,62 @@ pub unsafe fn schedule() {
     next_box.state = ThreadState::Running;
     let next_ptr = Box::into_raw(next_box);
 
-    // Get current thread pointer
-    let current_ptr = cpu_local.current_thread;
+    // Null check — shouldn't happen after init, but be defensive
     if current_ptr.is_null() {
         cpu_local.current_thread = next_ptr;
         crate::arch::lapic::set_timer_oneshot(10_000);
         return;
     }
 
-    // Grab prev RSP pointer BEFORE requeueing (raw pointer stays valid)
+    // Grab prev RSP save location BEFORE any ownership transfer.
+    // This raw pointer remains valid because:
+    //   - Running: we'll Box::from_raw → push to RunQueue (memory stays alive)
+    //   - Blocked*: Endpoint owns the Box (memory stays alive)
+    //   - Dead: memory stays alive until we drop (after switch_context returns)
     let prev_rsp_ptr = unsafe { &raw mut (*current_ptr).rsp };
     let next_rsp_val = unsafe { (*next_ptr).rsp };
 
-    // Requeue current thread
-    unsafe { (*current_ptr).state = ThreadState::Ready; }
-    let current_box = unsafe { Box::from_raw(current_ptr) };
-    rq.push(current_box);
+    // --- Handle current thread based on state ---
+    match current_state {
+        ThreadState::Running => {
+            // Normal preemption: requeue the current thread.
+            // Reconstruct Box (valid: into_raw was the last ownership op).
+            unsafe { (*current_ptr).state = ThreadState::Ready; }
+            let current_box = unsafe { Box::from_raw(current_ptr) };
+            rq.push(current_box);
+        }
+        ThreadState::BlockedSend | ThreadState::BlockedRecv => {
+            // Thread's Box<Thread> ownership was transferred to an Endpoint
+            // by the IPC code BEFORE calling schedule(). Do NOT reconstruct
+            // a Box here — that would create a second Box for the same
+            // allocation, causing a double-free when both are dropped.
+            //
+            // The raw pointer (current_ptr) is still valid for the
+            // switch_context RSP save because the Endpoint keeps it alive.
+        }
+        ThreadState::Dead => {
+            // Thread has terminated. For now, leak the TCB memory.
+            // TODO: Free kernel stack pages and TCB in a future sprint.
+            // We can't free the stack RIGHT NOW because switch_context
+            // is about to save RSP into it — we're still on this stack.
+        }
+        ThreadState::Ready => {
+            // Shouldn't happen — Ready means it should be in the RunQueue.
+            // Defensive: just requeue it.
+            let current_box = unsafe { Box::from_raw(current_ptr) };
+            rq.push(current_box);
+        }
+    }
 
-    // Update CpuLocal
+    // Install next thread as current and re-arm the timer
     cpu_local.current_thread = next_ptr;
-
-    // Re-arm timer BEFORE switching (new thread needs preemption too)
     crate::arch::lapic::set_timer_oneshot(10_000);
 
-    // Execute the hardware context switch
+    // Execute the hardware context switch.
+    // Saves current callee-saved regs + RSP into *prev_rsp_ptr,
+    // loads next thread's RSP and callee-saved regs, then `ret`.
+    // We reach the line below when THIS thread gets scheduled back.
     unsafe { context::switch_context(prev_rsp_ptr, next_rsp_val); }
-
-    // We reach here when THIS thread gets scheduled back
 }
 
 /// Test thread A — prints iterations to verify preemption.
