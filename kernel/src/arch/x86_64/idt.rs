@@ -453,7 +453,10 @@ pub extern "C" fn irq_dispatch(frame: &InterruptFrame) {
         }
 
         v => {
-            kprintln!("[irq] Hardware interrupt: vector {}", v);
+            // Hardware IRQ: vector 33-47 → IRQ 1-15
+            // Check if any thread is blocked on SYS_WAIT_IRQ for this IRQ.
+            let irq = v - 32;
+            crate::arch::syscall::notify_irq_waiters(irq as usize);
         }
     }
 
