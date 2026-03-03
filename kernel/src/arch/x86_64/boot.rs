@@ -27,7 +27,7 @@
 use limine::BaseRevision;
 use limine::request::{
     ExecutableAddressRequest, FramebufferRequest, HhdmRequest, MemoryMapRequest,
-    MpRequest, RsdpRequest,
+    ModuleRequest, MpRequest, RsdpRequest,
 };
 
 // =============================================================================
@@ -158,6 +158,18 @@ static KERNEL_ADDRESS_REQUEST: ExecutableAddressRequest = ExecutableAddressReque
 #[unsafe(link_section = ".limine_requests")]
 static MP_REQUEST: MpRequest = MpRequest::new();
 
+/// Request for boot modules loaded alongside the kernel.
+///
+/// Limine loads additional files specified by `module_path` entries in
+/// limine.conf. For MinimalOS, this is a `.tar` archive (the initrd)
+/// containing userspace executables (Init, serial_drv, etc.).
+///
+/// The module's raw bytes are accessible via `File::addr()` and `File::size()`.
+/// The kernel's TarFS parser iterates through the archive in-place.
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+static MODULE_REQUEST: ModuleRequest = ModuleRequest::new();
+
 // =============================================================================
 // Boot Information API
 // =============================================================================
@@ -279,4 +291,21 @@ pub fn get_kernel_address() -> (u64, u64) {
 /// or Limine didn't provide it).
 pub fn get_mp_response() -> Option<&'static limine::response::MpResponse> {
     MP_REQUEST.get_response()
+}
+
+/// Retrieves the boot modules loaded by Limine.
+///
+/// Returns a slice of `File` references, one per `module_path` entry
+/// in limine.conf. For MinimalOS, the first (and usually only) module
+/// is the initrd TAR archive.
+///
+/// Each `File` provides:
+///   - `addr()`: pointer to the raw file data in memory
+///   - `size()`: file size in bytes
+///   - `path()`: the `module_path` string from limine.conf
+///
+/// Returns `None` if no modules were loaded.
+pub fn get_modules() -> Option<&'static [&'static limine::file::File]> {
+    let response = MODULE_REQUEST.get_response()?;
+    Some(response.modules())
 }
