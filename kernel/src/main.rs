@@ -402,7 +402,7 @@ extern "C" fn kmain() -> ! {
     // --- 4a. GDT + TSS ---
     // Must come before IDT — the IDT entries reference the GDT's kernel CS
     // selector, and the TSS provides the IST1 stack for double fault.
-    arch::gdt::init();
+    arch::gdt::init(0);
 
     // --- 4b. IDT ---
     // Exception handlers (divide error, GPF, page fault, double fault) and
@@ -602,113 +602,88 @@ extern "C" fn kmain() -> ! {
     }
 
     // =========================================================================
-    // PHASE 6: Userspace & Syscalls (Sprint 6)
+    // PHASE 6: SYSCALL MSR Initialization (Sprint 6 → Sprint 7)
+    // =========================================================================
+    kprintln!();
+    kprintln!("[init] Phase 6: SYSCALL MSR initialization");
+
+    // --- 6a. SYSCALL MSR initialization ---
+    arch::syscall::init();
+
+    // =========================================================================
+    // PHASE 7: Userspace Serial Driver (Sprint 7)
     // =========================================================================
     //
-    // Ring 0 → Ring 3 privilege transition. We push execution down into
-    // Ring 3 where the CPU will trap and fault on any unauthorized action,
-    // forcing user threads to use SYSCALL to request IPC through capabilities.
+    // The first real userspace driver. We compile the serial_drv Rust binary
+    // to a flat binary, embed it in the kernel image, map it into user pages,
+    // and spawn it as a Ring 3 thread with capability-gated port I/O.
     //
-    //   1. Configure SYSCALL MSRs (STAR, LSTAR, FMASK)
-    //   2. Create IPC endpoint + register in syscall table
-    //   3. Map user code + stack pages at user-accessible addresses
-    //   4. Spawn kernel receiver + user sender threads
-    //   5. User sender executes SYSCALL → capability validation → IPC
+    // Architecture:
+    //   1. Embed pre-compiled flat binary (serial_drv.bin)
+    //   2. Create IPC endpoint for driver commands
+    //   3. Map code + stack pages at user-accessible addresses
+    //   4. Spawn driver thread with IoPort + Endpoint capabilities
+    //   5. Spawn kernel "init" thread that sends test characters
+    //   6. Driver receives IPC, writes to COM1 via SYS_PORT_OUT
     //
     // =========================================================================
     kprintln!();
-    kprintln!("[init] Phase 6: Userspace & Syscalls");
+    kprintln!("[init] Phase 7: Userspace Serial Driver");
 
-    // --- 6a. SYSCALL MSR initialization ---
-    // Configure IA32_STAR, IA32_LSTAR, IA32_FMASK on the BSP.
-    // APs will call this in ap_rust_entry (smp.rs).
-    arch::syscall::init();
+    // --- 7a. Embed the serial driver flat binary ---
+    let serial_drv_bin: &[u8] = include_bytes!("../serial_drv.bin");
+    kprintln!("[init] Serial driver binary: {} bytes", serial_drv_bin.len());
 
-    // --- 6b. Create IPC endpoint + register in syscall table ---
-    // Endpoint ID=1, used by both the kernel receiver and user sender.
-    let test_ep = alloc::boxed::Box::new(ipc::endpoint::Endpoint::new(1));
-    let test_ep_ptr = alloc::boxed::Box::into_raw(test_ep);
-    // Register in the global endpoint table so syscall_dispatch can find it.
-    unsafe { arch::syscall::register_endpoint(test_ep_ptr); }
-    // Also keep a raw pointer for the kernel receiver thread.
-    unsafe { IPC_TEST_ENDPOINT = test_ep_ptr; }
+    // --- 7b. Create IPC endpoint for driver commands ---
+    let drv_ep = alloc::boxed::Box::new(ipc::endpoint::Endpoint::new(2));
+    let drv_ep_ptr = alloc::boxed::Box::into_raw(drv_ep);
+    unsafe { arch::syscall::register_endpoint(drv_ep_ptr); }
+    unsafe { SERIAL_DRV_ENDPOINT = drv_ep_ptr; }
+    kprintln!("[init] Registered serial driver endpoint (ID=2)");
 
-    // --- 6c. Map user code page ---
-    // Allocate a physical frame, map it at a user-accessible virtual address,
-    // and write the user test program (raw x86_64 machine code) into it.
+    // --- 7c. Map user code pages ---
     let user_code_virt = {
         use memory::vmm::{self, PageTableFlags};
 
-        let code_phys = memory::pmm::alloc_frame_zeroed()
-            .expect("[init] FATAL: cannot allocate user code page");
-        let code_virt = memory::address::VirtAddr::new(0x0000_0000_0040_0000);
+        let code_base = memory::address::VirtAddr::new(0x0000_0000_0040_0000);
         let cr3 = memory::address::PhysAddr::new(arch::cpu::read_cr3() & !0xFFF);
+        let num_pages = (serial_drv_bin.len() + 4095) / 4096;
 
-        // Map with USER + PRESENT (executable, not writable).
-        // NX is intentionally NOT set — this is a code page.
-        unsafe {
-            vmm::map_page(cr3, code_virt, code_phys,
-                PageTableFlags::PRESENT | PageTableFlags::USER,
-            ).expect("[init] FATAL: cannot map user code page");
-            arch::cpu::invlpg(code_virt.as_u64());
-        }
-
-        // Write user test program directly to the mapped page via HHDM.
-        //
-        // User program: sends 2 IPC messages via SYSCALL, then loops forever.
-        //
-        //   mov rax, 1          ; SYS_SEND
-        //   mov rdi, 0          ; CNode slot 0 (endpoint capability)
-        //   mov rsi, 0xBEEF     ; message label
-        //   mov rdx, 0x1111     ; data[0]
-        //   mov r10, 0x2222     ; data[1]
-        //   syscall
-        //
-        //   mov rax, 1          ; SYS_SEND (second message)
-        //   mov rdi, 0          ; slot 0
-        //   mov rsi, 0xCAFE     ; label
-        //   mov rdx, 0x3333     ; data[0]
-        //   mov r10, 0x4444     ; data[1]
-        //   syscall
-        //
-        //   jmp $               ; infinite loop (can't HLT in Ring 3)
-        //
-        let user_code_bytes: &[u8] = &[
-            // --- Message 1: label=0xBEEF, data=[0x1111, 0x2222] ---
-            0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,  // mov rax, 1
-            0x48, 0xC7, 0xC7, 0x00, 0x00, 0x00, 0x00,  // mov rdi, 0
-            0x48, 0xC7, 0xC6, 0xEF, 0xBE, 0x00, 0x00,  // mov rsi, 0xBEEF
-            0x48, 0xC7, 0xC2, 0x11, 0x11, 0x00, 0x00,  // mov rdx, 0x1111
-            0x49, 0xC7, 0xC2, 0x22, 0x22, 0x00, 0x00,  // mov r10, 0x2222
-            0x0F, 0x05,                                  // syscall
-            // --- Message 2: label=0xCAFE, data=[0x3333, 0x4444] ---
-            0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,  // mov rax, 1
-            0x48, 0xC7, 0xC7, 0x00, 0x00, 0x00, 0x00,  // mov rdi, 0
-            0x48, 0xC7, 0xC6, 0xFE, 0xCA, 0x00, 0x00,  // mov rsi, 0xCAFE
-            0x48, 0xC7, 0xC2, 0x33, 0x33, 0x00, 0x00,  // mov rdx, 0x3333
-            0x49, 0xC7, 0xC2, 0x44, 0x44, 0x00, 0x00,  // mov r10, 0x4444
-            0x0F, 0x05,                                  // syscall
-            // --- Done: loop forever ---
-            0xEB, 0xFE,                                  // jmp $ (infinite loop)
-        ];
-
-        // Copy code to the physical frame (via HHDM virtual mapping)
-        let code_dst = code_phys.to_virt().as_u64() as *mut u8;
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                user_code_bytes.as_ptr(),
-                code_dst,
-                user_code_bytes.len(),
+        let mut total_copied = 0usize;
+        for page_idx in 0..num_pages {
+            let code_phys = memory::pmm::alloc_frame_zeroed()
+                .expect("[init] FATAL: cannot allocate user code page");
+            let page_virt = memory::address::VirtAddr::new(
+                code_base.as_u64() + (page_idx as u64) * 4096
             );
+
+            unsafe {
+                vmm::map_page(cr3, page_virt, code_phys,
+                    PageTableFlags::PRESENT | PageTableFlags::USER,
+                ).expect("[init] FATAL: cannot map user code page");
+                arch::cpu::invlpg(page_virt.as_u64());
+            }
+
+            let offset = page_idx * 4096;
+            let remaining = serial_drv_bin.len() - offset;
+            let copy_len = if remaining > 4096 { 4096 } else { remaining };
+            let dst = code_phys.to_virt().as_u64() as *mut u8;
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    serial_drv_bin.as_ptr().add(offset),
+                    dst,
+                    copy_len,
+                );
+            }
+            total_copied += copy_len;
         }
 
-        kprintln!("[init] User code page: {:#018X} → phys {:#010X} ({} bytes)",
-            code_virt.as_u64(), code_phys.as_u64(), user_code_bytes.len());
-
-        code_virt.as_u64()
+        kprintln!("[init] User code: {:#010X} ({} pages, {} bytes copied)",
+            code_base.as_u64(), num_pages, total_copied);
+        code_base.as_u64()
     };
 
-    // --- 6d. Map user stack page ---
+    // --- 7d. Map user stack page ---
     let user_stack_top = {
         use memory::vmm::{self, PageTableFlags};
 
@@ -717,7 +692,6 @@ extern "C" fn kmain() -> ! {
         let stack_virt = memory::address::VirtAddr::new(0x0000_0000_0080_0000);
         let cr3 = memory::address::PhysAddr::new(arch::cpu::read_cr3() & !0xFFF);
 
-        // Map with USER + WRITABLE + NO_EXECUTE (data page, not code).
         unsafe {
             vmm::map_page(cr3, stack_virt, stack_phys,
                 PageTableFlags::PRESENT | PageTableFlags::WRITABLE
@@ -726,43 +700,52 @@ extern "C" fn kmain() -> ! {
             arch::cpu::invlpg(stack_virt.as_u64());
         }
 
-        // Stack grows down. RSP starts at the top of the page.
         let top = stack_virt.as_u64() + memory::address::PAGE_SIZE as u64;
-        kprintln!("[init] User stack page: {:#018X} — {:#018X} (RSP={:#018X})",
-            stack_virt.as_u64(), top, top);
+        kprintln!("[init] User stack: {:#010X} — {:#010X}", stack_virt.as_u64(), top);
         top
     };
 
-    // --- 6e. Spawn kernel receiver thread ---
-    // This kernel thread uses the proven ep.recv() to receive messages
-    // sent by the Ring 3 user thread. Proves the full path:
-    //   Ring 3 → SYSCALL → capability validation → IPC send → kernel recv
-    sched::scheduler::spawn("kern-recv", userspace_test_receiver, 0);
-
-    // --- 6f. Create user sender thread with capabilities ---
+    // --- 7e. Spawn the serial driver thread with capabilities ---
     {
         use cap::cnode::{CapObject, CapRights, Capability};
 
-        let mut user_sender = arch::syscall::spawn_user(
-            "user-send", user_code_virt, user_stack_top);
+        let mut serial_drv_thread = arch::syscall::spawn_user(
+            "serial-drv", user_code_virt, user_stack_top
+        );
 
-        // Install Endpoint capability at CNode slot 0.
-        // The user code references slot 0 in its SYSCALL (mov rdi, 0).
-        // WRITE right allows SYS_SEND on this endpoint.
-        user_sender.cnode.insert_at(0, Capability::new(
-            CapObject::Endpoint { id: 1 },
-            CapRights::WRITE,
-        )).expect("[init] FATAL: cannot install endpoint capability");
+        // Slot 0: IoPort capability for COM1 (0x3F8-0x3FF, 8 ports)
+        serial_drv_thread.cnode.insert_at(0, Capability::new(
+            CapObject::IoPort { base: 0x3F8, size: 8 },
+            CapRights::ALL,
+        )).expect("[init] FATAL: cannot install IoPort capability");
 
-        kprintln!("[init] User sender: CNode slot 0 = Endpoint(id=1, WRITE)");
-        sched::scheduler::spawn_thread(user_sender);
+        // Slot 1: Endpoint capability for command reception (READ only)
+        serial_drv_thread.cnode.insert_at(1, Capability::new(
+            CapObject::Endpoint { id: 2 },
+            CapRights::READ,
+        )).expect("[init] FATAL: cannot install Endpoint capability");
+
+        // Slot 2: Interrupt capability for COM1 IRQ 4
+        serial_drv_thread.cnode.insert_at(2, Capability::new(
+            CapObject::Interrupt { irq: 4 },
+            CapRights::READ,
+        )).expect("[init] FATAL: cannot install Interrupt capability");
+
+        kprintln!("[init] Serial driver CNode:");
+        kprintln!("[init]   Slot 0: IoPort(0x3F8, 8) [ALL]");
+        kprintln!("[init]   Slot 1: Endpoint(id=2) [READ]");
+        kprintln!("[init]   Slot 2: Interrupt(irq=4) [READ]");
+
+        sched::scheduler::spawn_thread(serial_drv_thread);
     }
 
-    // --- 6g. Initialize scheduler ---
-    // Drains BOOT_QUEUE into BSP run queue, arms LAPIC timer.
+    // --- 7f. Spawn kernel "init" thread ---
+    sched::scheduler::spawn("kern-init", kernel_init_thread, 0);
+
+    // --- 7g. Initialize scheduler ---
     sched::scheduler::init();
 
-    // --- 6h. Start Application Processors ---
+    // --- 7h. Start Application Processors ---
     arch::smp::init();
 
     // =========================================================================
@@ -770,54 +753,66 @@ extern "C" fn kmain() -> ! {
     // =========================================================================
     kprintln!();
     kprintln!("==========================================================");
-    kprintln!("  Sprint 6 — Userspace & Syscalls LIVE!");
-    kprintln!("  SYSCALL/SYSRET, Ring 3 execution, capability-gated IPC");
-    kprintln!("  User sender (Ring 3) → SYSCALL → EP1 → kernel receiver");
+    kprintln!("  Sprint 7 — Userspace Serial Driver LIVE!");
+    kprintln!("  Ring 3 serial_drv with IoPort + IPC capabilities");
+    kprintln!("  SYS_PORT_OUT, SYS_PORT_IN, SYS_RECV, SYS_WAIT_IRQ");
     kprintln!("  BSP entering idle loop.");
     kprintln!("==========================================================");
 
     loop {
-        arch::cpu::halt(); // hlt with IF=1 — LAPIC timer will wake us
+        arch::cpu::halt();
     }
 }
 
 // =============================================================================
-// IPC Test Infrastructure (Sprint 6: Ring 3 → Ring 0 IPC)
+// Sprint 7 Infrastructure — Userspace Serial Driver
 // =============================================================================
 
-/// Global pointer to the test endpoint. Written once during Phase 6b,
-/// read by the kernel receiver thread.
-static mut IPC_TEST_ENDPOINT: *mut ipc::endpoint::Endpoint = core::ptr::null_mut();
+/// Global pointer to the serial driver's command endpoint (ID=2).
+/// Written once during Phase 7b, read by the kernel init thread.
+static mut SERIAL_DRV_ENDPOINT: *mut ipc::endpoint::Endpoint = core::ptr::null_mut();
 
-/// Returns a reference to the global test endpoint.
+/// Returns a reference to the serial driver's command endpoint.
 ///
 /// # Safety
-/// Must only be called after Phase 6b has initialized IPC_TEST_ENDPOINT.
-unsafe fn get_test_endpoint() -> &'static ipc::endpoint::Endpoint {
-    unsafe { &*IPC_TEST_ENDPOINT }
+/// Must only be called after Phase 7b has initialized SERIAL_DRV_ENDPOINT.
+unsafe fn get_serial_drv_endpoint() -> &'static ipc::endpoint::Endpoint {
+    unsafe { &*SERIAL_DRV_ENDPOINT }
 }
 
-/// Kernel receiver thread — receives IPC messages from the Ring 3 sender.
+/// Kernel "init" thread — sends test characters to the serial driver.
 ///
-/// This runs in Ring 0 and uses the direct ep.recv() API (no syscall needed).
-/// It proves the full userspace IPC path:
-///   Ring 3 user code → SYSCALL → syscall_dispatch → capability check → ep.send()
-///   → this thread's ep.recv() → message printed to serial
-pub extern "C" fn userspace_test_receiver(_arg: u64) {
-    kprintln!("[ring3-test] Kernel receiver thread started (Ring 0)");
+/// This thread runs in Ring 0 and sends IPC messages to the serial
+/// driver's command endpoint (EP2). The driver receives them via
+/// SYS_RECV and writes each character to COM1 via SYS_PORT_OUT.
+///
+/// Proves the full microkernel pipeline:
+///   Kernel init → ep.send() → serial_drv SYS_RECV → SYS_PORT_OUT → COM1
+pub extern "C" fn kernel_init_thread(_arg: u64) {
+    kprintln!("[kern-init] Kernel init thread started");
 
-    for i in 0..2 {
-        kprintln!("[ring3-test] Receiver: calling recv() (iteration {})", i);
-        let ep = unsafe { get_test_endpoint() };
-        let msg = ep.recv();
-        kprintln!("[ring3-test] Receiver: GOT MESSAGE from Ring 3!");
-        kprintln!("[ring3-test]   label={:#X}, data=[{:#X}, {:#X}, {:#X}, {:#X}]",
-            msg.label, msg.regs[0], msg.regs[1], msg.regs[2], msg.regs[3]);
+    // Give the serial driver time to boot and print its banner.
+    // Simple spin delay — about 1M iterations ≈ a few ms on real hardware.
+    // QEMU emulation makes PAUSE much slower, so keep this small.
+    for _ in 0..1_000_000u64 {
+        core::hint::spin_loop();
     }
 
-    kprintln!("[ring3-test] ================================================");
-    kprintln!("[ring3-test] SUCCESS: 2 messages received from Ring 3 sender!");
-    kprintln!("[ring3-test] Ring 3 → SYSCALL → Capability → IPC PROVEN!");
-    kprintln!("[ring3-test] ================================================");
+    kprintln!("[kern-init] Sending test message to serial driver via EP2...");
+
+    let ep = unsafe { get_serial_drv_endpoint() };
+
+    // IPC label 0x01 = CMD_PRINT_CHAR (matches serial_drv's constant)
+    let test_msg = b"[kern-init] IPC->Ring3->COM1 OK!\r\n";
+    for &ch in test_msg.iter() {
+        let msg = ipc::message::IpcMessage::with_data(0x01, [ch as u64, 0, 0, 0]);
+        ep.send(&msg);
+    }
+
+    kprintln!("[kern-init] ================================================");
+    kprintln!("[kern-init] SUCCESS: All characters sent to serial driver!");
+    kprintln!("[kern-init] Ring 3 serial driver + IPC + port I/O PROVEN!");
+    kprintln!("[kern-init] ================================================");
+
     loop { arch::cpu::halt(); }
 }
