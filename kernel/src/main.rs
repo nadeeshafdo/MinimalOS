@@ -99,6 +99,10 @@ mod cap;
 /// Contains: IPC message format, synchronous endpoints.
 mod ipc;
 
+/// Filesystem parsers (initrd TarFS, ELF loader).
+/// Contains: USTAR TAR parser, ELF64 executable loader.
+mod fs;
+
 // =============================================================================
 // Imports
 // =============================================================================
@@ -611,86 +615,80 @@ extern "C" fn kmain() -> ! {
     arch::syscall::init();
 
     // =========================================================================
-    // PHASE 7: Userspace Serial Driver (Sprint 7)
+    // PHASE 7: Userspace Serial Driver via ELF + TarFS (Sprint 8)
     // =========================================================================
     //
-    // The first real userspace driver. We compile the serial_drv Rust binary
-    // to a flat binary, embed it in the kernel image, map it into user pages,
-    // and spawn it as a Ring 3 thread with capability-gated port I/O.
+    // The era of flat binaries is over. The kernel now:
+    //   1. Reads the initrd TAR archive (loaded by Limine as a boot module)
+    //   2. Locates the serial_drv ELF binary within the archive
+    //   3. Parses the ELF64 headers and loads PT_LOAD segments
+    //   4. Zeroes .bss (p_memsz - p_filesz) — no more garbage statics
+    //   5. Extracts the entry point (e_entry) from the ELF header
+    //   6. Spawns the driver as a Ring 3 thread with capabilities
     //
-    // Architecture:
-    //   1. Embed pre-compiled flat binary (serial_drv.bin)
-    //   2. Create IPC endpoint for driver commands
-    //   3. Map code + stack pages at user-accessible addresses
-    //   4. Spawn driver thread with IoPort + Endpoint capabilities
-    //   5. Spawn kernel "init" thread that sends test characters
-    //   6. Driver receives IPC, writes to COM1 via SYS_PORT_OUT
+    // This is the proper process loading pipeline for a real microkernel.
     //
     // =========================================================================
     kprintln!();
-    kprintln!("[init] Phase 7: Userspace Serial Driver");
+    kprintln!("[init] Phase 7: ELF Loader + TarFS Initrd");
 
-    // --- 7a. Embed the serial driver flat binary ---
-    let serial_drv_bin: &[u8] = include_bytes!("../serial_drv.bin");
-    kprintln!("[init] Serial driver binary: {} bytes", serial_drv_bin.len());
+    // --- 7a. Load the initrd TAR archive from Limine modules ---
+    let initrd = {
+        let modules = boot::get_modules()
+            .expect("[init] FATAL: no boot modules — is initrd.tar in limine.conf?");
+        kprintln!("[init] Limine loaded {} boot module(s)", modules.len());
 
-    // --- 7b. Create IPC endpoint for driver commands ---
-    let drv_ep = alloc::boxed::Box::new(ipc::endpoint::Endpoint::new(2));
-    let drv_ep_ptr = alloc::boxed::Box::into_raw(drv_ep);
-    unsafe { arch::syscall::register_endpoint(drv_ep_ptr); }
-    unsafe { SERIAL_DRV_ENDPOINT = drv_ep_ptr; }
-    kprintln!("[init] Registered serial driver endpoint (ID=2)");
+        let module = modules[0];
+        let addr = module.addr();
+        let size = module.size() as usize;
+        let path = module.path().to_bytes();
+        kprintln!("[init] Module 0: {:?} ({} bytes at {:p})",
+            core::str::from_utf8(path).unwrap_or("<invalid>"), size, addr);
 
-    // --- 7c. Map user code pages ---
-    let user_code_virt = {
-        use memory::vmm::{self, PageTableFlags};
-
-        let code_base = memory::address::VirtAddr::new(0x0000_0000_0040_0000);
-        let cr3 = memory::address::PhysAddr::new(arch::cpu::read_cr3() & !0xFFF);
-        let num_pages = (serial_drv_bin.len() + 4095) / 4096;
-
-        let mut total_copied = 0usize;
-        for page_idx in 0..num_pages {
-            let code_phys = memory::pmm::alloc_frame_zeroed()
-                .expect("[init] FATAL: cannot allocate user code page");
-            let page_virt = memory::address::VirtAddr::new(
-                code_base.as_u64() + (page_idx as u64) * 4096
-            );
-
-            unsafe {
-                vmm::map_page(cr3, page_virt, code_phys,
-                    PageTableFlags::PRESENT | PageTableFlags::USER,
-                ).expect("[init] FATAL: cannot map user code page");
-                arch::cpu::invlpg(page_virt.as_u64());
-            }
-
-            let offset = page_idx * 4096;
-            let remaining = serial_drv_bin.len() - offset;
-            let copy_len = if remaining > 4096 { 4096 } else { remaining };
-            let dst = code_phys.to_virt().as_u64() as *mut u8;
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    serial_drv_bin.as_ptr().add(offset),
-                    dst,
-                    copy_len,
-                );
-            }
-            total_copied += copy_len;
-        }
-
-        kprintln!("[init] User code: {:#010X} ({} pages, {} bytes copied)",
-            code_base.as_u64(), num_pages, total_copied);
-        code_base.as_u64()
+        // Create a byte slice over the module's memory.
+        // SAFETY: Limine loaded this into physical memory and maps it via HHDM.
+        // The data is read-only and lives for the entire kernel lifetime.
+        unsafe { core::slice::from_raw_parts(addr, size) }
     };
 
-    // --- 7d. Map user stack page ---
+    // --- 7b. List initrd contents ---
+    kprintln!("[initrd] Archive contents:");
+    fs::tar::for_each_file(initrd, |name, size| {
+        kprintln!("[initrd]   {} ({} bytes)", name, size);
+    });
+
+    // --- 7c. Locate serial_drv ELF in the initrd ---
+    let serial_drv_elf = fs::tar::find_file(initrd, "serial_drv")
+        .expect("[init] FATAL: serial_drv not found in initrd");
+    kprintln!("[init] Found '{}' in initrd ({} bytes)",
+        serial_drv_elf.name, serial_drv_elf.data.len());
+
+    // --- 7d. Validate the ELF header ---
+    let ehdr = fs::elf::validate_header(serial_drv_elf.data)
+        .expect("[init] FATAL: serial_drv is not a valid ELF64 executable");
+    // Copy packed fields to locals to avoid unaligned reference UB
+    let elf_entry = ehdr.e_entry;
+    let elf_phnum = ehdr.e_phnum;
+    let elf_phoff = ehdr.e_phoff;
+    kprintln!("[elf] Valid ELF64: entry={:#010X} phnum={} phoff={:#X}",
+        elf_entry, elf_phnum, elf_phoff);
+
+    // --- 7e. Load ELF segments into the current address space ---
+    let cr3 = memory::address::PhysAddr::new(arch::cpu::read_cr3() & !0xFFF);
+    let elf_result = fs::elf::load(serial_drv_elf.data, cr3)
+        .expect("[init] FATAL: failed to load serial_drv ELF");
+
+    kprintln!("[elf] Loaded: entry={:#010X} pages={} copied={} bss={}",
+        elf_result.entry_point, elf_result.pages_mapped,
+        elf_result.bytes_copied, elf_result.bss_zeroed);
+
+    // --- 7f. Map user stack page ---
     let user_stack_top = {
         use memory::vmm::{self, PageTableFlags};
 
         let stack_phys = memory::pmm::alloc_frame_zeroed()
             .expect("[init] FATAL: cannot allocate user stack page");
         let stack_virt = memory::address::VirtAddr::new(0x0000_0000_0080_0000);
-        let cr3 = memory::address::PhysAddr::new(arch::cpu::read_cr3() & !0xFFF);
 
         unsafe {
             vmm::map_page(cr3, stack_virt, stack_phys,
@@ -705,12 +703,19 @@ extern "C" fn kmain() -> ! {
         top
     };
 
-    // --- 7e. Spawn the serial driver thread with capabilities ---
+    // --- 7g. Create IPC endpoint for driver commands ---
+    let drv_ep = alloc::boxed::Box::new(ipc::endpoint::Endpoint::new(2));
+    let drv_ep_ptr = alloc::boxed::Box::into_raw(drv_ep);
+    unsafe { arch::syscall::register_endpoint(drv_ep_ptr); }
+    unsafe { SERIAL_DRV_ENDPOINT = drv_ep_ptr; }
+    kprintln!("[init] Registered serial driver endpoint (ID=2)");
+
+    // --- 7h. Spawn the serial driver thread with capabilities ---
     {
         use cap::cnode::{CapObject, CapRights, Capability};
 
         let mut serial_drv_thread = arch::syscall::spawn_user(
-            "serial-drv", user_code_virt, user_stack_top
+            "serial-drv", elf_result.entry_point, user_stack_top
         );
 
         // Slot 0: IoPort capability for COM1 (0x3F8-0x3FF, 8 ports)
@@ -739,13 +744,13 @@ extern "C" fn kmain() -> ! {
         sched::scheduler::spawn_thread(serial_drv_thread);
     }
 
-    // --- 7f. Spawn kernel "init" thread ---
+    // --- 7i. Spawn kernel "init" thread ---
     sched::scheduler::spawn("kern-init", kernel_init_thread, 0);
 
-    // --- 7g. Initialize scheduler ---
+    // --- 7j. Initialize scheduler ---
     sched::scheduler::init();
 
-    // --- 7h. Start Application Processors ---
+    // --- 7k. Start Application Processors ---
     arch::smp::init();
 
     // =========================================================================
@@ -753,9 +758,10 @@ extern "C" fn kmain() -> ! {
     // =========================================================================
     kprintln!();
     kprintln!("==========================================================");
-    kprintln!("  Sprint 7 — Userspace Serial Driver LIVE!");
-    kprintln!("  Ring 3 serial_drv with IoPort + IPC capabilities");
-    kprintln!("  SYS_PORT_OUT, SYS_PORT_IN, SYS_RECV, SYS_WAIT_IRQ");
+    kprintln!("  Sprint 8 — ELF Loader + TarFS Initrd LIVE!");
+    kprintln!("  serial_drv loaded as ELF64 from initrd.tar");
+    kprintln!("  PT_LOAD segments mapped, .bss zeroed, e_entry extracted");
+    kprintln!("  Ring 3 execution with IoPort + IPC + IRQ capabilities");
     kprintln!("  BSP entering idle loop.");
     kprintln!("==========================================================");
 
