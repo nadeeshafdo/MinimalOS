@@ -113,6 +113,11 @@ pub enum CapObject {
     /// `irq` is the global system interrupt (GSI) number.
     Interrupt { irq: u32 },
 
+    /// I/O port range — grants the right to perform IN/OUT on x86 I/O ports.
+    /// `base` is the first port number, `size` is the number of consecutive ports.
+    /// A capability with base=0x3F8, size=8 covers COM1 registers 0x3F8..0x3FF.
+    IoPort { base: u16, size: u16 },
+
     /// Thread control — grants control over another thread (suspend/resume/kill).
     /// `tid` is the target thread's ID.
     ThreadControl { tid: u64 },
