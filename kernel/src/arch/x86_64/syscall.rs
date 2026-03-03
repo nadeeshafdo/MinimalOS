@@ -47,7 +47,8 @@ use crate::ipc::endpoint::Endpoint;
 use crate::ipc::message::IpcMessage;
 use crate::kprintln;
 use crate::sched::percpu::CpuLocal;
-use crate::sched::thread::Thread;
+use crate::sched::thread::{Thread, ThreadState};
+use crate::sync::spinlock::SpinLock;
 
 // =============================================================================
 // MSR Constants
@@ -78,6 +79,15 @@ const SYS_SEND: u64 = 1;
 
 /// SYS_RECV — Receive an IPC message from a capability.
 const SYS_RECV: u64 = 2;
+
+/// SYS_PORT_OUT — Write a byte to an I/O port (capability-gated).
+const SYS_PORT_OUT: u64 = 3;
+
+/// SYS_PORT_IN — Read a byte from an I/O port (capability-gated).
+const SYS_PORT_IN: u64 = 4;
+
+/// SYS_WAIT_IRQ — Block until a hardware interrupt fires (capability-gated).
+const SYS_WAIT_IRQ: u64 = 5;
 
 // =============================================================================
 // CpuLocal Field Offsets (used by naked assembly)
@@ -121,6 +131,64 @@ unsafe fn lookup_endpoint(id: u64) -> Option<&'static Endpoint> {
     if idx >= MAX_ENDPOINTS { return None; }
     let ptr = unsafe { ENDPOINT_TABLE[idx] };
     if ptr.is_null() { None } else { Some(unsafe { &*ptr }) }
+}
+
+// =============================================================================
+// IRQ Notification Table (SYS_WAIT_IRQ support)
+// =============================================================================
+
+/// Maximum hardware IRQ lines supported (ISA IRQs 0-15).
+const MAX_IRQ_LINES: usize = 16;
+
+/// Per-IRQ blocked thread. When a thread calls SYS_WAIT_IRQ, its Box<Thread>
+/// is stored here (single-waiter per IRQ). When the IRQ fires, the handler
+/// reconstructs the Box, marks it Ready, and pushes it to the run queue.
+///
+/// Protected by a SpinLock. The IRQ handler acquires this briefly to wake
+/// the waiting thread.
+///
+/// We wrap the raw pointer array in a newtype to implement Send.
+struct IrqWaitersInner([*mut Thread; MAX_IRQ_LINES]);
+
+// SAFETY: The *mut Thread pointers represent exclusive ownership of Box<Thread>.
+// Only one entity (the SpinLock holder) accesses them at a time. Transfer between
+// cores is safe because the pointed-to Threads are heap-allocated and not tied
+// to any specific core.
+unsafe impl Send for IrqWaitersInner {}
+
+static IRQ_WAITERS: SpinLock<IrqWaitersInner> =
+    SpinLock::new(IrqWaitersInner([core::ptr::null_mut(); MAX_IRQ_LINES]));
+
+/// Called from `irq_dispatch` (idt.rs) when a hardware IRQ fires.
+/// Checks if any thread is blocked waiting for this IRQ, and if so,
+/// wakes it by pushing it back to the current core's run queue.
+///
+/// # Parameters
+/// - `irq`: IRQ line number (0-15, NOT the IDT vector).
+///
+/// # Safety
+/// Must be called from an interrupt handler context (IF=0).
+pub fn notify_irq_waiters(irq: usize) {
+    if irq >= MAX_IRQ_LINES { return; }
+
+    let mut waiters = IRQ_WAITERS.lock();
+    let ptr = waiters.0[irq];
+    if ptr.is_null() { return; }
+
+    // Take ownership back from the waiters table.
+    waiters.0[irq] = core::ptr::null_mut();
+    drop(waiters);
+
+    // Reconstruct Box, mark Ready, push to run queue.
+    let mut thread = unsafe { Box::from_raw(ptr) };
+    let tid = thread.id;
+    thread.state = ThreadState::Ready;
+
+    let cpu_local = unsafe { CpuLocal::get_mut() };
+    let rq = unsafe { &mut *cpu_local.run_queue };
+    rq.push(thread);
+
+    kprintln!("[syscall] IRQ {} woke thread {}", irq, tid);
 }
 
 // =============================================================================
@@ -348,6 +416,21 @@ pub extern "C" fn syscall_dispatch(frame: &mut SyscallFrame) -> u64 {
             let slot = frame.rdi;
             sys_recv(frame, slot)
         }
+        SYS_PORT_OUT => {
+            let slot = frame.rdi;
+            let port = frame.rsi;
+            let value = frame.rdx;
+            sys_port_out(slot, port, value)
+        }
+        SYS_PORT_IN => {
+            let slot = frame.rdi;
+            let port = frame.rsi;
+            sys_port_in(frame, slot, port)
+        }
+        SYS_WAIT_IRQ => {
+            let slot = frame.rdi;
+            sys_wait_irq(slot)
+        }
         _ => {
             kprintln!("[syscall] UNKNOWN syscall number {} from RIP={:#018X}",
                 number, frame.rcx);
@@ -495,6 +578,220 @@ fn sys_recv(frame: &mut SyscallFrame, slot: u64) -> u64 {
     frame.rsi = msg.regs[0];
     frame.rdx = msg.regs[1];
     frame.r10 = msg.regs[2];
+
+    0 // Success
+}
+
+// =============================================================================
+// SYS_PORT_OUT — Write a byte to an I/O port
+// =============================================================================
+
+/// Writes a byte to a hardware I/O port, gated by an IoPort capability.
+///
+/// The kernel mediates ALL port I/O from userspace. Ring 3 code cannot
+/// execute IN/OUT instructions directly (#GP). Instead, the user calls
+/// SYS_PORT_OUT and the kernel validates the IoPort capability before
+/// performing the privileged OUT instruction.
+///
+/// # Arguments (from syscall registers)
+///   - slot:  CNode slot index containing an IoPort capability with WRITE
+///   - port:  16-bit I/O port address
+///   - value: byte value to write (low 8 bits of u64)
+///
+/// # Returns
+///   0 on success. Error codes like the other syscalls.
+fn sys_port_out(slot: u64, port: u64, value: u64) -> u64 {
+    let cpu_local = unsafe { CpuLocal::get() };
+    let thread = unsafe { &*cpu_local.current_thread };
+
+    // 1. Validate capability
+    let cap = match thread.cnode.lookup(slot as usize) {
+        Some(c) => c,
+        None => {
+            kprintln!("[syscall] SYS_PORT_OUT: thread {} bad slot {}", thread.id, slot);
+            return u64::MAX;
+        }
+    };
+
+    // 2. Check it's an IoPort with WRITE rights
+    let (base, size) = match cap.object {
+        CapObject::IoPort { base, size } => {
+            if !cap.rights.contains(CapRights::WRITE) {
+                kprintln!("[syscall] SYS_PORT_OUT: thread {} no WRITE right on slot {}",
+                    thread.id, slot);
+                return u64::MAX - 1;
+            }
+            (base, size)
+        }
+        _ => {
+            kprintln!("[syscall] SYS_PORT_OUT: thread {} slot {} is not an IoPort",
+                thread.id, slot);
+            return u64::MAX - 2;
+        }
+    };
+
+    // 3. Validate port is within the capability's range
+    let port16 = port as u16;
+    if port16 < base || port16 >= base + size {
+        kprintln!("[syscall] SYS_PORT_OUT: thread {} port {:#06X} outside cap range [{:#06X}..{:#06X})",
+            thread.id, port16, base, base + size);
+        return u64::MAX - 4;
+    }
+
+    // 4. Perform the privileged OUT instruction
+    let byte = value as u8;
+    unsafe {
+        core::arch::asm!(
+            "out dx, al",
+            in("dx") port16,
+            in("al") byte,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+
+    0 // Success
+}
+
+// =============================================================================
+// SYS_PORT_IN — Read a byte from an I/O port
+// =============================================================================
+
+/// Reads a byte from a hardware I/O port, gated by an IoPort capability.
+///
+/// # Arguments (from syscall registers)
+///   - slot: CNode slot index containing an IoPort capability with READ
+///   - port: 16-bit I/O port address
+///
+/// # Returns
+///   RAX = 0 on success. The read byte is placed in frame.rdi so the
+///   user sees it in RDI after SYSRET.
+fn sys_port_in(frame: &mut SyscallFrame, slot: u64, port: u64) -> u64 {
+    let cpu_local = unsafe { CpuLocal::get() };
+    let thread = unsafe { &*cpu_local.current_thread };
+
+    // 1. Validate capability
+    let cap = match thread.cnode.lookup(slot as usize) {
+        Some(c) => c,
+        None => {
+            kprintln!("[syscall] SYS_PORT_IN: thread {} bad slot {}", thread.id, slot);
+            return u64::MAX;
+        }
+    };
+
+    // 2. Check it's an IoPort with READ rights
+    let (base, size) = match cap.object {
+        CapObject::IoPort { base, size } => {
+            if !cap.rights.contains(CapRights::READ) {
+                kprintln!("[syscall] SYS_PORT_IN: thread {} no READ right on slot {}",
+                    thread.id, slot);
+                return u64::MAX - 1;
+            }
+            (base, size)
+        }
+        _ => {
+            kprintln!("[syscall] SYS_PORT_IN: thread {} slot {} is not an IoPort",
+                thread.id, slot);
+            return u64::MAX - 2;
+        }
+    };
+
+    // 3. Validate port is within the capability's range
+    let port16 = port as u16;
+    if port16 < base || port16 >= base + size {
+        kprintln!("[syscall] SYS_PORT_IN: thread {} port {:#06X} outside cap range [{:#06X}..{:#06X})",
+            thread.id, port16, base, base + size);
+        return u64::MAX - 4;
+    }
+
+    // 4. Perform the privileged IN instruction
+    let byte: u8;
+    unsafe {
+        core::arch::asm!(
+            "in al, dx",
+            out("al") byte,
+            in("dx") port16,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+
+    // 5. Return value in RDI (user sees it in RDI register after SYSRET)
+    frame.rdi = byte as u64;
+
+    0 // Success
+}
+
+// =============================================================================
+// SYS_WAIT_IRQ — Block until a hardware interrupt fires
+// =============================================================================
+
+/// Blocks the calling thread until the specified hardware IRQ fires.
+///
+/// The thread's Box<Thread> ownership is transferred to the IRQ_WAITERS
+/// table. When the IRQ fires, `notify_irq_waiters()` (called from
+/// irq_dispatch in idt.rs) reconstructs the Box and pushes the thread
+/// back to the run queue.
+///
+/// Single-waiter per IRQ: if another thread is already waiting on the
+/// same IRQ, this returns an error.
+///
+/// # Arguments (from syscall registers)
+///   - slot: CNode slot index containing an Interrupt capability
+///
+/// # Returns
+///   0 on success (IRQ fired). Error codes as usual.
+fn sys_wait_irq(slot: u64) -> u64 {
+    let cpu_local = unsafe { CpuLocal::get_mut() };
+    let thread = unsafe { &*cpu_local.current_thread };
+
+    // 1. Validate capability
+    let cap = match thread.cnode.lookup(slot as usize) {
+        Some(c) => c,
+        None => {
+            kprintln!("[syscall] SYS_WAIT_IRQ: thread {} bad slot {}", thread.id, slot);
+            return u64::MAX;
+        }
+    };
+
+    // 2. Check it's an Interrupt capability
+    let irq = match cap.object {
+        CapObject::Interrupt { irq } => irq as usize,
+        _ => {
+            kprintln!("[syscall] SYS_WAIT_IRQ: thread {} slot {} is not an Interrupt",
+                thread.id, slot);
+            return u64::MAX - 2;
+        }
+    };
+
+    if irq >= MAX_IRQ_LINES {
+        kprintln!("[syscall] SYS_WAIT_IRQ: IRQ {} out of range", irq);
+        return u64::MAX - 4;
+    }
+
+    kprintln!("[syscall] SYS_WAIT_IRQ: thread {} blocking on IRQ {}", thread.id, irq);
+
+    // 3. Take Box ownership of current thread (IF already 0 from FMASK)
+    let current_ptr = cpu_local.current_thread;
+    let mut current_box = unsafe { Box::from_raw(current_ptr) };
+    current_box.state = ThreadState::BlockedRecv;
+
+    // 4. Try to register in the IRQ waiters table
+    {
+        let mut waiters = IRQ_WAITERS.lock();
+        if !waiters.0[irq].is_null() {
+            // Another thread already waiting — restore and error
+            kprintln!("[syscall] SYS_WAIT_IRQ: IRQ {} already has a waiter", irq);
+            current_box.state = ThreadState::Running;
+            let _ = Box::into_raw(current_box); // leak back to CpuLocal ownership
+            return u64::MAX - 5;
+        }
+        waiters.0[irq] = Box::into_raw(current_box);
+    }
+
+    // 5. Yield the CPU. We'll resume when notify_irq_waiters() wakes us.
+    unsafe { crate::sched::scheduler::schedule(); }
+
+    // 6. We're back — IRQ fired and we were woken
+    unsafe { core::arch::asm!("sti", options(nomem, nostack)); }
 
     0 // Success
 }
