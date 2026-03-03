@@ -117,7 +117,7 @@ extern "C" fn ap_rust_entry(cpu_info: &limine::mp::Cpu) -> ! {
     // Each AP needs its own TSS (for IST stacks). For now, we share the GDT
     // but load a per-core TSS. A simplified approach: reload the global GDT.
     // TODO: Per-core TSS with separate IST stacks for full isolation.
-    gdt::init();
+    gdt::init(core_index as usize);
 
     // --- 2. Load shared IDT ---
     crate::arch::idt::init();
