@@ -44,10 +44,13 @@ ISO_DIR         := $(BUILD_DIR)/iso
 KERNEL_DEBUG    := $(BUILD_DIR)/$(TARGET)/debug/minimalos-kernel
 KERNEL_RELEASE  := $(BUILD_DIR)/$(TARGET)/release/minimalos-kernel
 
-# User binary paths (ELF → flat binary)
+# User binary paths (ELF — loaded from initrd TAR, not flat binary)
 SERIAL_DRV_ELF_DEBUG   := $(BUILD_DIR)/$(TARGET)/debug/serial_drv
 SERIAL_DRV_ELF_RELEASE := $(BUILD_DIR)/$(TARGET)/release/serial_drv
-SERIAL_DRV_BIN         := kernel/serial_drv.bin
+
+# Initrd TAR archive (contains user ELF binaries)
+INITRD_DEBUG           := $(BUILD_DIR)/initrd-debug.tar
+INITRD_RELEASE         := $(BUILD_DIR)/initrd-release.tar
 
 # Output ISO paths
 ISO_DEBUG       := $(BUILD_DIR)/minimalos-debug.iso
@@ -69,8 +72,7 @@ QEMU_FLAGS      := \
 	-no-reboot           \
 	-no-shutdown
 
-# objcopy for converting ELF → flat binary
-# Prefer llvm-objcopy (comes with llvm-tools), fall back to GNU objcopy
+# objcopy for debugging/analysis (no longer used for flat binary extraction)
 OBJCOPY := $(firstword $(shell which llvm-objcopy rust-objcopy objcopy 2>/dev/null))
 
 # Per-crate RUSTFLAGS.
@@ -118,33 +120,44 @@ release: kernel-release
 #
 # Build order is critical:
 #   1. Build serial_drv user binary → ELF
-#   2. objcopy ELF → flat binary at kernel/serial_drv.bin
-#   3. Build kernel (which embeds serial_drv.bin via include_bytes!)
+#   2. Package user ELF binaries into initrd.tar
+#   3. Build kernel (no longer embeds user binaries)
 #
-# Each crate gets its own CARGO_ENCODED_RUSTFLAGS:
-#   - Kernel: code-model=kernel, static relocation, no SIMD
-#   - User:   default code-model (small), no SIMD
+# The initrd.tar is loaded by Limine as a boot module and parsed by the
+# kernel's TarFS parser at runtime. This replaces the flat binary hack.
 
-.PHONY: kernel-debug kernel-release serial-drv-debug serial-drv-release
+.PHONY: kernel-debug kernel-release serial-drv-debug serial-drv-release initrd-debug initrd-release
 
-# --- User binaries (built BEFORE the kernel) ---
+# --- User binaries ---
 
 serial-drv-debug:
 	RUSTFLAGS="$(USER_RUSTFLAGS)" cargo build -p serial_drv
-	$(OBJCOPY) -O binary $(SERIAL_DRV_ELF_DEBUG) $(SERIAL_DRV_BIN)
-	@echo "[serial_drv] Flat binary: $(SERIAL_DRV_BIN) ($$(wc -c < $(SERIAL_DRV_BIN)) bytes)"
+	@echo "[serial_drv] ELF: $(SERIAL_DRV_ELF_DEBUG) ($$(wc -c < $(SERIAL_DRV_ELF_DEBUG)) bytes)"
 
 serial-drv-release:
 	RUSTFLAGS="$(USER_RUSTFLAGS)" cargo build --release -p serial_drv
-	$(OBJCOPY) -O binary $(SERIAL_DRV_ELF_RELEASE) $(SERIAL_DRV_BIN)
-	@echo "[serial_drv] Flat binary: $(SERIAL_DRV_BIN) ($$(wc -c < $(SERIAL_DRV_BIN)) bytes)"
+	@echo "[serial_drv] ELF: $(SERIAL_DRV_ELF_RELEASE) ($$(wc -c < $(SERIAL_DRV_ELF_RELEASE)) bytes)"
 
-# --- Kernel (built AFTER user binaries) ---
+# --- Initrd TAR archive (contains all userspace ELF binaries) ---
 
-kernel-debug: serial-drv-debug
+initrd-debug: serial-drv-debug
+	@mkdir -p $(BUILD_DIR)/initrd-staging
+	@cp $(SERIAL_DRV_ELF_DEBUG) $(BUILD_DIR)/initrd-staging/serial_drv
+	@cd $(BUILD_DIR)/initrd-staging && tar cf ../initrd-debug.tar --format=ustar *
+	@echo "[initrd] $(INITRD_DEBUG) ($$(wc -c < $(INITRD_DEBUG)) bytes, $$(tar tf $(INITRD_DEBUG) | wc -l) files)"
+
+initrd-release: serial-drv-release
+	@mkdir -p $(BUILD_DIR)/initrd-staging
+	@cp $(SERIAL_DRV_ELF_RELEASE) $(BUILD_DIR)/initrd-staging/serial_drv
+	@cd $(BUILD_DIR)/initrd-staging && tar cf ../initrd-release.tar --format=ustar *
+	@echo "[initrd] $(INITRD_RELEASE) ($$(wc -c < $(INITRD_RELEASE)) bytes, $$(tar tf $(INITRD_RELEASE) | wc -l) files)"
+
+# --- Kernel (independent of user binaries — reads ELF from initrd at runtime) ---
+
+kernel-debug: initrd-debug
 	RUSTFLAGS="$(KERNEL_RUSTFLAGS)" cargo build -p minimalos-kernel
 
-kernel-release: serial-drv-release
+kernel-release: initrd-release
 	RUSTFLAGS="$(KERNEL_RUSTFLAGS)" cargo build --release -p minimalos-kernel
 
 # -----------------------------------------------------------------------------
@@ -191,23 +204,24 @@ $(BUILD_DIR):
 #   /EFI/BOOT/BOOTX64.EFI     — UEFI fallback bootloader
 
 iso: kernel-debug $(LIMINE_CLI)
-	$(call make-iso,$(KERNEL_DEBUG),$(ISO_DEBUG))
+	$(call make-iso,$(KERNEL_DEBUG),$(INITRD_DEBUG),$(ISO_DEBUG))
 
 iso-release: kernel-release $(LIMINE_CLI)
-	$(call make-iso,$(KERNEL_RELEASE),$(ISO_RELEASE))
+	$(call make-iso,$(KERNEL_RELEASE),$(INITRD_RELEASE),$(ISO_RELEASE))
 
-# Reusable function: $(call make-iso,<kernel-elf>,<output-iso>)
+# Reusable function: $(call make-iso,<kernel-elf>,<initrd-tar>,<output-iso>)
 define make-iso
 	@echo "[iso] Assembling ISO directory..."
 	@rm -rf $(ISO_DIR)
 	@mkdir -p $(ISO_DIR)/boot $(ISO_DIR)/EFI/BOOT
 	@cp $(1) $(ISO_DIR)/boot/minimalos-kernel
+	@cp $(2) $(ISO_DIR)/boot/initrd.tar
 	@cp boot/limine.conf $(ISO_DIR)/boot/limine.conf
 	@cp $(LIMINE_BIOS_CD)  $(ISO_DIR)/boot/
 	@cp $(LIMINE_BIOS_SYS) $(ISO_DIR)/boot/
 	@cp $(LIMINE_UEFI_CD)  $(ISO_DIR)/boot/
 	@cp $(LIMINE_EFI)      $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
-	@echo "[iso] Creating ISO image: $(2)"
+	@echo "[iso] Creating ISO image: $(3)"
 	@xorriso -as mkisofs                           \
 		-R -J                                      \
 		-b boot/limine-bios-cd.bin                 \
@@ -216,9 +230,9 @@ define make-iso
 		-boot-info-table                           \
 		--efi-boot boot/limine-uefi-cd.bin         \
 		-efi-boot-part --efi-boot-image            \
-		-o $(2) $(ISO_DIR) 2>/dev/null
-	@$(LIMINE_CLI) bios-install $(2) 2>/dev/null
-	@echo "[iso] Done: $(2) ($$(du -h $(2) | cut -f1))"
+		-o $(3) $(ISO_DIR) 2>/dev/null
+	@$(LIMINE_CLI) bios-install $(3) 2>/dev/null
+	@echo "[iso] Done: $(3) ($$(du -h $(3) | cut -f1))"
 endef
 
 # -----------------------------------------------------------------------------
@@ -281,7 +295,8 @@ clean:
 	@rm -rf $(ISO_DIR)
 	@rm -f $(ISO_DEBUG) $(ISO_RELEASE)
 	@rm -f $(BUILD_DIR)/serial.log $(BUILD_DIR)/qemu-debug.log
-	@rm -f $(SERIAL_DRV_BIN)
+	@rm -f $(INITRD_DEBUG) $(INITRD_RELEASE)
+	@rm -rf $(BUILD_DIR)/initrd-staging
 	@echo "Clean."
 
 distclean: clean
