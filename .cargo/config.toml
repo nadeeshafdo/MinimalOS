@@ -2,41 +2,27 @@
 # MinimalOS NextGen — Cargo Build Configuration
 # =============================================================================
 #
-# This file tells cargo HOW to build the kernel. Key decisions:
+# This file tells cargo HOW to build the kernel AND user crates. Key decisions:
 #
 # 1. TARGET: x86_64-unknown-none
 #    We compile for bare metal x86_64 — no operating system, no libc.
 #    Rust's `core` library is rebuilt from source for this target
 #    (that's why we need the `rust-src` component).
 #
-# 2. LINKER SCRIPT: We use a custom linker script that places the kernel
-#    at the higher-half virtual address (0xFFFFFFFF80000000). The Limine
-#    bootloader maps the kernel there before jumping to our entry point.
+# 2. RUSTFLAGS: Handled per-crate by the Makefile via CARGO_ENCODED_RUSTFLAGS.
+#    The kernel needs: code-model=kernel, relocation-model=static, linker.ld
+#    User crates need: default code-model (small), their own linker scripts.
+#    Both need: -sse,-sse2,-avx (no SIMD in kernel or user for simplicity).
+#    See the Makefile for the exact flags per target.
 #
-# 3. FLAGS:
-#    - `-C code-model=kernel`: Use the kernel code model which assumes code
-#      runs in the top 2GB of virtual address space. This allows more
-#      efficient addressing for kernel symbols.
-#    - `-C relocation-model=static`: No position-independent code in kernel.
-#      We know exactly where we're loaded.
-#    - `-C target-feature=-sse,-sse2,-avx`: Disable SIMD in kernel code.
-#      Using SSE/AVX in the kernel requires saving/restoring XMM/YMM registers
-#      on every interrupt, which is expensive. The N3710 doesn't have AVX
-#      anyway, but we disable SSE too for simpler interrupt handling.
-#      (soft-float is used instead — fine for a kernel that does no FP math.)
+# 3. LINKER SCRIPTS: Each crate uses its own build.rs to pass linker scripts
+#    via cargo:rustc-link-arg. This allows the kernel and user binaries to
+#    have different memory layouts.
 
 [build]
 target = "x86_64-unknown-none"
 
 [target.x86_64-unknown-none]
-rustflags = [
-    "-C", "link-arg=-T",
-    "-C", "link-arg=kernel/linker.ld",
-    "-C", "code-model=kernel",
-    "-C", "relocation-model=static",
-    "-C", "target-feature=-sse,-sse2,-avx",
-]
-
 # Use the `rust-lld` linker that ships with Rust.
 # No need for system linker — fewer external dependencies.
 linker = "rust-lld"
