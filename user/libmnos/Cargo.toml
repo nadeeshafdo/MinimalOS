@@ -1,0 +1,24 @@
+# =============================================================================
+# libmnos — MinimalOS Userspace Library
+# =============================================================================
+#
+# Safe Rust wrappers around the MinimalOS syscall ABI. This is the ONLY way
+# for Ring 3 user processes to interact with the kernel.
+#
+# Provides:
+#   - IPC (sys_send, sys_recv)
+#   - Port I/O (sys_port_out, sys_port_in) — capability-gated
+#   - Interrupt notification (sys_wait_irq) — capability-gated
+#
+# This crate is #![no_std] — it has zero dependencies beyond core.
+# =============================================================================
+
+[package]
+name = "libmnos"
+version.workspace = true
+edition.workspace = true
+description = "MinimalOS userspace syscall library"
+
+[lib]
+name = "libmnos"
+path = "src/lib.rs"

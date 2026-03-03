@@ -1,0 +1,24 @@
+# =============================================================================
+# serial_drv — MinimalOS Ring 3 COM1 Serial Driver
+# =============================================================================
+#
+# The first userspace driver for MinimalOS. This binary runs in Ring 3 and
+# drives the 16550 UART (COM1) using capability-gated port I/O syscalls.
+#
+# It receives IPC commands from other threads and writes characters to
+# the serial port. This proves the full microkernel architecture:
+#   Ring 3 driver → SYSCALL → capability validation → I/O port access
+#
+# The binary is compiled to a flat binary (via objcopy) and embedded in
+# the kernel image via include_bytes!(). The kernel maps it into user-
+# accessible pages and spawns it as a Ring 3 thread.
+# =============================================================================
+
+[package]
+name = "serial_drv"
+version.workspace = true
+edition.workspace = true
+description = "MinimalOS Ring 3 COM1 serial port driver"
+
+[dependencies]
+libmnos = { path = "../libmnos" }
