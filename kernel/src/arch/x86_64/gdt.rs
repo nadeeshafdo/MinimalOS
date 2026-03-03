@@ -199,21 +199,32 @@ struct GdtPointer {
 }
 
 // =============================================================================
-// Static storage
+// Static storage (per-CPU)
 // =============================================================================
 //
-// SAFETY: These statics are only modified during single-core early boot
-// (before SMP init). After init(), they are read-only.
+// Each CPU core needs its own GDT (TSS descriptor differs per core) and
+// its own TSS (RSP0 and IST entries are core-specific). Without per-CPU
+// isolation, one core's scheduler would corrupt another core's TSS.RSP0,
+// causing Double Faults when Ring 3 code is interrupted.
+//
+// SAFETY: Each core only writes to its own index during init and schedule().
+// Inter-core access does not occur.
 
-static mut GDT: [u64; GDT_ENTRY_COUNT] = [0; GDT_ENTRY_COUNT];
-static mut TSS: Tss = Tss {
-    reserved1: 0,
-    rsp: [0; 3],
-    reserved2: 0,
-    ist: [0; 7],
-    reserved3: 0,
-    reserved4: 0,
-    iomap_base: 0,
+/// Maximum supported CPU cores.
+const MAX_CPUS: usize = 64;
+
+static mut GDT_ARRAY: [[u64; GDT_ENTRY_COUNT]; MAX_CPUS] = [[0; GDT_ENTRY_COUNT]; MAX_CPUS];
+static mut TSS_ARRAY: [Tss; MAX_CPUS] = {
+    const ZERO_TSS: Tss = Tss {
+        reserved1: 0,
+        rsp: [0; 3],
+        reserved2: 0,
+        ist: [0; 7],
+        reserved3: 0,
+        reserved4: 0,
+        iomap_base: 0,
+    };
+    [ZERO_TSS; MAX_CPUS]
 };
 
 // =============================================================================
@@ -233,7 +244,12 @@ static mut TSS: Tss = Tss {
 /// 5. Loads the GDT via `lgdt`
 /// 6. Reloads all segment registers (CS via far return, data via mov)
 /// 7. Loads the TSS via `ltr`
-pub fn init() {
+///
+/// # Parameters
+/// - `core_index`: CPU core index (0 = BSP, 1..N-1 = APs). Used to index
+///   into per-CPU TSS and GDT arrays.
+pub fn init(core_index: usize) {
+    assert!(core_index < MAX_CPUS, "core_index {} exceeds MAX_CPUS {}", core_index, MAX_CPUS);
     // =========================================================================
     // Step 1: Allocate the IST1 double-fault stack (4 pages = 16 KiB)
     // =========================================================================
@@ -282,41 +298,42 @@ pub fn init() {
     // Step 2: Populate the TSS
     // =========================================================================
     unsafe {
-        // RSP0 will be set per-thread during context switch (Sprint 4).
-        // For now, leave it zeroed (we don't do Ring 3 → Ring 0 yet).
-        TSS.rsp[0] = 0;
+        // RSP0 will be set per-thread during context switch.
+        // For now, leave it zeroed. The scheduler writes the correct value
+        // before any Ring 3 thread runs on this core.
+        TSS_ARRAY[core_index].rsp[0] = 0;
 
         // IST1 = double-fault stack top.
-        TSS.ist[0] = ist1_top;
+        TSS_ARRAY[core_index].ist[0] = ist1_top;
 
         // I/O permission bitmap offset. Setting this to the size of the TSS
         // means "no I/O bitmap present" — all I/O ports require IOPL 0.
-        TSS.iomap_base = mem::size_of::<Tss>() as u16;
+        TSS_ARRAY[core_index].iomap_base = mem::size_of::<Tss>() as u16;
     }
 
     // =========================================================================
-    // Step 3: Build the GDT
+    // Step 3: Build the per-CPU GDT
     // =========================================================================
-    let tss_base = ptr::addr_of!(TSS) as u64;
+    let tss_base = unsafe { ptr::addr_of!(TSS_ARRAY[core_index]) as u64 };
     let tss_limit = (mem::size_of::<Tss>() - 1) as u16;
     let tss_desc = TssDescriptor::new(tss_base, tss_limit);
 
     unsafe {
-        GDT[0] = GdtEntry::NULL.0;                     // 0x00: null
-        GDT[1] = GdtEntry::code64(0).0;                // 0x08: kernel code
-        GDT[2] = GdtEntry::data64(0).0;                // 0x10: kernel data
-        GDT[3] = GdtEntry::data64(3).0;                // 0x18: user data
-        GDT[4] = GdtEntry::code64(3).0;                // 0x20: user code
-        GDT[5] = tss_desc.low;                          // 0x28: TSS low
-        GDT[6] = tss_desc.high;                         // 0x30: TSS high
+        GDT_ARRAY[core_index][0] = GdtEntry::NULL.0;                     // 0x00: null
+        GDT_ARRAY[core_index][1] = GdtEntry::code64(0).0;                // 0x08: kernel code
+        GDT_ARRAY[core_index][2] = GdtEntry::data64(0).0;                // 0x10: kernel data
+        GDT_ARRAY[core_index][3] = GdtEntry::data64(3).0;                // 0x18: user data
+        GDT_ARRAY[core_index][4] = GdtEntry::code64(3).0;                // 0x20: user code
+        GDT_ARRAY[core_index][5] = tss_desc.low;                          // 0x28: TSS low
+        GDT_ARRAY[core_index][6] = tss_desc.high;                         // 0x30: TSS high
     }
 
     // =========================================================================
-    // Step 4: Load the GDT via LGDT
+    // Step 4: Load the per-CPU GDT via LGDT
     // =========================================================================
     let gdt_ptr = GdtPointer {
         limit: (GDT_ENTRY_COUNT * mem::size_of::<u64>() - 1) as u16,
-        base: ptr::addr_of!(GDT) as u64,
+        base: unsafe { ptr::addr_of!(GDT_ARRAY[core_index]) as u64 },
     };
 
     unsafe {
@@ -384,19 +401,23 @@ pub fn init() {
         KERNEL_CS, KERNEL_DS, USER_DS, USER_CS, TSS_SELECTOR);
 }
 
-/// Updates TSS.rsp[0] — the kernel stack pointer loaded by the CPU on
-/// a Ring 3 → Ring 0 transition (interrupt/exception from user mode).
+/// Updates TSS.rsp[0] for the given core — the kernel stack pointer loaded
+/// by the CPU on a Ring 3 → Ring 0 transition (interrupt/exception from
+/// user mode).
 ///
 /// Must be called on every context switch to a thread that may execute
 /// in Ring 3. The CPU loads RSP from TSS.rsp[0] when an interrupt gate
 /// fires while CPL=3.
 ///
+/// # Parameters
+/// - `core_index`: CPU core index (same value passed to `init()`).
+/// - `rsp0`: valid, mapped kernel stack top.
+///
 /// # Safety
-/// - `rsp0` must point to a valid, mapped kernel stack top.
-/// - On SMP, each core shares the global TSS — a proper per-core TSS
-///   is needed for multi-core Ring 3 support (future sprint).
-pub fn set_rsp0(rsp0: u64) {
-    // SAFETY: Single-writer guarantee — only the current core's scheduler
+/// - `rsp0` must point to a valid, mapped kernel stack.
+/// - Each core only writes to its own TSS entry (no cross-core writes).
+pub fn set_rsp0(core_index: usize, rsp0: u64) {
+    // SAFETY: Single-writer per core — only the current core's scheduler
     // calls this, and schedule() runs with interrupts disabled.
-    unsafe { TSS.rsp[0] = rsp0; }
+    unsafe { TSS_ARRAY[core_index].rsp[0] = rsp0; }
 }
