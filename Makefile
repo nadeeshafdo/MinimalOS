@@ -44,6 +44,11 @@ ISO_DIR         := $(BUILD_DIR)/iso
 KERNEL_DEBUG    := $(BUILD_DIR)/$(TARGET)/debug/minimalos-kernel
 KERNEL_RELEASE  := $(BUILD_DIR)/$(TARGET)/release/minimalos-kernel
 
+# User binary paths (ELF → flat binary)
+SERIAL_DRV_ELF_DEBUG   := $(BUILD_DIR)/$(TARGET)/debug/serial_drv
+SERIAL_DRV_ELF_RELEASE := $(BUILD_DIR)/$(TARGET)/release/serial_drv
+SERIAL_DRV_BIN         := kernel/serial_drv.bin
+
 # Output ISO paths
 ISO_DEBUG       := $(BUILD_DIR)/minimalos-debug.iso
 ISO_RELEASE     := $(BUILD_DIR)/minimalos-release.iso
@@ -63,6 +68,17 @@ QEMU_FLAGS      := \
 	-serial stdio        \
 	-no-reboot           \
 	-no-shutdown
+
+# objcopy for converting ELF → flat binary
+# Prefer llvm-objcopy (comes with llvm-tools), fall back to GNU objcopy
+OBJCOPY := $(firstword $(shell which llvm-objcopy rust-objcopy objcopy 2>/dev/null))
+
+# Per-crate RUSTFLAGS.
+# Since .cargo/config.toml has no rustflags, the RUSTFLAGS env var is respected.
+# Kernel: code-model=kernel (top 2GB), static relocation, no SIMD
+KERNEL_RUSTFLAGS := -C target-feature=-sse,-sse2,-avx -C code-model=kernel -C relocation-model=static
+# User crates: default code-model (small), no SIMD
+USER_RUSTFLAGS   := -C target-feature=-sse,-sse2,-avx
 
 # Detect OVMF for UEFI boot
 OVMF := $(firstword $(wildcard \
@@ -100,22 +116,36 @@ release: kernel-release
 # Kernel build (delegates to cargo)
 # -----------------------------------------------------------------------------
 #
-# Cargo handles all Rust compilation:
-#   - Cross-compiling for x86_64-unknown-none
-#   - Rebuilding core/alloc from source (build-std)
-#   - Linking with our kernel/linker.ld
-#   - Applying kernel code model, disabling SSE/AVX
+# Build order is critical:
+#   1. Build serial_drv user binary → ELF
+#   2. objcopy ELF → flat binary at kernel/serial_drv.bin
+#   3. Build kernel (which embeds serial_drv.bin via include_bytes!)
 #
-# We use .PHONY-like behavior by always running cargo — it has its own
-# incremental build system that skips work when sources haven't changed.
+# Each crate gets its own CARGO_ENCODED_RUSTFLAGS:
+#   - Kernel: code-model=kernel, static relocation, no SIMD
+#   - User:   default code-model (small), no SIMD
 
-.PHONY: kernel-debug kernel-release
+.PHONY: kernel-debug kernel-release serial-drv-debug serial-drv-release
 
-kernel-debug:
-	cargo build
+# --- User binaries (built BEFORE the kernel) ---
 
-kernel-release:
-	cargo build --release
+serial-drv-debug:
+	RUSTFLAGS="$(USER_RUSTFLAGS)" cargo build -p serial_drv
+	$(OBJCOPY) -O binary $(SERIAL_DRV_ELF_DEBUG) $(SERIAL_DRV_BIN)
+	@echo "[serial_drv] Flat binary: $(SERIAL_DRV_BIN) ($$(wc -c < $(SERIAL_DRV_BIN)) bytes)"
+
+serial-drv-release:
+	RUSTFLAGS="$(USER_RUSTFLAGS)" cargo build --release -p serial_drv
+	$(OBJCOPY) -O binary $(SERIAL_DRV_ELF_RELEASE) $(SERIAL_DRV_BIN)
+	@echo "[serial_drv] Flat binary: $(SERIAL_DRV_BIN) ($$(wc -c < $(SERIAL_DRV_BIN)) bytes)"
+
+# --- Kernel (built AFTER user binaries) ---
+
+kernel-debug: serial-drv-debug
+	RUSTFLAGS="$(KERNEL_RUSTFLAGS)" cargo build -p minimalos-kernel
+
+kernel-release: serial-drv-release
+	RUSTFLAGS="$(KERNEL_RUSTFLAGS)" cargo build --release -p minimalos-kernel
 
 # -----------------------------------------------------------------------------
 # Limine bootloader setup
@@ -251,6 +281,7 @@ clean:
 	@rm -rf $(ISO_DIR)
 	@rm -f $(ISO_DEBUG) $(ISO_RELEASE)
 	@rm -f $(BUILD_DIR)/serial.log $(BUILD_DIR)/qemu-debug.log
+	@rm -f $(SERIAL_DRV_BIN)
 	@echo "Clean."
 
 distclean: clean
