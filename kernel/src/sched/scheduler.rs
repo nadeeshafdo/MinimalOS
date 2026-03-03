@@ -265,7 +265,7 @@ pub unsafe fn schedule() {
     let kstack_size = unsafe { (*next_ptr).kernel_stack_size };
     if kstack_base != 0 {
         let stack_top = kstack_base + kstack_size as u64;
-        crate::arch::gdt::set_rsp0(stack_top);
+        crate::arch::gdt::set_rsp0(cpu_local.core_index as usize, stack_top);
         cpu_local.kernel_stack_top = stack_top;
     }
 
