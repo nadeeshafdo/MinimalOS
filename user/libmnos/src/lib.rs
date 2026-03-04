@@ -34,3 +34,4 @@ pub mod syscall;
 pub mod ipc;
 pub mod io;
 pub mod irq;
+pub mod process;
