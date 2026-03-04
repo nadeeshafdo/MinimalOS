@@ -28,7 +28,7 @@ use crate::kprintln;
 use crate::sched::thread::{Thread, ThreadState};
 use crate::sched::context;
 use crate::sched::percpu::CpuLocal;
-use crate::cap::cnode::CNode;
+use crate::sched::process::Process;
 use crate::ipc::message::IpcMessage;
 
 /// Per-core run queue. One per core, stored via raw pointer in CpuLocal.
@@ -71,8 +71,14 @@ static BOOT_QUEUE: crate::sync::spinlock::SpinLock<RunQueue> =
     crate::sync::spinlock::SpinLock::new(RunQueue::new());
 
 /// Spawns a new kernel thread and adds it to the boot queue.
-pub fn spawn(name: &str, entry: extern "C" fn(u64), arg: u64) {
-    let thread = Thread::new(name, entry, arg);
+///
+/// # Parameters
+/// - `name`: Human-readable name for debugging.
+/// - `entry`: The function the thread will execute.
+/// - `arg`: Argument passed to `entry` (via r14 in dummy frame).
+/// - `process`: Raw pointer to the parent Process that owns this thread.
+pub fn spawn(name: &str, entry: extern "C" fn(u64), arg: u64, process: *mut Process) {
+    let thread = Thread::new(name, entry, arg, process);
     kprintln!("[sched] Spawned thread {} '{}'", thread.id, name);
     BOOT_QUEUE.lock().push(thread);
 }
@@ -93,7 +99,12 @@ pub fn spawn_thread(thread: Box<Thread>) {
 /// 2. Creates a "BSP main" thread to represent the currently executing context
 /// 3. Drains BOOT_QUEUE into the BSP's local run queue
 /// 4. Arms the LAPIC timer for preemptive scheduling
-pub fn init() {
+/// Initializes the scheduler on the BSP.
+///
+/// # Parameters
+/// - `kernel_process`: Raw pointer to the kernel pseudo-process (PID 0).
+///   The BSP main thread will be assigned to this process.
+pub fn init(kernel_process: *mut Process) {
     kprintln!("[sched] Initializing preemptive scheduler on BSP");
 
     // 1. Allocate a per-core RunQueue on the heap, leak it into CpuLocal
@@ -107,7 +118,6 @@ pub fn init() {
         id: 0,
         state: ThreadState::Running,
         rsp: 0, // Will be filled by switch_context on first preemption
-        cr3: crate::memory::pml4::KERNEL_PML4.load(core::sync::atomic::Ordering::SeqCst),
         kernel_stack_base: 0, // Using Limine's original stack
         kernel_stack_size: 0,
         name: {
@@ -117,7 +127,7 @@ pub fn init() {
             buf
         },
         name_len: 8,
-        cnode: CNode::new(),
+        process: kernel_process,
         ipc_buffer: IpcMessage::EMPTY,
         user_rip: 0,
         user_rsp: 0,
@@ -267,6 +277,31 @@ pub unsafe fn schedule() {
         let stack_top = kstack_base + kstack_size as u64;
         crate::arch::gdt::set_rsp0(cpu_local.core_index as usize, stack_top);
         cpu_local.kernel_stack_top = stack_top;
+    }
+
+    // ─── CR3 swap: per-process address space isolation ─────────────────────
+    // Compare the current and next thread's parent process PML4.
+    // If they belong to different processes (different address spaces),
+    // swap CR3 to activate the next thread's page tables.
+    //
+    // We MUST do this BEFORE switch_context because after the switch we are
+    // executing on the next thread's kernel stack. The kernel half of every
+    // PML4 is identical (shallow copy of entries 256-511), so this is safe.
+    //
+    // Skip the write if same PML4 — same-process thread switch or two
+    // kernel threads both pointing at KERNEL_PML4.
+    let current_pml4 = if !current_ptr.is_null() {
+        let proc = unsafe { (*current_ptr).process };
+        if !proc.is_null() { unsafe { (*proc).pml4().as_u64() } } else { 0 }
+    } else {
+        0
+    };
+    let next_pml4 = {
+        let proc = unsafe { (*next_ptr).process };
+        if !proc.is_null() { unsafe { (*proc).pml4().as_u64() } } else { 0 }
+    };
+    if next_pml4 != 0 && next_pml4 != current_pml4 {
+        unsafe { crate::arch::cpu::write_cr3(next_pml4); }
     }
 
     crate::arch::lapic::set_timer_oneshot(10_000);
