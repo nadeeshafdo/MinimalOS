@@ -460,9 +460,10 @@ pub extern "C" fn syscall_dispatch(frame: &mut SyscallFrame) -> u64 {
 fn sys_send(slot: u64, label: u64, data0: u64, data1: u64) -> u64 {
     let cpu_local = unsafe { CpuLocal::get() };
     let thread = unsafe { &*cpu_local.current_thread };
+    let process = unsafe { &*thread.process };
 
     // 1. Validate capability
-    let cap = match thread.cnode.lookup(slot as usize) {
+    let cap = match process.cnode.lookup(slot as usize) {
         Some(c) => c,
         None => {
             kprintln!("[syscall] SYS_SEND: thread {} bad slot {}", thread.id, slot);
@@ -529,9 +530,10 @@ fn sys_send(slot: u64, label: u64, data0: u64, data1: u64) -> u64 {
 fn sys_recv(frame: &mut SyscallFrame, slot: u64) -> u64 {
     let cpu_local = unsafe { CpuLocal::get() };
     let thread = unsafe { &*cpu_local.current_thread };
+    let process = unsafe { &*thread.process };
 
     // 1. Validate capability
-    let cap = match thread.cnode.lookup(slot as usize) {
+    let cap = match process.cnode.lookup(slot as usize) {
         Some(c) => c,
         None => {
             kprintln!("[syscall] SYS_RECV: thread {} bad slot {}", thread.id, slot);
@@ -603,9 +605,10 @@ fn sys_recv(frame: &mut SyscallFrame, slot: u64) -> u64 {
 fn sys_port_out(slot: u64, port: u64, value: u64) -> u64 {
     let cpu_local = unsafe { CpuLocal::get() };
     let thread = unsafe { &*cpu_local.current_thread };
+    let process = unsafe { &*thread.process };
 
     // 1. Validate capability
-    let cap = match thread.cnode.lookup(slot as usize) {
+    let cap = match process.cnode.lookup(slot as usize) {
         Some(c) => c,
         None => {
             kprintln!("[syscall] SYS_PORT_OUT: thread {} bad slot {}", thread.id, slot);
@@ -668,9 +671,10 @@ fn sys_port_out(slot: u64, port: u64, value: u64) -> u64 {
 fn sys_port_in(frame: &mut SyscallFrame, slot: u64, port: u64) -> u64 {
     let cpu_local = unsafe { CpuLocal::get() };
     let thread = unsafe { &*cpu_local.current_thread };
+    let process = unsafe { &*thread.process };
 
     // 1. Validate capability
-    let cap = match thread.cnode.lookup(slot as usize) {
+    let cap = match process.cnode.lookup(slot as usize) {
         Some(c) => c,
         None => {
             kprintln!("[syscall] SYS_PORT_IN: thread {} bad slot {}", thread.id, slot);
@@ -742,9 +746,10 @@ fn sys_port_in(frame: &mut SyscallFrame, slot: u64, port: u64) -> u64 {
 fn sys_wait_irq(slot: u64) -> u64 {
     let cpu_local = unsafe { CpuLocal::get_mut() };
     let thread = unsafe { &*cpu_local.current_thread };
+    let process = unsafe { &*thread.process };
 
     // 1. Validate capability
-    let cap = match thread.cnode.lookup(slot as usize) {
+    let cap = match process.cnode.lookup(slot as usize) {
         Some(c) => c,
         None => {
             kprintln!("[syscall] SYS_WAIT_IRQ: thread {} bad slot {}", thread.id, slot);
@@ -874,13 +879,19 @@ pub unsafe fn jump_to_ring3(user_rip: u64, user_rsp: u64) -> ! {
 /// - `name`: Human-readable name for debugging.
 /// - `user_rip`: Virtual address of user code (must be USER-mapped).
 /// - `user_rsp`: Top of user stack (must be USER-mapped).
+/// - `process`: Raw pointer to the Process that owns this thread.
 ///
 /// # Returns
 /// A `Box<Thread>` ready to be enqueued. The caller should:
-/// 1. Install capabilities (CNode.insert_at) before spawning.
+/// 1. Install capabilities on the Process's CNode before spawning.
 /// 2. Call `spawn_thread()` to enqueue it.
-pub fn spawn_user(name: &str, user_rip: u64, user_rsp: u64) -> Box<Thread> {
-    let mut thread = Thread::new(name, ring3_entry, 0);
+pub fn spawn_user(
+    name: &str,
+    user_rip: u64,
+    user_rsp: u64,
+    process: *mut crate::sched::process::Process,
+) -> Box<Thread> {
+    let mut thread = Thread::new(name, ring3_entry, 0, process);
     thread.user_rip = user_rip;
     thread.user_rsp = user_rsp;
     kprintln!("[syscall] Created user thread {} '{}' → Ring 3 @ RIP={:#018X} RSP={:#018X}",
