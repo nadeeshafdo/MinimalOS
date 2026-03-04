@@ -630,7 +630,7 @@ extern "C" fn kmain() -> ! {
     //
     // =========================================================================
     kprintln!();
-    kprintln!("[init] Phase 7: ELF Loader + TarFS Initrd");
+    kprintln!("[init] Phase 7: ELF Loader + TarFS Initrd + Process Isolation");
 
     // --- 7a. Load the initrd TAR archive from Limine modules ---
     let initrd = {
@@ -673,16 +673,36 @@ extern "C" fn kmain() -> ! {
     kprintln!("[elf] Valid ELF64: entry={:#010X} phnum={} phoff={:#X}",
         elf_entry, elf_phnum, elf_phoff);
 
-    // --- 7e. Load ELF segments into the current address space ---
-    let cr3 = memory::address::PhysAddr::new(arch::cpu::read_cr3() & !0xFFF);
-    let elf_result = fs::elf::load(serial_drv_elf.data, cr3)
+    // --- 7e. Create Process for serial_drv (isolated address space) ---
+    //
+    // Sprint 9: Each user program gets its own Process, which owns:
+    //   - A unique PML4 (user half zeroed, kernel half mirrored)
+    //   - A CNode (capability table)
+    //   - A PID (auto-incremented)
+    //
+    // The ELF segments and user stack are mapped into the Process's PML4,
+    // NOT the kernel's. This is the isolation boundary.
+    let serial_proc = {
+        use alloc::boxed::Box;
+        use sched::process::Process;
+
+        let proc = Box::new(Process::new("serial-drv"));
+        kprintln!("[init] Created Process '{}' (PID={}, PML4={:#010X})",
+            proc.name_str(), proc.pid, proc.pml4().as_u64());
+        Box::into_raw(proc)
+    };
+
+    // --- 7f. Load ELF segments into the serial_drv's PML4 ---
+    let serial_pml4 = unsafe { (*serial_proc).pml4() };
+    let elf_result = fs::elf::load(serial_drv_elf.data, serial_pml4)
         .expect("[init] FATAL: failed to load serial_drv ELF");
 
-    kprintln!("[elf] Loaded: entry={:#010X} pages={} copied={} bss={}",
+    kprintln!("[elf] Loaded into PID {} PML4: entry={:#010X} pages={} copied={} bss={}",
+        unsafe { (*serial_proc).pid },
         elf_result.entry_point, elf_result.pages_mapped,
         elf_result.bytes_copied, elf_result.bss_zeroed);
 
-    // --- 7f. Map user stack page ---
+    // --- 7g. Map user stack into serial_drv's PML4 ---
     let user_stack_top = {
         use memory::vmm::{self, PageTableFlags};
 
@@ -691,66 +711,83 @@ extern "C" fn kmain() -> ! {
         let stack_virt = memory::address::VirtAddr::new(0x0000_0000_0080_0000);
 
         unsafe {
-            vmm::map_page(cr3, stack_virt, stack_phys,
+            vmm::map_page(serial_pml4, stack_virt, stack_phys,
                 PageTableFlags::PRESENT | PageTableFlags::WRITABLE
                     | PageTableFlags::USER | PageTableFlags::NO_EXECUTE,
             ).expect("[init] FATAL: cannot map user stack page");
-            arch::cpu::invlpg(stack_virt.as_u64());
         }
 
         let top = stack_virt.as_u64() + memory::address::PAGE_SIZE as u64;
-        kprintln!("[init] User stack: {:#010X} — {:#010X}", stack_virt.as_u64(), top);
+        kprintln!("[init] User stack mapped in PID {} PML4: {:#010X} — {:#010X}",
+            unsafe { (*serial_proc).pid }, stack_virt.as_u64(), top);
         top
     };
 
-    // --- 7g. Create IPC endpoint for driver commands ---
+    // --- 7h. Create IPC endpoint for driver commands ---
     let drv_ep = alloc::boxed::Box::new(ipc::endpoint::Endpoint::new(2));
     let drv_ep_ptr = alloc::boxed::Box::into_raw(drv_ep);
     unsafe { arch::syscall::register_endpoint(drv_ep_ptr); }
     unsafe { SERIAL_DRV_ENDPOINT = drv_ep_ptr; }
     kprintln!("[init] Registered serial driver endpoint (ID=2)");
 
-    // --- 7h. Spawn the serial driver thread with capabilities ---
-    {
+    // --- 7i. Install capabilities into serial_drv's Process CNode ---
+    unsafe {
         use cap::cnode::{CapObject, CapRights, Capability};
 
-        let mut serial_drv_thread = arch::syscall::spawn_user(
-            "serial-drv", elf_result.entry_point, user_stack_top
-        );
-
         // Slot 0: IoPort capability for COM1 (0x3F8-0x3FF, 8 ports)
-        serial_drv_thread.cnode.insert_at(0, Capability::new(
+        (*serial_proc).cnode.insert_at(0, Capability::new(
             CapObject::IoPort { base: 0x3F8, size: 8 },
             CapRights::ALL,
         )).expect("[init] FATAL: cannot install IoPort capability");
 
         // Slot 1: Endpoint capability for command reception (READ only)
-        serial_drv_thread.cnode.insert_at(1, Capability::new(
+        (*serial_proc).cnode.insert_at(1, Capability::new(
             CapObject::Endpoint { id: 2 },
             CapRights::READ,
         )).expect("[init] FATAL: cannot install Endpoint capability");
 
         // Slot 2: Interrupt capability for COM1 IRQ 4
-        serial_drv_thread.cnode.insert_at(2, Capability::new(
+        (*serial_proc).cnode.insert_at(2, Capability::new(
             CapObject::Interrupt { irq: 4 },
             CapRights::READ,
         )).expect("[init] FATAL: cannot install Interrupt capability");
+    }
 
-        kprintln!("[init] Serial driver CNode:");
-        kprintln!("[init]   Slot 0: IoPort(0x3F8, 8) [ALL]");
-        kprintln!("[init]   Slot 1: Endpoint(id=2) [READ]");
-        kprintln!("[init]   Slot 2: Interrupt(irq=4) [READ]");
+    kprintln!("[init] Serial driver CNode (Process PID={}):",
+        unsafe { (*serial_proc).pid });
+    kprintln!("[init]   Slot 0: IoPort(0x3F8, 8) [ALL]");
+    kprintln!("[init]   Slot 1: Endpoint(id=2) [READ]");
+    kprintln!("[init]   Slot 2: Interrupt(irq=4) [READ]");
 
+    // --- 7j. Spawn serial_drv thread owned by its Process ---
+    {
+        let serial_drv_thread = arch::syscall::spawn_user(
+            "serial-drv", elf_result.entry_point, user_stack_top, serial_proc
+        );
         sched::scheduler::spawn_thread(serial_drv_thread);
     }
 
-    // --- 7i. Spawn kernel "init" thread ---
-    sched::scheduler::spawn("kern-init", kernel_init_thread, 0);
+    // --- 7k. Create kernel pseudo-process (PID 0) ---
+    //
+    // The kernel process uses KERNEL_PML4 and an empty CNode.
+    // The BSP main thread and kern-init thread both belong to this process.
+    let kernel_proc = {
+        use alloc::boxed::Box;
+        use sched::process::Process;
 
-    // --- 7j. Initialize scheduler ---
-    sched::scheduler::init();
+        let proc = Box::new(Process::kernel());
+        kprintln!("[init] Created kernel Process (PID={}, PML4={:#010X})",
+            proc.pid, proc.pml4().as_u64());
+        Box::into_raw(proc)
+    };
 
-    // --- 7k. Start Application Processors ---
+    // --- 7l. Spawn kernel "init" thread ---
+    sched::scheduler::spawn("kern-init", kernel_init_thread, 0, kernel_proc);
+
+    // --- 7m. Initialize scheduler (BSP thread belongs to kernel process) ---
+    sched::scheduler::init(kernel_proc);
+
+    // --- 7n. Start Application Processors ---
     arch::smp::init();
 
     // =========================================================================
@@ -758,10 +795,11 @@ extern "C" fn kmain() -> ! {
     // =========================================================================
     kprintln!();
     kprintln!("==========================================================");
-    kprintln!("  Sprint 8 — ELF Loader + TarFS Initrd LIVE!");
-    kprintln!("  serial_drv loaded as ELF64 from initrd.tar");
-    kprintln!("  PT_LOAD segments mapped, .bss zeroed, e_entry extracted");
-    kprintln!("  Ring 3 execution with IoPort + IPC + IRQ capabilities");
+    kprintln!("  Sprint 9 — Process Isolation + CR3 Swap LIVE!");
+    kprintln!("  serial_drv runs in isolated Process (PID 1, own PML4)");
+    kprintln!("  ELF loaded from initrd.tar into per-process page tables");
+    kprintln!("  CR3 swapped on context switch for address space isolation");
+    kprintln!("  Ring 3 execution with capability-gated IPC + port I/O");
     kprintln!("  BSP entering idle loop.");
     kprintln!("==========================================================");
 
