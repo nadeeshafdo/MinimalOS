@@ -17,14 +17,14 @@
 
 use alloc::boxed::Box;
 
-use crate::cap::cnode::CNode;
 use crate::ipc::message::IpcMessage;
 use crate::kprintln;
 use crate::memory::address::PAGE_SIZE;
 use crate::memory::pmm;
-use crate::memory::pml4;
 
 use core::sync::atomic::{AtomicU64, Ordering};
+
+use super::process::Process;
 
 /// Global thread ID counter.
 static NEXT_TID: AtomicU64 = AtomicU64::new(1);
@@ -50,6 +50,12 @@ pub enum ThreadState {
 }
 
 /// Thread Control Block — the kernel's representation of a thread.
+///
+/// Threads are the unit of scheduling. They do NOT own an address space
+/// or capability table — those belong to the parent Process.
+///
+/// Each thread holds a raw pointer to its parent Process. Multiple threads
+/// within the same process share the PML4 and CNode.
 #[repr(C)]
 pub struct Thread {
     /// Unique thread ID.
@@ -58,8 +64,6 @@ pub struct Thread {
     pub state: ThreadState,
     /// Saved kernel RSP (set by switch_context when suspended).
     pub rsp: u64,
-    /// Page table root (CR3 value). For kernel threads, this is KERNEL_PML4.
-    pub cr3: u64,
     /// Base virtual address of the kernel stack (HHDM mapped).
     pub kernel_stack_base: u64,
     /// Size of the kernel stack in bytes.
@@ -68,10 +72,16 @@ pub struct Thread {
     pub name: [u8; 32],
     pub name_len: usize,
 
-    /// Per-thread capability table (64 slots).
-    /// This is the thread's security context — all access to kernel objects
-    /// is mediated through capabilities stored here.
-    pub cnode: CNode,
+    /// Pointer to the parent Process.
+    ///
+    /// The Process owns the PML4 (address space) and CNode (capabilities).
+    /// Kernel threads (user_rip == 0) point to the kernel pseudo-process.
+    /// User threads point to a heap-allocated Process.
+    ///
+    /// SAFETY: This pointer must remain valid for the lifetime of the thread.
+    /// The Process is heap-allocated and leaked (or reference-counted in the
+    /// future). It must NOT be freed while any thread references it.
+    pub process: *mut Process,
 
     /// IPC message buffer for send/recv.
     /// Senders write their message here before blocking (slowpath),
@@ -89,6 +99,16 @@ pub struct Thread {
     pub user_rsp: u64,
 }
 
+// SAFETY: Thread contains a `*mut Process` raw pointer which is not inherently
+// `Send`. We guarantee safety because:
+//   1. Process objects are heap-allocated and leaked (`Box::into_raw`) — they
+//      remain valid for the entire kernel lifetime.
+//   2. The Process pointer is only read (never written) after Thread creation,
+//      except by the owning core during a context switch.
+//   3. CNode access through the process pointer is always done with interrupts
+//      disabled (from within the SYSCALL handler or scheduler).
+unsafe impl Send for Thread {}
+
 impl Thread {
     /// Creates a new thread with its own kernel stack.
     ///
@@ -100,10 +120,13 @@ impl Thread {
     /// - `name`: Human-readable name for debugging.
     /// - `entry_fn`: The function the thread will execute.
     /// - `arg`: Argument passed to `entry_fn` (via r14 in dummy frame).
+    /// - `process`: Raw pointer to the parent Process that owns this thread.
+    ///              The Process must live at least as long as the thread.
     pub fn new(
         name: &str,
         entry_fn: extern "C" fn(u64),
         arg: u64,
+        process: *mut Process,
     ) -> Box<Thread> {
         let tid = NEXT_TID.fetch_add(1, Ordering::Relaxed);
 
@@ -149,12 +172,11 @@ impl Thread {
             id: tid,
             state: ThreadState::Ready,
             rsp: initial_rsp,
-            cr3: pml4::KERNEL_PML4.load(Ordering::SeqCst),
             kernel_stack_base: stack_base,
             kernel_stack_size: stack_size,
             name: name_buf,
             name_len: copy_len,
-            cnode: CNode::new(),
+            process,
             ipc_buffer: IpcMessage::EMPTY,
             user_rip: 0,
             user_rsp: 0,
