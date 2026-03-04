@@ -121,6 +121,11 @@ pub enum CapObject {
     /// Thread control — grants control over another thread (suspend/resume/kill).
     /// `tid` is the target thread's ID.
     ThreadControl { tid: u64 },
+
+    /// Process handle — grants the right to map memory into, delegate
+    /// capabilities to, and spawn threads within a target process.
+    /// `pid` is the target process's unique identifier.
+    Process { pid: u64 },
 }
 
 // =============================================================================
