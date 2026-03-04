@@ -689,7 +689,9 @@ extern "C" fn kmain() -> ! {
         let proc = Box::new(Process::new("serial-drv"));
         kprintln!("[init] Created Process '{}' (PID={}, PML4={:#010X})",
             proc.name_str(), proc.pid, proc.pml4().as_u64());
-        Box::into_raw(proc)
+        let ptr = Box::into_raw(proc);
+        sched::process::register_process(unsafe { (*ptr).pid }, ptr);
+        ptr
     };
 
     // --- 7f. Load ELF segments into the serial_drv's PML4 ---
@@ -778,7 +780,9 @@ extern "C" fn kmain() -> ! {
         let proc = Box::new(Process::kernel());
         kprintln!("[init] Created kernel Process (PID={}, PML4={:#010X})",
             proc.pid, proc.pml4().as_u64());
-        Box::into_raw(proc)
+        let ptr = Box::into_raw(proc);
+        sched::process::register_process(unsafe { (*ptr).pid }, ptr);
+        ptr
     };
 
     // --- 7l. Spawn kernel "init" thread ---
