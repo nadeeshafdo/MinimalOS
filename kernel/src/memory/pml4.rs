@@ -209,6 +209,61 @@ pub unsafe fn activate(pml4: PhysAddr) {
     kprintln!("[pml4] CR3 swap complete — running on pristine page tables");
 }
 
+/// Builds a user-process PML4 with an isolated lower half.
+///
+/// The user PML4 shares the kernel's higher-half mappings (indices 256–511)
+/// via a shallow copy from the pristine KERNEL_PML4. This guarantees that:
+///
+///   1. SYSCALL entry works — the CPU does NOT swap CR3 on SYSCALL, so the
+///      kernel code, HHDM, heap, stacks, and MMIO must be reachable.
+///   2. Interrupt/exception handlers work — same reason, IDT stub runs on
+///      the user's page tables until an explicit CR3 swap (if any).
+///   3. Ring 3 code CANNOT access the kernel half — all higher-half PTEs
+///      have the Supervisor bit (U/S=0), so the CPU blocks Ring 3 reads.
+///
+/// The lower half (indices 0–255, virtual 0x0 – 0x00007FFF_FFFFFFFF) starts
+/// completely empty. User code/data/stack pages are mapped individually by
+/// the ELF loader and memory mapping syscalls.
+///
+/// # Returns
+/// Physical address of the new PML4 frame.
+///
+/// # Panics
+/// If the PMM cannot allocate a frame.
+pub fn build_user_pml4() -> PhysAddr {
+    let user_pml4 = vmm::new_table()
+        .expect("[pml4] FATAL: cannot allocate user PML4 frame");
+
+    let kernel_pml4_phys = KERNEL_PML4.load(Ordering::SeqCst);
+    assert!(kernel_pml4_phys != 0, "[pml4] FATAL: KERNEL_PML4 not initialized");
+
+    // Access both PML4 tables via HHDM.
+    // Each PML4 is a 4K page containing 512 entries × 8 bytes = 4096 bytes.
+    let hhdm = address::hhdm_offset();
+    let kernel_pml4_ptr = (hhdm + kernel_pml4_phys) as *const u64;
+    let user_pml4_ptr = (hhdm + user_pml4.as_u64()) as *mut u64;
+
+    // Copy the top 256 entries (indices 256..511) — the kernel half.
+    // These PML4 entries point to PDPT pages that are shared between ALL
+    // address spaces. Any kernel mapping change (new HHDM page, kernel
+    // module load, etc.) is automatically visible in every user PML4.
+    //
+    // The bottom 256 entries (indices 0..255) remain zeroed — completely
+    // unmapped. User pages will be mapped individually.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            kernel_pml4_ptr.add(256),   // src: kernel PML4[256]
+            user_pml4_ptr.add(256),     // dst: user PML4[256]
+            256,                        // count: 256 entries
+        );
+    }
+
+    kprintln!("[pml4] User PML4 built at phys {} (kernel half mirrored from {:#010X})",
+        user_pml4, kernel_pml4_phys);
+
+    user_pml4
+}
+
 /// Determines W^X flags for a kernel virtual address based on section.
 fn classify_flags(
     addr: u64,
