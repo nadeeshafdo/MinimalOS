@@ -615,25 +615,25 @@ extern "C" fn kmain() -> ! {
     arch::syscall::init();
 
     // =========================================================================
-    // PHASE 7: Userspace Serial Driver via ELF + TarFS (Sprint 8)
+    // PHASE 7: Init Process — The God Process (Sprint 9 Phase 3)
     // =========================================================================
     //
-    // The era of flat binaries is over. The kernel now:
-    //   1. Reads the initrd TAR archive (loaded by Limine as a boot module)
-    //   2. Locates the serial_drv ELF binary within the archive
-    //   3. Parses the ELF64 headers and loads PT_LOAD segments
-    //   4. Zeroes .bss (p_memsz - p_filesz) — no more garbage statics
-    //   5. Extracts the entry point (e_entry) from the ELF header
-    //   6. Spawns the driver as a Ring 3 thread with capabilities
+    // The kernel creates Init (PID 1) as the first and only userspace process
+    // to boot. Init gets raw materials — PmmAllocator, IoPort, self-Process
+    // capability, and the initrd TarFS mapped into its address space — then
+    // the kernel steps out.
     //
-    // This is the proper process loading pipeline for a real microkernel.
+    // Init proves it holds absolute power:
+    //   1. Parses TarFS from Ring 3 mapped memory
+    //   2. Allocates physical frames (SYS_ALLOC_MEMORY)
+    //   3. Maps frames into own address space (SYS_MAP_MEMORY)
     //
     // =========================================================================
     kprintln!();
-    kprintln!("[init] Phase 7: ELF Loader + TarFS Initrd + Process Isolation");
+    kprintln!("[init] Phase 7: Init Process — The God Process");
 
     // --- 7a. Load the initrd TAR archive from Limine modules ---
-    let initrd = {
+    let (initrd, initrd_phys_base, initrd_size) = {
         let modules = boot::get_modules()
             .expect("[init] FATAL: no boot modules — is initrd.tar in limine.conf?");
         kprintln!("[init] Limine loaded {} boot module(s)", modules.len());
@@ -645,10 +645,16 @@ extern "C" fn kmain() -> ! {
         kprintln!("[init] Module 0: {:?} ({} bytes at {:p})",
             core::str::from_utf8(path).unwrap_or("<invalid>"), size, addr);
 
+        // Compute physical address from the HHDM virtual address
+        let virt_addr = addr as usize as u64;
+        let phys_base = virt_addr - address::hhdm_offset();
+        kprintln!("[init] Initrd physical base: {:#010X}, size: {} bytes", phys_base, size);
+
         // Create a byte slice over the module's memory.
         // SAFETY: Limine loaded this into physical memory and maps it via HHDM.
-        // The data is read-only and lives for the entire kernel lifetime.
-        unsafe { core::slice::from_raw_parts(addr, size) }
+        let data = unsafe { core::slice::from_raw_parts(addr, size) };
+
+        (data, phys_base, size)
     };
 
     // --- 7b. List initrd contents ---
@@ -657,54 +663,45 @@ extern "C" fn kmain() -> ! {
         kprintln!("[initrd]   {} ({} bytes)", name, size);
     });
 
-    // --- 7c. Locate serial_drv ELF in the initrd ---
-    let serial_drv_elf = fs::tar::find_file(initrd, "serial_drv")
-        .expect("[init] FATAL: serial_drv not found in initrd");
+    // --- 7c. Locate init ELF in the initrd ---
+    let init_elf = fs::tar::find_file(initrd, "init")
+        .expect("[init] FATAL: init not found in initrd");
     kprintln!("[init] Found '{}' in initrd ({} bytes)",
-        serial_drv_elf.name, serial_drv_elf.data.len());
+        init_elf.name, init_elf.data.len());
 
     // --- 7d. Validate the ELF header ---
-    let ehdr = fs::elf::validate_header(serial_drv_elf.data)
-        .expect("[init] FATAL: serial_drv is not a valid ELF64 executable");
-    // Copy packed fields to locals to avoid unaligned reference UB
+    let ehdr = fs::elf::validate_header(init_elf.data)
+        .expect("[init] FATAL: init is not a valid ELF64 executable");
     let elf_entry = ehdr.e_entry;
     let elf_phnum = ehdr.e_phnum;
     let elf_phoff = ehdr.e_phoff;
     kprintln!("[elf] Valid ELF64: entry={:#010X} phnum={} phoff={:#X}",
         elf_entry, elf_phnum, elf_phoff);
 
-    // --- 7e. Create Process for serial_drv (isolated address space) ---
-    //
-    // Sprint 9: Each user program gets its own Process, which owns:
-    //   - A unique PML4 (user half zeroed, kernel half mirrored)
-    //   - A CNode (capability table)
-    //   - A PID (auto-incremented)
-    //
-    // The ELF segments and user stack are mapped into the Process's PML4,
-    // NOT the kernel's. This is the isolation boundary.
-    let serial_proc = {
+    // --- 7e. Create Process for Init (PID 1, isolated address space) ---
+    let init_proc = {
         use alloc::boxed::Box;
         use sched::process::Process;
 
-        let proc = Box::new(Process::new("serial-drv"));
-        kprintln!("[init] Created Process '{}' (PID={}, PML4={:#010X})",
-            proc.name_str(), proc.pid, proc.pml4().as_u64());
+        let proc = Box::new(Process::new("init"));
+        kprintln!("[init] Created Init Process (PID={}, PML4={:#010X})",
+            proc.pid, proc.pml4().as_u64());
         let ptr = Box::into_raw(proc);
         sched::process::register_process(unsafe { (*ptr).pid }, ptr);
         ptr
     };
 
-    // --- 7f. Load ELF segments into the serial_drv's PML4 ---
-    let serial_pml4 = unsafe { (*serial_proc).pml4() };
-    let elf_result = fs::elf::load(serial_drv_elf.data, serial_pml4)
-        .expect("[init] FATAL: failed to load serial_drv ELF");
+    // --- 7f. Load ELF segments into Init's PML4 ---
+    let init_pml4 = unsafe { (*init_proc).pml4() };
+    let elf_result = fs::elf::load(init_elf.data, init_pml4)
+        .expect("[init] FATAL: failed to load init ELF");
 
     kprintln!("[elf] Loaded into PID {} PML4: entry={:#010X} pages={} copied={} bss={}",
-        unsafe { (*serial_proc).pid },
+        unsafe { (*init_proc).pid },
         elf_result.entry_point, elf_result.pages_mapped,
         elf_result.bytes_copied, elf_result.bss_zeroed);
 
-    // --- 7g. Map user stack into serial_drv's PML4 ---
+    // --- 7g. Map user stack into Init's PML4 ---
     let user_stack_top = {
         use memory::vmm::{self, PageTableFlags};
 
@@ -713,7 +710,7 @@ extern "C" fn kmain() -> ! {
         let stack_virt = memory::address::VirtAddr::new(0x0000_0000_0080_0000);
 
         unsafe {
-            vmm::map_page(serial_pml4, stack_virt, stack_phys,
+            vmm::map_page(init_pml4, stack_virt, stack_phys,
                 PageTableFlags::PRESENT | PageTableFlags::WRITABLE
                     | PageTableFlags::USER | PageTableFlags::NO_EXECUTE,
             ).expect("[init] FATAL: cannot map user stack page");
@@ -721,58 +718,81 @@ extern "C" fn kmain() -> ! {
 
         let top = stack_virt.as_u64() + memory::address::PAGE_SIZE as u64;
         kprintln!("[init] User stack mapped in PID {} PML4: {:#010X} — {:#010X}",
-            unsafe { (*serial_proc).pid }, stack_virt.as_u64(), top);
+            unsafe { (*init_proc).pid }, stack_virt.as_u64(), top);
         top
     };
 
-    // --- 7h. Create IPC endpoint for driver commands ---
-    let drv_ep = alloc::boxed::Box::new(ipc::endpoint::Endpoint::new(2));
-    let drv_ep_ptr = alloc::boxed::Box::into_raw(drv_ep);
-    unsafe { arch::syscall::register_endpoint(drv_ep_ptr); }
-    unsafe { SERIAL_DRV_ENDPOINT = drv_ep_ptr; }
-    kprintln!("[init] Registered serial driver endpoint (ID=2)");
+    // --- 7h. Map initrd TarFS pages into Init's PML4 at 0x1000_0000 ---
+    //
+    // Init needs to read the TarFS from Ring 3. We map the physical pages
+    // that Limine loaded the initrd.tar into at a fixed virtual address
+    // in Init's address space. Read-only + USER, no allocation needed.
+    {
+        use memory::vmm::{self, PageTableFlags};
 
-    // --- 7i. Install capabilities into serial_drv's Process CNode ---
+        let initrd_map_base = 0x1000_0000u64;
+        let page_size = memory::address::PAGE_SIZE;
+        let page_count = (initrd_size as u64 + page_size - 1) / page_size;
+        let mut mapped = 0u64;
+
+        for i in 0..page_count {
+            let phys = PhysAddr::new(initrd_phys_base + i * page_size);
+            let virt = memory::address::VirtAddr::new(initrd_map_base + i * page_size);
+
+            unsafe {
+                vmm::map_page(init_pml4, virt, phys,
+                    PageTableFlags::PRESENT | PageTableFlags::USER | PageTableFlags::NO_EXECUTE,
+                ).expect("[init] FATAL: cannot map initrd page into Init PML4");
+            }
+            mapped += 1;
+        }
+
+        kprintln!("[init] Initrd mapped into Init PML4: {:#010X} — {:#010X} ({} pages, read-only)",
+            initrd_map_base,
+            initrd_map_base + page_count * page_size,
+            mapped);
+    }
+
+    // --- 7i. Install capabilities into Init's CNode ---
     unsafe {
         use cap::cnode::{CapObject, CapRights, Capability};
+        let init_pid = (*init_proc).pid;
 
-        // Slot 0: IoPort capability for COM1 (0x3F8-0x3FF, 8 ports)
-        (*serial_proc).cnode.insert_at(0, Capability::new(
+        // Slot 1: PmmAllocator — mint physical frames
+        (*init_proc).cnode.insert_at(1, Capability::new(
+            CapObject::PmmAllocator,
+            CapRights::ALL,
+        )).expect("[init] FATAL: cannot install PmmAllocator capability");
+
+        // Slot 2: IoPort capability for COM1 (0x3F8-0x3FF, 8 ports)
+        (*init_proc).cnode.insert_at(2, Capability::new(
             CapObject::IoPort { base: 0x3F8, size: 8 },
             CapRights::ALL,
         )).expect("[init] FATAL: cannot install IoPort capability");
 
-        // Slot 1: Endpoint capability for command reception (READ only)
-        (*serial_proc).cnode.insert_at(1, Capability::new(
-            CapObject::Endpoint { id: 2 },
-            CapRights::READ,
-        )).expect("[init] FATAL: cannot install Endpoint capability");
-
-        // Slot 2: Interrupt capability for COM1 IRQ 4
-        (*serial_proc).cnode.insert_at(2, Capability::new(
-            CapObject::Interrupt { irq: 4 },
-            CapRights::READ,
-        )).expect("[init] FATAL: cannot install Interrupt capability");
+        // Slot 3: Process capability (self) — for SYS_MAP_MEMORY on own space
+        (*init_proc).cnode.insert_at(3, Capability::new(
+            CapObject::Process { pid: init_pid },
+            CapRights::ALL,
+        )).expect("[init] FATAL: cannot install Process(self) capability");
     }
 
-    kprintln!("[init] Serial driver CNode (Process PID={}):",
-        unsafe { (*serial_proc).pid });
-    kprintln!("[init]   Slot 0: IoPort(0x3F8, 8) [ALL]");
-    kprintln!("[init]   Slot 1: Endpoint(id=2) [READ]");
-    kprintln!("[init]   Slot 2: Interrupt(irq=4) [READ]");
+    kprintln!("[init] Init CNode (PID={}):",
+        unsafe { (*init_proc).pid });
+    kprintln!("[init]   Slot 1: PmmAllocator [ALL]");
+    kprintln!("[init]   Slot 2: IoPort(0x3F8, 8) [ALL]");
+    kprintln!("[init]   Slot 3: Process(pid={}) [ALL] (self)",
+        unsafe { (*init_proc).pid });
 
-    // --- 7j. Spawn serial_drv thread owned by its Process ---
+    // --- 7j. Spawn Init thread owned by its Process ---
     {
-        let serial_drv_thread = arch::syscall::spawn_user(
-            "serial-drv", elf_result.entry_point, user_stack_top, serial_proc
+        let init_thread = arch::syscall::spawn_user(
+            "init", elf_result.entry_point, user_stack_top, init_proc
         );
-        sched::scheduler::spawn_thread(serial_drv_thread);
+        sched::scheduler::spawn_thread(init_thread);
     }
 
     // --- 7k. Create kernel pseudo-process (PID 0) ---
-    //
-    // The kernel process uses KERNEL_PML4 and an empty CNode.
-    // The BSP main thread and kern-init thread both belong to this process.
     let kernel_proc = {
         use alloc::boxed::Box;
         use sched::process::Process;
@@ -785,13 +805,10 @@ extern "C" fn kmain() -> ! {
         ptr
     };
 
-    // --- 7l. Spawn kernel "init" thread ---
-    sched::scheduler::spawn("kern-init", kernel_init_thread, 0, kernel_proc);
-
-    // --- 7m. Initialize scheduler (BSP thread belongs to kernel process) ---
+    // --- 7l. Initialize scheduler (BSP thread belongs to kernel process) ---
     sched::scheduler::init(kernel_proc);
 
-    // --- 7n. Start Application Processors ---
+    // --- 7m. Start Application Processors ---
     arch::smp::init();
 
     // =========================================================================
@@ -799,11 +816,10 @@ extern "C" fn kmain() -> ! {
     // =========================================================================
     kprintln!();
     kprintln!("==========================================================");
-    kprintln!("  Sprint 9 — Process Isolation + CR3 Swap LIVE!");
-    kprintln!("  serial_drv runs in isolated Process (PID 1, own PML4)");
-    kprintln!("  ELF loaded from initrd.tar into per-process page tables");
-    kprintln!("  CR3 swapped on context switch for address space isolation");
-    kprintln!("  Ring 3 execution with capability-gated IPC + port I/O");
+    kprintln!("  Sprint 9 Phase 3 — The God Process (Init) LIVE!");
+    kprintln!("  Init (PID 1) runs in isolated Process with own PML4");
+    kprintln!("  Capabilities: PmmAllocator + IoPort + Process(self)");
+    kprintln!("  Initrd TarFS mapped at 0x1000_0000 for Ring 3 parsing");
     kprintln!("  BSP entering idle loop.");
     kprintln!("==========================================================");
 
@@ -813,54 +829,13 @@ extern "C" fn kmain() -> ! {
 }
 
 // =============================================================================
-// Sprint 7 Infrastructure — Userspace Serial Driver
+// Sprint 9 Phase 3 — The God Process (Init)
 // =============================================================================
-
-/// Global pointer to the serial driver's command endpoint (ID=2).
-/// Written once during Phase 7b, read by the kernel init thread.
-static mut SERIAL_DRV_ENDPOINT: *mut ipc::endpoint::Endpoint = core::ptr::null_mut();
-
-/// Returns a reference to the serial driver's command endpoint.
-///
-/// # Safety
-/// Must only be called after Phase 7b has initialized SERIAL_DRV_ENDPOINT.
-unsafe fn get_serial_drv_endpoint() -> &'static ipc::endpoint::Endpoint {
-    unsafe { &*SERIAL_DRV_ENDPOINT }
-}
-
-/// Kernel "init" thread — sends test characters to the serial driver.
-///
-/// This thread runs in Ring 0 and sends IPC messages to the serial
-/// driver's command endpoint (EP2). The driver receives them via
-/// SYS_RECV and writes each character to COM1 via SYS_PORT_OUT.
-///
-/// Proves the full microkernel pipeline:
-///   Kernel init → ep.send() → serial_drv SYS_RECV → SYS_PORT_OUT → COM1
-pub extern "C" fn kernel_init_thread(_arg: u64) {
-    kprintln!("[kern-init] Kernel init thread started");
-
-    // Give the serial driver time to boot and print its banner.
-    // Simple spin delay — about 1M iterations ≈ a few ms on real hardware.
-    // QEMU emulation makes PAUSE much slower, so keep this small.
-    for _ in 0..1_000_000u64 {
-        core::hint::spin_loop();
-    }
-
-    kprintln!("[kern-init] Sending test message to serial driver via EP2...");
-
-    let ep = unsafe { get_serial_drv_endpoint() };
-
-    // IPC label 0x01 = CMD_PRINT_CHAR (matches serial_drv's constant)
-    let test_msg = b"[kern-init] IPC->Ring3->COM1 OK!\r\n";
-    for &ch in test_msg.iter() {
-        let msg = ipc::message::IpcMessage::with_data(0x01, [ch as u64, 0, 0, 0]);
-        ep.send(&msg);
-    }
-
-    kprintln!("[kern-init] ================================================");
-    kprintln!("[kern-init] SUCCESS: All characters sent to serial driver!");
-    kprintln!("[kern-init] Ring 3 serial driver + IPC + port I/O PROVEN!");
-    kprintln!("[kern-init] ================================================");
-
-    loop { arch::cpu::halt(); }
-}
+//
+// Init (PID 1) now handles all policy from Ring 3. The kernel provides only
+// mechanism: capability validation, memory mapping, thread scheduling.
+//
+// The kernel_init_thread and serial driver IPC infrastructure from Sprint 7
+// have been removed. Init will eventually spawn the serial driver itself via
+// SYS_SPAWN_PROCESS + SYS_DELEGATE + SYS_SPAWN_THREAD.
+// =============================================================================
