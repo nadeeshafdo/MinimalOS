@@ -1,0 +1,29 @@
+# =============================================================================
+# init — MinimalOS Ring 3 God Process (PID 1)
+# =============================================================================
+#
+# The Init process is the first userspace process. The kernel creates it
+# during boot, hands it the raw materials (PmmAllocator, IoPort, self-Process
+# capability, mapped TarFS), and steps out.
+#
+# Init proves it holds absolute power over the hardware:
+#   1. Parses the initrd TarFS from Ring 3 memory (mapped at 0x1000_0000)
+#   2. Allocates physical frames via SYS_ALLOC_MEMORY
+#   3. Maps frames into its own address space via SYS_MAP_MEMORY
+#   4. Writes to the mapped page as proof of working memory management
+#
+# CAPABILITY LAYOUT (set up by the kernel before spawn):
+#   Slot 1: PmmAllocator                    — mint physical frames
+#   Slot 2: IoPort { base: 0x3F8, size: 8 } — direct COM1 serial
+#   Slot 3: Process { pid: 1 } (self)       — for SYS_MAP_MEMORY
+#
+# =============================================================================
+
+[package]
+name = "init"
+version.workspace = true
+edition.workspace = true
+description = "MinimalOS Ring 3 Init process (PID 1)"
+
+[dependencies]
+libmnos = { path = "../libmnos" }
