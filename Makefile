@@ -47,6 +47,8 @@ KERNEL_RELEASE  := $(BUILD_DIR)/$(TARGET)/release/minimalos-kernel
 # User binary paths (ELF — loaded from initrd TAR, not flat binary)
 SERIAL_DRV_ELF_DEBUG   := $(BUILD_DIR)/$(TARGET)/debug/serial_drv
 SERIAL_DRV_ELF_RELEASE := $(BUILD_DIR)/$(TARGET)/release/serial_drv
+INIT_ELF_DEBUG         := $(BUILD_DIR)/$(TARGET)/debug/init
+INIT_ELF_RELEASE       := $(BUILD_DIR)/$(TARGET)/release/init
 
 # Initrd TAR archive (contains user ELF binaries)
 INITRD_DEBUG           := $(BUILD_DIR)/initrd-debug.tar
@@ -79,8 +81,8 @@ OBJCOPY := $(firstword $(shell which llvm-objcopy rust-objcopy objcopy 2>/dev/nu
 # Since .cargo/config.toml has no rustflags, the RUSTFLAGS env var is respected.
 # Kernel: code-model=kernel (top 2GB), static relocation, no SIMD
 KERNEL_RUSTFLAGS := -C target-feature=-sse,-sse2,-avx -C code-model=kernel -C relocation-model=static
-# User crates: default code-model (small), no SIMD
-USER_RUSTFLAGS   := -C target-feature=-sse,-sse2,-avx
+# User crates: default code-model (small), static relocation, no SIMD
+USER_RUSTFLAGS   := -C target-feature=-sse,-sse2,-avx -C relocation-model=static
 
 # Detect OVMF for UEFI boot
 OVMF := $(firstword $(wildcard \
@@ -126,7 +128,7 @@ release: kernel-release
 # The initrd.tar is loaded by Limine as a boot module and parsed by the
 # kernel's TarFS parser at runtime. This replaces the flat binary hack.
 
-.PHONY: kernel-debug kernel-release serial-drv-debug serial-drv-release initrd-debug initrd-release
+.PHONY: kernel-debug kernel-release serial-drv-debug serial-drv-release init-debug init-release initrd-debug initrd-release
 
 # --- User binaries ---
 
@@ -138,16 +140,26 @@ serial-drv-release:
 	RUSTFLAGS="$(USER_RUSTFLAGS)" cargo build --release -p serial_drv
 	@echo "[serial_drv] ELF: $(SERIAL_DRV_ELF_RELEASE) ($$(wc -c < $(SERIAL_DRV_ELF_RELEASE)) bytes)"
 
+init-debug:
+	RUSTFLAGS="$(USER_RUSTFLAGS)" cargo build -p init
+	@echo "[init] ELF: $(INIT_ELF_DEBUG) ($$(wc -c < $(INIT_ELF_DEBUG)) bytes)"
+
+init-release:
+	RUSTFLAGS="$(USER_RUSTFLAGS)" cargo build --release -p init
+	@echo "[init] ELF: $(INIT_ELF_RELEASE) ($$(wc -c < $(INIT_ELF_RELEASE)) bytes)"
+
 # --- Initrd TAR archive (contains all userspace ELF binaries) ---
 
-initrd-debug: serial-drv-debug
+initrd-debug: init-debug serial-drv-debug
 	@mkdir -p $(BUILD_DIR)/initrd-staging
+	@cp $(INIT_ELF_DEBUG) $(BUILD_DIR)/initrd-staging/init
 	@cp $(SERIAL_DRV_ELF_DEBUG) $(BUILD_DIR)/initrd-staging/serial_drv
 	@cd $(BUILD_DIR)/initrd-staging && tar cf ../initrd-debug.tar --format=ustar *
 	@echo "[initrd] $(INITRD_DEBUG) ($$(wc -c < $(INITRD_DEBUG)) bytes, $$(tar tf $(INITRD_DEBUG) | wc -l) files)"
 
-initrd-release: serial-drv-release
+initrd-release: init-release serial-drv-release
 	@mkdir -p $(BUILD_DIR)/initrd-staging
+	@cp $(INIT_ELF_RELEASE) $(BUILD_DIR)/initrd-staging/init
 	@cp $(SERIAL_DRV_ELF_RELEASE) $(BUILD_DIR)/initrd-staging/serial_drv
 	@cd $(BUILD_DIR)/initrd-staging && tar cf ../initrd-release.tar --format=ustar *
 	@echo "[initrd] $(INITRD_RELEASE) ($$(wc -c < $(INITRD_RELEASE)) bytes, $$(tar tf $(INITRD_RELEASE) | wc -l) files)"
