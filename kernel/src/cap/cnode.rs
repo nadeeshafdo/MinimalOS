@@ -126,6 +126,16 @@ pub enum CapObject {
     /// capabilities to, and spawn threads within a target process.
     /// `pid` is the target process's unique identifier.
     Process { pid: u64 },
+
+    /// PMM Allocator — master capability that grants the right to allocate
+    /// physical memory frames from the kernel's physical memory manager.
+    ///
+    /// This is the pragmatic microkernel solution: instead of handing out
+    /// Untyped Memory capabilities for every free frame (which would exceed
+    /// CNode capacity), a single PmmAllocator capability lets `Init` request
+    /// frames on demand via `SYS_ALLOC_MEMORY`. The kernel pops a frame from
+    /// the PMM and mints a `MemoryFrame` capability into the caller's CNode.
+    PmmAllocator,
 }
 
 // =============================================================================
