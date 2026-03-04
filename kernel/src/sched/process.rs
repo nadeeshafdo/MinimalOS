@@ -26,12 +26,56 @@
 //
 // =============================================================================
 
+extern crate alloc;
+
 use core::sync::atomic::{AtomicU64, Ordering};
+
+use alloc::collections::BTreeMap;
 
 use crate::cap::cnode::CNode;
 use crate::kprintln;
 use crate::memory::address::PhysAddr;
 use crate::memory::pml4;
+use crate::sync::spinlock::SpinLock;
+
+// =============================================================================
+// Global Process Table
+// =============================================================================
+//
+// Maps PID → *mut Process. Populated by Process::new() and Process::kernel().
+// Read by syscall handlers to resolve CapObject::Process { pid } capabilities
+// back to the actual Process struct.
+//
+// SAFETY: The raw pointers are heap-allocated via Box::into_raw and never freed
+// during kernel lifetime.  SpinLock ensures atomicity of insert/lookup.
+// =============================================================================
+
+/// Wrapper to satisfy Send bound for SpinLock<T: Send>.
+pub(crate) struct ProcessTableInner(BTreeMap<u64, *mut Process>);
+
+// SAFETY: The *mut Process pointers represent stable heap allocations that are
+// never freed. Access is serialized by the enclosing SpinLock.
+unsafe impl Send for ProcessTableInner {}
+
+/// Global table mapping PID → *mut Process.
+///
+/// Syscalls use this to look up Process pointers from PID values stored in
+/// `CapObject::Process { pid }` capabilities.
+pub(crate) static PROCESS_TABLE: SpinLock<ProcessTableInner> =
+    SpinLock::new(ProcessTableInner(BTreeMap::new()));
+
+/// Inserts a process into the global table.
+///
+/// Called automatically by `Process::register()` and from main.rs after
+/// `Box::into_raw`.
+pub fn register_process(pid: u64, ptr: *mut Process) {
+    PROCESS_TABLE.lock().0.insert(pid, ptr);
+}
+
+/// Looks up a process by PID. Returns None if not found.
+pub fn lookup_process(pid: u64) -> Option<*mut Process> {
+    PROCESS_TABLE.lock().0.get(&pid).copied()
+}
 
 /// Global process ID counter. PID 0 is reserved for the kernel.
 static NEXT_PID: AtomicU64 = AtomicU64::new(1);
