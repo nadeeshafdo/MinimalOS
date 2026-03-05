@@ -14,7 +14,7 @@ remote_theme: just-the-docs/just-the-docs@v0.5.2
 # Aux links (top-right corner)
 aux_links:
   "GitHub":
-    - "https://github.com/example/MinimalOS"
+    - "https://github.com/nadeeshafdo/MinimalOS"
 
 aux_links_new_tab: true
 
