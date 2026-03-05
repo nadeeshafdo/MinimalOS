@@ -21,6 +21,8 @@ use crate::ipc::message::IpcMessage;
 use crate::kprintln;
 use crate::memory::address::PAGE_SIZE;
 use crate::memory::pmm;
+use crate::sched::percpu::CpuLocal;
+use crate::sched::scheduler;
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -202,8 +204,21 @@ impl Thread {
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_exit() {
     kprintln!("[thread] Thread exited — marking Dead");
-    // TODO: Mark current thread as Dead, yield to scheduler
-    // For now, just halt — we'll implement proper cleanup with the scheduler
+    // Mark this core's current thread as Dead and yield to the scheduler.
+    // The scheduler will transfer ownership of the TCB into `DEAD_QUEUE`.
+    unsafe {
+        let cpu_local = CpuLocal::get_mut();
+        let cur = cpu_local.current_thread;
+        if !cur.is_null() {
+            (*cur).state = ThreadState::Dead;
+        }
+        // Yield to the scheduler — this will not return under normal
+        // circumstances because the thread is dead.
+        scheduler::schedule();
+    }
+
+    // If we ever return, halt the CPU to avoid continuing execution on a
+    // thread that has logically exited.
     loop {
         crate::arch::cpu::halt();
     }
