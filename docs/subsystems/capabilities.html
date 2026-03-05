@@ -47,7 +47,7 @@
 
     <h1>Sprint 5 — Capabilities &amp; IPC</h1>
     <p class="subtitle">The security model — unforgeable tokens and message passing.</p>
-    <p><span class="label label-yellow">🔲 Planned</span></p>
+    <p><span class="label label-green">✅ Complete</span></p>
 
     <details class="toc" open>
       <summary>Table of contents</summary>
@@ -69,8 +69,8 @@
 
     <h2 id="capability-system">Capability System <a href="#capability-system" class="anchor">#</a></h2>
 
-    <div class="callout todo">
-      <div class="callout-title">🔲 Not Yet Implemented</div>
+    <div class="callout info">
+      <div class="callout-title">✅ Implemented — kernel/src/cap/cnode.rs</div>
     </div>
 
     <h3>What is a Capability?</h3>
@@ -83,52 +83,58 @@
       <li><strong>Revocable</strong> — the creator can invalidate a capability</li>
     </ul>
 
-    <h3>Capability Table</h3>
-    <p>Each process has a <strong>capability table</strong> — an array of slots, each containing a capability or empty:</p>
+    <h3>Capability Table (CNode)</h3>
+    <p>Each process has a <strong>CNode</strong> — a 64-slot array, each slot containing a <code>Capability</code> (typed object + rights bitmask):</p>
     <pre class="mermaid">
     graph LR
-      subgraph CT["Process Capability Table"]
-        S0["Slot 0: IPC Endpoint\nserial_channel\nSend, Recv"]
-        S1["Slot 1: Memory\n0x1000-0x2000\nRead, Write"]
-        S2["Slot 2: Interrupt\nIRQ 4 COM1\nReceive"]
-        S3["Slot 3: empty"]
-        S4["Slot 4: Process\nPID 7\nSuspend, Kill"]
+      subgraph CT["Init Process CNode (64 slots)"]
+        S0["Slot 0: Empty"]
+        S1["Slot 1: PmmAllocator\nRights: ALL"]
+        S2["Slot 2: IoPort\nbase=0x3F8, size=8\nRights: ALL"]
+        S3["Slot 3: Process\npid=1 (self)\nRights: ALL"]
+        S4["Slot 4–63: Empty"]
       end
     </pre>
-    <p>Syscalls reference capabilities by <strong>slot index</strong>: <code>sys_ipc_send(slot=0, message)</code>.</p>
+    <p>Syscalls reference capabilities by <strong>slot index</strong>: <code>sys_map_memory(proc_slot=3, frame_slot=10, vaddr, flags)</code>.</p>
 
-    <h3>Capability Types</h3>
+    <h3>Capability Types (Actual)</h3>
     <table>
-      <thead><tr><th>Type</th><th>Resource</th><th>Typical Rights</th></tr></thead>
+      <thead><tr><th>Variant</th><th>Fields</th><th>Used By</th></tr></thead>
       <tbody>
-        <tr><td><strong>Memory</strong></td><td>Physical page range</td><td>Read, Write, Execute, Grant</td></tr>
-        <tr><td><strong>IPC Endpoint</strong></td><td>Communication channel</td><td>Send, Receive, Grant</td></tr>
-        <tr><td><strong>Interrupt</strong></td><td>Hardware IRQ line</td><td>Receive, Mask</td></tr>
-        <tr><td><strong>Process</strong></td><td>Another process</td><td>Inspect, Suspend, Resume, Kill</td></tr>
-        <tr><td><strong>Thread</strong></td><td>A thread</td><td>Suspend, Resume, Set Priority</td></tr>
+        <tr><td><strong>Empty</strong></td><td>—</td><td>Unused slot</td></tr>
+        <tr><td><strong>Endpoint</strong></td><td><code>id: u64</code></td><td>SYS_SEND, SYS_RECV</td></tr>
+        <tr><td><strong>MemoryFrame</strong></td><td><code>phys: u64, order: u8</code></td><td>SYS_MAP_MEMORY, SYS_ALLOC_MEMORY</td></tr>
+        <tr><td><strong>Interrupt</strong></td><td><code>irq: u32</code></td><td>SYS_WAIT_IRQ</td></tr>
+        <tr><td><strong>IoPort</strong></td><td><code>base: u16, size: u16</code></td><td>SYS_PORT_IN, SYS_PORT_OUT</td></tr>
+        <tr><td><strong>ThreadControl</strong></td><td><code>tid: u64</code></td><td>(reserved)</td></tr>
+        <tr><td><strong>Process</strong></td><td><code>pid: u64</code></td><td>SYS_MAP_MEMORY, SYS_DELEGATE, SYS_SPAWN_THREAD</td></tr>
+        <tr><td><strong>PmmAllocator</strong></td><td>—</td><td>SYS_ALLOC_MEMORY (grants right to allocate frames)</td></tr>
       </tbody>
     </table>
 
-    <h3>Rights Bitmask</h3>
-    <pre><code><span class="kw">bitflags!</span> {
-    <span class="kw">pub struct</span> <span class="ty">CapRights</span>: <span class="ty">u32</span> {
-        <span class="kw">const</span> <span class="cn">READ</span>    = <span class="num">1</span> &lt;&lt; <span class="num">0</span>;   <span class="cmt">// Read data</span>
-        <span class="kw">const</span> <span class="cn">WRITE</span>   = <span class="num">1</span> &lt;&lt; <span class="num">1</span>;   <span class="cmt">// Write / modify</span>
-        <span class="kw">const</span> <span class="cn">EXECUTE</span> = <span class="num">1</span> &lt;&lt; <span class="num">2</span>;   <span class="cmt">// Execute code</span>
-        <span class="kw">const</span> <span class="cn">GRANT</span>   = <span class="num">1</span> &lt;&lt; <span class="num">3</span>;   <span class="cmt">// Transfer to another process</span>
-        <span class="kw">const</span> <span class="cn">REVOKE</span>  = <span class="num">1</span> &lt;&lt; <span class="num">4</span>;   <span class="cmt">// Revoke derived capabilities</span>
-    }
-}</code></pre>
+    <h3>Rights Bitmask (Actual)</h3>
+    <pre><code><span class="kw">pub struct</span> <span class="ty">CapRights</span>(<span class="ty">u8</span>);  <span class="cmt">// #[repr(transparent)]</span>
 
-    <h3>Capability Operations</h3>
+<span class="kw">const</span> <span class="cn">NONE</span>    = <span class="num">0x00</span>;
+<span class="kw">const</span> <span class="cn">READ</span>    = <span class="num">0x01</span>;
+<span class="kw">const</span> <span class="cn">WRITE</span>   = <span class="num">0x02</span>;
+<span class="kw">const</span> <span class="cn">EXEC</span>    = <span class="num">0x04</span>;
+<span class="kw">const</span> <span class="cn">GRANT</span>   = <span class="num">0x08</span>;
+<span class="kw">const</span> <span class="cn">REVOKE</span>  = <span class="num">0x10</span>;
+<span class="kw">const</span> <span class="cn">ALL</span>     = <span class="num">0x1F</span>;</code></pre>
+    <p>Methods: <code>from_raw(u8)</code>, <code>bits()</code>, <code>contains(other)</code>, <code>restrict(mask)</code> — rights can only be reduced when delegated, never increased.</p>
+
+    <h3>CNode Operations (Actual)</h3>
     <table>
-      <thead><tr><th>Syscall</th><th>Description</th></tr></thead>
+      <thead><tr><th>Method / Syscall</th><th>Description</th></tr></thead>
       <tbody>
-        <tr><td><code>sys_cap_create(type, resource, rights)</code></td><td>Kernel-only: create a new capability</td></tr>
-        <tr><td><code>sys_cap_delete(slot)</code></td><td>Remove a capability from the table</td></tr>
-        <tr><td><code>sys_cap_transfer(src_slot, dest_process, rights)</code></td><td>Send a capability (rights can only be reduced)</td></tr>
-        <tr><td><code>sys_cap_revoke(slot)</code></td><td>Revoke all capabilities derived from this one</td></tr>
-        <tr><td><code>sys_cap_inspect(slot)</code></td><td>Query type, resource, and rights</td></tr>
+        <tr><td><code>CNode::lookup(slot)</code></td><td>Kernel-internal: read capability at slot index</td></tr>
+        <tr><td><code>CNode::insert(cap)</code></td><td>Kernel-internal: insert into first empty slot</td></tr>
+        <tr><td><code>CNode::insert_at(slot, cap)</code></td><td>Kernel-internal: insert at specific slot (fails if occupied)</td></tr>
+        <tr><td><code>CNode::remove(slot)</code></td><td>Kernel-internal: remove and return capability</td></tr>
+        <tr><td><code>SYS_DELEGATE(proc, src, dst)</code></td><td>Copy capability from caller's CNode to child process's CNode</td></tr>
+        <tr><td><code>SYS_DROP_CAP(slot)</code></td><td>Remove capability from caller's CNode slot (frees for reuse)</td></tr>
+        <tr><td><code>SYS_ALLOC_MEMORY(alloc, target)</code></td><td>Kernel creates MemoryFrame cap and places it in target_slot</td></tr>
       </tbody>
     </table>
 
@@ -143,69 +149,35 @@
 
     <h2 id="ipc">IPC (Inter-Process Communication) <a href="#ipc" class="anchor">#</a></h2>
 
-    <div class="callout todo">
-      <div class="callout-title">🔲 Not Yet Implemented</div>
+    <div class="callout info">
+      <div class="callout-title">✅ Implemented — SYS_SEND / SYS_RECV + IPC endpoints</div>
     </div>
 
     <h3>Design Principles</h3>
     <ul>
-      <li><strong>Synchronous</strong> — send blocks until the receiver accepts; receive blocks until a message arrives</li>
-      <li><strong>Capability-mediated</strong> — both sender and receiver must hold an IPC endpoint capability</li>
-      <li><strong>Zero-copy option</strong> — large data transfers use memory grant capabilities instead of copying bytes</li>
-      <li><strong>Small message optimization</strong> — short messages (≤ 64 bytes) are passed in registers, avoiding copies entirely</li>
+      <li><strong>Synchronous</strong> — send blocks until the receiver is ready; receive blocks until a message arrives</li>
+      <li><strong>Capability-mediated</strong> — both sender and receiver must hold an Endpoint capability</li>
+      <li><strong>Small message</strong> — 3-word payload (label, data0, data1) passed in registers</li>
+      <li><strong>Per-thread IPC buffer</strong> — each Thread has an <code>IpcMessage</code> struct for message storage</li>
     </ul>
 
-    <h3>Message Format</h3>
+    <h3>Message Format (Actual)</h3>
     <pre><code><span class="kw">pub struct</span> <span class="ty">IpcMessage</span> {
-    <span class="cmt">// Inline data (passed in registers for small messages)</span>
-    data: [<span class="ty">u64</span>; <span class="num">8</span>],              <span class="cmt">// 64 bytes of inline data</span>
-    data_len: <span class="ty">usize</span>,             <span class="cmt">// Actual length used</span>
-
-    <span class="cmt">// Optional capability transfers</span>
-    caps: [<span class="ty">CapSlot</span>; <span class="num">4</span>],          <span class="cmt">// Up to 4 capabilities transferred</span>
-    cap_count: <span class="ty">usize</span>,
+    <span class="kw">pub</span> label: <span class="ty">u64</span>,   <span class="cmt">// Message type/opcode</span>
+    <span class="kw">pub</span> data0: <span class="ty">u64</span>,   <span class="cmt">// Payload word 0</span>
+    <span class="kw">pub</span> data1: <span class="ty">u64</span>,   <span class="cmt">// Payload word 1</span>
 }</code></pre>
+    <p>On <code>SYS_RECV</code>, the kernel copies the sender's IpcMessage into the receiver's IpcMessage buffer and returns the values in registers (RDI=label, RSI=data0, RDX=data1).</p>
 
-    <h3>Communication Patterns</h3>
+    <h3>Communication Pattern (Actual)</h3>
+    <pre><code><span class="cmt">// Sender (process A) — blocks until B calls SYS_RECV</span>
+<span class="fn">sys_send</span>(endpoint_slot, label, data0, data1);
 
-    <h4>Send / Receive</h4>
-    <p>Basic one-way message passing:</p>
-    <pre><code><span class="cmt">// Sender (process A)</span>
-<span class="fn">sys_ipc_send</span>(endpoint_slot, &amp;message);
+<span class="cmt">// Receiver (process B) — blocks until A calls SYS_SEND</span>
+<span class="kw">let</span> (label, data0, data1) = <span class="fn">sys_recv</span>(endpoint_slot);</code></pre>
 
-<span class="cmt">// Receiver (process B)</span>
-<span class="kw">let</span> msg = <span class="fn">sys_ipc_recv</span>(endpoint_slot);</code></pre>
-
-    <h4>Call / Reply (RPC)</h4>
-    <p>Synchronous request-response, like a function call across processes:</p>
-    <pre><code><span class="cmt">// Client</span>
-<span class="kw">let</span> response = <span class="fn">sys_ipc_call</span>(server_endpoint, &amp;request);
-
-<span class="cmt">// Server</span>
-<span class="kw">loop</span> {
-    <span class="kw">let</span> (client_badge, request) = <span class="fn">sys_ipc_recv</span>(listen_endpoint);
-    <span class="kw">let</span> response = <span class="fn">handle_request</span>(request);
-    <span class="fn">sys_ipc_reply</span>(client_badge, &amp;response);
-}</code></pre>
-    <p>The <code>call</code> operation atomically sends a message and blocks waiting for the reply, while temporarily granting the server a reply capability.</p>
-
-    <h4>Notifications</h4>
-    <p>Lightweight event signaling — non-blocking, no data transfer:</p>
-    <pre><code><span class="cmt">// Signal an event (non-blocking)</span>
-<span class="fn">sys_ipc_notify</span>(endpoint_slot, <span class="cn">EVENT_DATA_READY</span>);
-
-<span class="cmt">// Wait for notifications (blocking)</span>
-<span class="kw">let</span> events = <span class="fn">sys_ipc_wait</span>(endpoint_slot);</code></pre>
-    <p>Notifications are OR'd together if multiple arrive before the receiver checks — they never queue up or overflow.</p>
-
-    <h3>Zero-Copy Memory Grants</h3>
-    <p>For large data transfers (disk blocks, network packets), the sender shares physical pages directly:</p>
-    <ol>
-      <li>Sender creates a Memory capability for the relevant pages</li>
-      <li>Sender transfers the capability via IPC to the receiver</li>
-      <li>Receiver maps the pages into its own address space</li>
-      <li>Both processes access the same physical memory — zero copies</li>
-    </ol>
+    <h3>Thread State During IPC</h3>
+    <p>When a thread calls <code>SYS_SEND</code> and no receiver is waiting, it transitions to <code>ThreadState::BlockedSend</code> and its <code>Box&lt;Thread&gt;</code> is owned by the IPC endpoint. When the partner calls <code>SYS_RECV</code>, the sender is woken, message is copied, and both threads return to Ready.</p>
 
     <hr>
 
@@ -226,7 +198,7 @@
     <h2 id="dependencies">Dependencies <a href="#dependencies" class="anchor">#</a></h2>
     <ul>
       <li><strong>Requires</strong>: Sprint 4 (process/thread structures, scheduler)</li>
-      <li><strong>Enables</strong>: Sprint 6 (syscall dispatch needs capability validation), Sprint 7 (init process uses IPC for service registration)</li>
+      <li><strong>Enables</strong>: Sprint 6 (syscall dispatch validates capabilities), Sprint 7–9 (init process delegates capabilities to children), Sprint 10 (Ring 3 allocator uses PmmAllocator cap)</li>
     </ul>
 
     <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>

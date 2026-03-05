@@ -47,7 +47,7 @@
 
     <h1>Sprint 4 — Processes &amp; Scheduler</h1>
     <p class="subtitle">Run multiple threads of execution, share the CPU fairly across cores.</p>
-    <p><span class="label label-yellow">🔲 Planned</span></p>
+    <p><span class="label label-green">✅ Complete</span></p>
 
     <details class="toc" open>
       <summary>Table of contents</summary>
@@ -55,8 +55,9 @@
         <li><a href="#overview">Overview</a></li>
         <li><a href="#process-thread-model">Process &amp; Thread Model</a></li>
         <li><a href="#context-switching">Context Switching</a></li>
-        <li><a href="#tickless-scheduler">Tickless Scheduler</a></li>
+        <li><a href="#preemptive-scheduler">Preemptive Scheduler</a></li>
         <li><a href="#smp-initialization">SMP Initialization</a></li>
+        <li><a href="#reaper">Reaper Daemon</a></li>
         <li><a href="#dependencies">Dependencies</a></li>
       </ul>
     </details>
@@ -64,157 +65,191 @@
     <hr>
 
     <h2 id="overview">Overview <a href="#overview" class="anchor">#</a></h2>
-    <p>Sprint 4 introduces <strong>processes</strong>, <strong>threads</strong>, and a <strong>tickless scheduler</strong> — the foundation for running multiple programs on the 4-core N3710 processor. This sprint also initializes the Application Processors (AP cores) for symmetric multiprocessing (SMP).</p>
+    <p>Sprint 4 implements <strong>processes</strong>, <strong>threads</strong>, and a <strong>preemptive round-robin scheduler</strong> — the foundation for running multiple programs on x86_64 SMP hardware. The LAPIC one-shot timer fires every 10 ms to enforce fair CPU sharing. Application Processors (APs) are initialized via INIT/SIPI for symmetric multiprocessing.</p>
 
     <hr>
 
     <h2 id="process-thread-model">Process &amp; Thread Model <a href="#process-thread-model" class="anchor">#</a></h2>
 
-    <div class="callout todo">
-      <div class="callout-title">🔲 Not Yet Implemented</div>
+    <div class="callout info">
+      <div class="callout-title">✅ Implemented — kernel/src/sched/thread.rs</div>
     </div>
 
     <h3>Process</h3>
-    <p>A process owns an <strong>address space</strong> and a <strong>capability table</strong>:</p>
-    <pre><code><span class="kw">pub struct</span> <span class="ty">Process</span> {
-    pid: <span class="ty">ProcessId</span>,
-    address_space: <span class="ty">AddressSpace</span>,  <span class="cmt">// PML4 page table + VMAs</span>
-    capability_table: <span class="ty">CapTable</span>,   <span class="cmt">// Indexed capability slots</span>
-    threads: <span class="ty">Vec</span>&lt;<span class="ty">ThreadId</span>&gt;,       <span class="cmt">// Threads belonging to this process</span>
-    state: <span class="ty">ProcessState</span>,          <span class="cmt">// Running, Suspended, Dead</span>
-}</code></pre>
+    <p>A process owns an <strong>address space</strong> (PML4) and a <strong>CNode</strong> (64-slot capability table):</p>
     <ul>
       <li>Each process has its own PML4 (top-level page table) — complete isolation</li>
-      <li>Processes communicate only through kernel-mediated IPC</li>
-      <li>No shared memory by default — memory sharing requires explicit capability grants</li>
+      <li>Processes communicate only through kernel-mediated IPC (SYS_SEND/SYS_RECV)</li>
+      <li>No shared memory by default — memory sharing requires explicit capability delegation</li>
     </ul>
 
-    <h3>Thread</h3>
-    <p>A thread is a schedulable unit of execution within a process:</p>
-    <pre><code><span class="kw">pub struct</span> <span class="ty">Thread</span> {
-    tid: <span class="ty">ThreadId</span>,
-    process: <span class="ty">ProcessId</span>,
-    state: <span class="ty">ThreadState</span>,         <span class="cmt">// Ready, Running, Blocked, Dead</span>
-    kernel_stack: <span class="ty">VirtAddr</span>,     <span class="cmt">// Per-thread kernel stack</span>
-    saved_context: <span class="ty">CpuContext</span>,  <span class="cmt">// Saved registers on context switch</span>
-    priority: <span class="ty">u8</span>,               <span class="cmt">// Scheduler priority level</span>
-    time_slice_ns: <span class="ty">u64</span>,         <span class="cmt">// Remaining time in nanoseconds</span>
+    <h3>Thread (Actual Implementation)</h3>
+    <pre><code><span class="kw">#[repr(C)]</span>
+<span class="kw">pub struct</span> <span class="ty">Thread</span> {
+    <span class="kw">pub</span> id: <span class="ty">u64</span>,                      <span class="cmt">// Unique TID from AtomicU64</span>
+    <span class="kw">pub</span> state: <span class="ty">ThreadState</span>,           <span class="cmt">// Ready | Running | BlockedSend | BlockedRecv | Dead</span>
+    <span class="kw">pub</span> rsp: <span class="ty">u64</span>,                     <span class="cmt">// Saved kernel RSP</span>
+    <span class="kw">pub</span> kernel_stack_base: <span class="ty">u64</span>,       <span class="cmt">// HHDM-mapped stack base</span>
+    <span class="kw">pub</span> kernel_stack_size: <span class="ty">usize</span>,     <span class="cmt">// 4 pages = 16 KiB</span>
+    <span class="kw">pub</span> name: [<span class="ty">u8</span>; <span class="num">32</span>],               <span class="cmt">// Display name</span>
+    <span class="kw">pub</span> process: *<span class="kw">mut</span> <span class="ty">Process</span>,        <span class="cmt">// Parent process (PML4 + CNode)</span>
+    <span class="kw">pub</span> ipc_buffer: <span class="ty">IpcMessage</span>,       <span class="cmt">// Per-thread IPC message buffer</span>
+    <span class="kw">pub</span> user_rip: <span class="ty">u64</span>,                <span class="cmt">// Ring 3 entry point (0 = kernel thread)</span>
+    <span class="kw">pub</span> user_rsp: <span class="ty">u64</span>,                <span class="cmt">// Ring 3 stack pointer</span>
 }</code></pre>
 
-    <h3>Thread States</h3>
+    <h3>Thread States (5-state model)</h3>
     <pre class="mermaid">
     stateDiagram-v2
       [*] --> Ready
       Ready --> Running : schedule()
-      Running --> Blocked : block()
-      Blocked --> Ready : wake() / timer
-      Running --> Dead : exit() / kill()
-      Dead --> [*]
+      Running --> BlockedSend : sys_send() waiting for receiver
+      Running --> BlockedRecv : sys_recv() waiting for sender
+      BlockedSend --> Ready : partner calls recv
+      BlockedRecv --> Ready : partner calls send / IRQ fires
+      Running --> Dead : sys_exit() / thread_exit()
+      Dead --> [*] : Reaper reclaims
     </pre>
 
     <hr>
 
     <h2 id="context-switching">Context Switching <a href="#context-switching" class="anchor">#</a></h2>
 
-    <div class="callout todo">
-      <div class="callout-title">🔲 Not Yet Implemented</div>
+    <div class="callout info">
+      <div class="callout-title">✅ Implemented — kernel/src/sched/context.rs (naked assembly)</div>
     </div>
 
     <p>When the scheduler switches from thread A to thread B:</p>
     <ol>
-      <li><strong>Save</strong> thread A's registers (GPRs, RSP, RIP, RFLAGS, FS/GS base)</li>
-      <li><strong>Switch kernel stack</strong> to thread B's kernel stack</li>
-      <li><strong>Switch page tables</strong> if threads are in different processes (<code>mov cr3, new_pml4</code>)</li>
-      <li><strong>Restore</strong> thread B's registers</li>
-      <li><strong>Return</strong> to thread B's saved instruction pointer</li>
+      <li><strong>Save</strong> thread A's callee-saved registers (RBX, RBP, R12–R15) via <code>switch_context()</code></li>
+      <li><strong>Write RSP</strong> to A's <code>thread.rsp</code> field</li>
+      <li><strong>Load RSP</strong> from B's <code>thread.rsp</code></li>
+      <li><strong>Switch page tables</strong> if processes differ (<code>mov cr3, new_pml4</code>)</li>
+      <li><strong>Update TSS RSP0</strong> to B's kernel stack top (for Ring 3 → Ring 0 transitions)</li>
+      <li><strong>Restore</strong> B's callee-saved registers</li>
+      <li><strong>RET</strong> — pops B's saved RIP and resumes execution</li>
     </ol>
 
-    <h3>FPU/SSE State</h3>
-    <p>The kernel disables SSE in Ring 0 (<code>-target-feature=-sse,-sse2</code>). Userspace processes may use SSE/AVX. The kernel handles this via <strong>lazy FPU save/restore</strong>:</p>
+    <h3>Thread Entry Trampoline</h3>
+    <p>New threads are born via <code>thread_entry_trampoline()</code> (naked function):</p>
     <ol>
-      <li>Mark FPU state as "owned by thread A"</li>
-      <li>On context switch to thread B, set CR0.TS (task switched flag)</li>
-      <li>If thread B uses FPU → #NM exception → save A's state, restore B's state, clear TS</li>
-      <li>If thread B never uses FPU → no save/restore overhead</li>
+      <li><code>sti</code> — re-enable interrupts (disabled during context switch)</li>
+      <li><code>mov rdi, r14</code> — load argument (placed during Thread::new)</li>
+      <li><code>call r13</code> — call the thread's payload function</li>
+      <li>If payload returns, fall through to <code>thread_exit()</code> → mark Dead → schedule()</li>
     </ol>
 
     <hr>
 
-    <h2 id="tickless-scheduler">Tickless Scheduler <a href="#tickless-scheduler" class="anchor">#</a></h2>
+    <h2 id="preemptive-scheduler">Preemptive Scheduler <a href="#preemptive-scheduler" class="anchor">#</a></h2>
 
-    <div class="callout todo">
-      <div class="callout-title">🔲 Not Yet Implemented</div>
+    <div class="callout info">
+      <div class="callout-title">✅ Implemented — kernel/src/sched/scheduler.rs</div>
     </div>
 
     <h3>Design</h3>
-    <p>Instead of periodic timer ticks (which waste power on idle systems), MinimalOS uses a <strong>tickless</strong> design:</p>
+    <p>MinimalOS uses a <strong>preemptive round-robin</strong> scheduler with a 10 ms LAPIC one-shot timer quantum:</p>
     <ol>
-      <li>When scheduling a thread, calculate its <strong>deadline</strong> (current time + time slice)</li>
-      <li>Program the <strong>LAPIC one-shot timer</strong> for that deadline</li>
-      <li>When the timer fires, preempt the thread and reschedule</li>
-      <li>If the thread blocks before the timer, cancel the timer and reschedule immediately</li>
+      <li>When scheduling a thread, <strong>arm the LAPIC timer</strong> for 10 ms</li>
+      <li>When the timer fires, the timer ISR calls <code>schedule()</code></li>
+      <li>If the thread blocks (IPC) or exits before the timer, <code>schedule()</code> is called immediately</li>
+      <li>The timer is re-armed on every schedule() call</li>
     </ol>
 
     <h3>Per-Core Run Queues</h3>
-    <p>Each CPU core has its own run queue with multiple priority levels:</p>
+    <p>Each CPU core has its own <code>RunQueue</code> (a <code>VecDeque&lt;Box&lt;Thread&gt;&gt;</code>) accessed via <code>CpuLocal</code>:</p>
     <pre class="mermaid">
     graph TD
-      RQ["Core 0 Run Queue"] --> P0["Priority 0 - highest"]
-      RQ --> P1["Priority 1"]
-      RQ --> P2["Priority 2 - normal"]
-      RQ --> P3["Priority 3 - idle"]
-      P0 --> T0["timer_thread"]
-      P1 --> D1["driver_thread_a"]
-      P1 --> D2["driver_thread_b"]
-      P2 --> U1["user_proc_1"]
-      P2 --> U2["user_proc_2"]
-      P3 --> I0["idle_thread_0"]
+      RQ["Core 0 RunQueue"] --> T0["init (PID 1)"] 
+      RQ --> T1["reaper daemon"]
+      RQ --> T2["idle thread"]
     </pre>
-
-    <h3>Work Stealing</h3>
-    <p>When a core's run queue is empty (except for the idle thread), it can <strong>steal</strong> threads from other cores' run queues. This balances load across the 4 N3710 cores automatically.</p>
+    <p>A global <code>BOOT_QUEUE</code> holds threads spawned before per-core queues are initialized. The BSP drains it during <code>scheduler::init()</code>.</p>
 
     <h3>Idle Thread</h3>
-    <p>Each core has a dedicated idle thread that executes <code>hlt</code> in a loop. This puts the core into a low-power C-state until the next interrupt — important for battery life on the HP laptop.</p>
+    <p>Each core has a dedicated idle thread that executes <code>sti; hlt</code> in a loop. This puts the core into a low-power C-state until the next interrupt.</p>
+
+    <h3>schedule() Algorithm</h3>
+    <ol>
+      <li>Pop next thread from the per-core run queue</li>
+      <li>Handle current thread based on state:
+        <ul>
+          <li><strong>Running</strong> → re-enqueue to run queue (round-robin)</li>
+          <li><strong>BlockedSend/BlockedRecv</strong> → skip (Box owned by IPC endpoint)</li>
+          <li><strong>Dead</strong> → push to <code>DEAD_QUEUE</code> for reaper</li>
+        </ul>
+      </li>
+      <li>Update <code>TSS.rsp[0]</code> and <code>CpuLocal.kernel_stack_top</code></li>
+      <li>CR3 swap if process PML4 differs</li>
+      <li><code>switch_context(prev_rsp, next_rsp)</code></li>
+      <li>Re-arm LAPIC timer (10 ms)</li>
+    </ol>
 
     <hr>
 
     <h2 id="smp-initialization">SMP Initialization <a href="#smp-initialization" class="anchor">#</a></h2>
 
-    <div class="callout todo">
-      <div class="callout-title">🔲 Not Yet Implemented</div>
+    <div class="callout info">
+      <div class="callout-title">✅ Implemented — kernel/src/arch/x86_64/smp.rs</div>
     </div>
 
-    <p>On boot, only the BSP (Bootstrap Processor, core 0) is running. The other 3 cores (APs) are halted, waiting for a startup sequence.</p>
+    <p>On boot, only the BSP (Bootstrap Processor, core 0) is running. The other cores are halted, waiting for a startup sequence.</p>
 
-    <h3>AP Boot Sequence</h3>
+    <h3>AP Boot Sequence (Actual)</h3>
     <ol>
-      <li><strong>Parse MADT</strong> — find each AP's LAPIC ID</li>
-      <li><strong>Prepare AP trampoline</strong> — 16-bit real-mode code at an address below 1 MB</li>
-      <li><strong>Send INIT IPI</strong> — reset the AP</li>
-      <li><strong>Wait 10ms</strong></li>
-      <li><strong>Send SIPI (Startup IPI)</strong> — AP starts executing the trampoline</li>
-      <li><strong>Trampoline</strong>: switch to protected mode → long mode → jump to Rust AP entry</li>
-      <li><strong>AP initialization</strong>: set up per-core GDT, IDT, TSS, LAPIC, run queue</li>
-      <li><strong>AP enters scheduler loop</strong></li>
+      <li><strong>Parse Limine MP response</strong> — iterate <code>MpResponse.cpus()</code>, find each AP's LAPIC ID</li>
+      <li><strong>Write goto_address</strong> — each AP's <code>goto_address</code> is set to <code>ap_trampoline</code></li>
+      <li><strong>ap_trampoline (naked)</strong> — loads kernel CR3 (<code>KERNEL_PML4</code>), calls <code>ap_rust_entry</code></li>
+      <li><strong>ap_rust_entry</strong> — per-AP initialization:
+        <ul>
+          <li>GDT + TSS load</li>
+          <li>IDT load</li>
+          <li>CpuLocal install (GS base via <code>IA32_GS_BASE</code> MSR)</li>
+          <li>LAPIC init (timer, spurious vector)</li>
+          <li>SYSCALL MSR configuration</li>
+        </ul>
+      </li>
+      <li><strong>Idle loop</strong> — <code>sti; hlt</code> until work arrives</li>
     </ol>
 
-    <h3>Per-Core State</h3>
-    <p>Each core maintains:</p>
-    <ul>
-      <li>Its own GDT (for per-core TSS)</li>
-      <li>Its own IDT (same table, but loaded via <code>lidt</code> on each core)</li>
-      <li>Its own LAPIC (memory-mapped, same physical address)</li>
-      <li>Its own run queue</li>
-      <li>Its own idle thread</li>
-    </ul>
+    <h3>Per-CPU Local Storage (CpuLocal)</h3>
+    <p>Each core maintains its own <code>CpuLocal</code> struct, accessed via the GS segment register:</p>
+    <pre><code><span class="kw">#[repr(C)]</span>
+<span class="kw">pub struct</span> <span class="ty">CpuLocal</span> {
+    <span class="kw">pub</span> self_ptr: *<span class="kw">const</span> <span class="ty">CpuLocal</span>,     <span class="cmt">// offset 0  — gs:[0]</span>
+    <span class="kw">pub</span> lapic_id: <span class="ty">u32</span>,                 <span class="cmt">// offset 8</span>
+    <span class="kw">pub</span> core_index: <span class="ty">u32</span>,               <span class="cmt">// offset 12</span>
+    <span class="kw">pub</span> current_thread: *<span class="kw">mut</span> <span class="ty">Thread</span>,   <span class="cmt">// offset 16</span>
+    <span class="kw">pub</span> idle_thread: *<span class="kw">mut</span> <span class="ty">Thread</span>,      <span class="cmt">// offset 24</span>
+    <span class="kw">pub</span> run_queue: *<span class="kw">mut</span> <span class="ty">RunQueue</span>,      <span class="cmt">// offset 32</span>
+    <span class="kw">pub</span> online: <span class="ty">bool</span>,                  <span class="cmt">// offset 40</span>
+    <span class="kw">pub</span> user_rsp_scratch: <span class="ty">u64</span>,         <span class="cmt">// offset 48 — syscall entry saves user RSP here</span>
+    <span class="kw">pub</span> kernel_stack_top: <span class="ty">u64</span>,         <span class="cmt">// offset 56 — syscall entry loads kernel RSP from here</span>
+}</code></pre>
+
+    <hr>
+
+    <h2 id="reaper">Reaper Daemon (Sprint 9.5) <a href="#reaper" class="anchor">#</a></h2>
+
+    <div class="callout info">
+      <div class="callout-title">✅ Implemented — kernel/src/sched/scheduler.rs (reaper_entry)</div>
+    </div>
+
+    <p>The reaper is a kernel thread that reclaims resources from dead threads:</p>
+    <ol>
+      <li><code>schedule()</code> pushes Dead threads into <code>DEAD_QUEUE</code> (a <code>SpinLock&lt;Vec&lt;Box&lt;Thread&gt;&gt;&gt;</code>)</li>
+      <li>Reaper daemon drains the queue each time it's scheduled</li>
+      <li>For each dead thread: convert HHDM stack addresses → physical, call <code>free_frame()</code> per stack page</li>
+      <li>If the thread's process has no more living threads: walk PML4[0..256] to free all user pages, then <code>unregister_process()</code></li>
+      <li>Drop <code>Box&lt;Thread&gt;</code> to reclaim the TCB</li>
+    </ol>
 
     <hr>
 
     <h2 id="dependencies">Dependencies <a href="#dependencies" class="anchor">#</a></h2>
     <ul>
-      <li><strong>Requires</strong>: Sprint 3 (IDT for timer interrupts, LAPIC for preemption)</li>
-      <li><strong>Enables</strong>: Sprint 5 (capabilities need process/thread structures), Sprint 6 (userspace needs Ring 3 processes)</li>
+      <li><strong>Requires</strong>: Sprint 3 (IDT for timer interrupts, LAPIC for preemption, ACPI/MADT for AP discovery)</li>
+      <li><strong>Enables</strong>: Sprint 5 (capabilities need process/thread structures), Sprint 6 (userspace needs Ring 3 processes), Sprint 9.5 (reaper daemon)</li>
     </ul>
 
     <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>

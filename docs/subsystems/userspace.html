@@ -45,9 +45,9 @@
 <main class="main-content">
   <div class="content-wrapper">
 
-    <h1>Sprint 7 — Init Process &amp; First Real Program</h1>
-    <p class="subtitle">Life outside the kernel.</p>
-    <p><span class="label label-yellow">🔲 Planned</span></p>
+    <h1>Sprints 7–9 — Init Process &amp; The God Process</h1>
+    <p class="subtitle">Life outside the kernel — Init holds absolute power.</p>
+    <p><span class="label label-green">✅ Complete</span></p>
 
     <details class="toc" open>
       <summary>Table of contents</summary>
@@ -64,163 +64,157 @@
     <hr>
 
     <h2 id="overview">Overview <a href="#overview" class="anchor">#</a></h2>
-    <p>Sprint 7 is where MinimalOS becomes a real operating system. The kernel loads the <strong>init process</strong> — the first userspace program — and everything after that happens through capability-mediated IPC. This sprint also creates the <strong>userspace library</strong> (<code>libmnos</code>) that provides safe Rust wrappers around the raw syscall interface.</p>
+    <p>Sprints 7–9 turned MinimalOS into a real operating system. The kernel loads the <strong>init process</strong> (PID 1) — the only process that receives capabilities directly from the kernel. Init is the <strong>God Process</strong>: it parses the initrd TarFS, spawns child processes, delegates capabilities, manages memory from Ring 3, and (as of Sprint 10) runs a dynamic heap allocator. All other processes receive their capabilities from Init.</p>
 
     <hr>
 
     <h2 id="init-process">Init Process <a href="#init-process" class="anchor">#</a></h2>
 
-    <div class="callout todo">
-      <div class="callout-title">🔲 Not Yet Implemented</div>
+    <div class="callout info">
+      <div class="callout-title">✅ Implemented — user/init/src/main.rs</div>
     </div>
 
     <h3>Role</h3>
-    <p>The init process is the <strong>root of the process tree</strong> and the <strong>service manager</strong>. It's the only process that receives capabilities directly from the kernel at boot — all other processes receive their capabilities from init or its children.</p>
+    <p>The init process is the <strong>root of the process tree</strong> and the <strong>God Process</strong>. It is the only process that receives capabilities directly from the kernel at boot — all other processes receive their capabilities from init via <code>SYS_DELEGATE</code>.</p>
 
-    <h3>Boot Capabilities</h3>
-    <p>The kernel creates these capabilities and places them in init's capability table:</p>
+    <h3>Boot Capabilities (Actual)</h3>
     <table>
       <thead><tr><th>Slot</th><th>Type</th><th>Resource</th><th>Rights</th></tr></thead>
       <tbody>
-        <tr><td>0</td><td>Memory</td><td>All usable RAM</td><td>Read, Write, Grant</td></tr>
-        <tr><td>1</td><td>IPC Endpoint</td><td>Kernel log</td><td>Send</td></tr>
-        <tr><td>2</td><td>Process</td><td>Self</td><td>All</td></tr>
-        <tr><td>3</td><td>Interrupt</td><td>All unmasked IRQs</td><td>Receive, Grant</td></tr>
+        <tr><td>1</td><td><strong>PmmAllocator</strong></td><td>Physical memory allocator</td><td>ALL (can allocate frames)</td></tr>
+        <tr><td>2</td><td><strong>IoPort</strong></td><td>base=0x3F8, size=8 (COM1)</td><td>ALL (port_in, port_out)</td></tr>
+        <tr><td>3</td><td><strong>Process</strong></td><td>pid=1 (self-reference)</td><td>ALL (map memory into own VA)</td></tr>
       </tbody>
     </table>
 
-    <h3>Responsibilities</h3>
+    <h3>Runtime Phases (Actual)</h3>
     <ol>
-      <li><strong>Spawn child processes</strong> — load service binaries from the initramfs</li>
-      <li><strong>Distribute capabilities</strong> — give each service the minimum capabilities it needs</li>
-      <li><strong>Service registration</strong> — maintain a name→endpoint directory ("serial_driver" → endpoint #7)</li>
-      <li><strong>Service lookup</strong> — respond to queries: "where is the VFS service?"</li>
-      <li><strong>Crash recovery</strong> — restart failed services</li>
+      <li><strong>Serial banner</strong> — polled COM1 output via SYS_PORT_IN/SYS_PORT_OUT through IoPort capability (slot 2)</li>
+      <li><strong>TarFS parse</strong> — initrd mapped at <code>0x1000_0000</code>, USTAR headers walked, entries listed to serial</li>
+      <li><strong>Heap bootstrap</strong> — 100 pages (400 KiB) at <code>0x4000_0000</code> via SYS_ALLOC_MEMORY + SYS_MAP_MEMORY + SYS_DROP_CAP loop</li>
+      <li><strong>Vec&lt;u64&gt; proof</strong> — construct, push 103 elements (triggers reallocation), verify, drop</li>
+      <li><strong>Halt loop</strong> — infinite <code>core::hint::spin_loop()</code></li>
     </ol>
 
-    <h3>Service Registration Protocol</h3>
-    <pre class="mermaid">
-    graph LR
-      subgraph SD["Init Process Service Directory"]
-        S1["serial_driver"] --> E1["endpoint_7"]
-        S2["vfs_service"] --> E2["endpoint_12"]
-        S3["network_stack"] --> E3["endpoint_15"]
-      end
-    </pre>
-
-    <p>Services register with init via IPC:</p>
-    <pre><code>→ IPC_SEND(init_endpoint, { type: REGISTER, name: <span class="str">"serial_driver"</span>, endpoint: my_endpoint })
-← IPC_REPLY({ status: OK })</code></pre>
-
-    <p>Clients look up services:</p>
-    <pre><code>→ IPC_SEND(init_endpoint, { type: LOOKUP, name: <span class="str">"serial_driver"</span> })
-← IPC_REPLY({ status: OK, endpoint: serial_endpoint_cap })</code></pre>
+    <h3>Process Lifecycle (Sprint 8–9)</h3>
+    <ol>
+      <li><strong>Spawn child</strong> — <code>SYS_SPAWN_PROCESS</code> creates empty child with new PML4 + CNode</li>
+      <li><strong>Delegate capabilities</strong> — <code>SYS_DELEGATE(proc_slot, src_slot, dst_slot)</code> copies caps to child</li>
+      <li><strong>Load ELF</strong> — kernel parses initrd binary, maps PT_LOAD segments into child's VA</li>
+      <li><strong>Spawn thread</strong> — <code>SYS_SPAWN_THREAD(proc_slot, user_rip, user_rsp)</code> starts execution</li>
+    </ol>
 
     <hr>
 
     <h2 id="userspace-library">Userspace Library (<code>libmnos</code>) <a href="#userspace-library" class="anchor">#</a></h2>
 
-    <div class="callout todo">
-      <div class="callout-title">🔲 Not Yet Implemented</div>
+    <div class="callout info">
+      <div class="callout-title">✅ Implemented — user/libmnos/src/</div>
     </div>
 
     <h3>Purpose</h3>
-    <p><code>libmnos</code> is a static library that userspace programs link against. It provides safe Rust abstractions over the raw SYSCALL interface.</p>
+    <p><code>libmnos</code> is a <code>no_std</code> static library that all userspace programs link against. It provides safe Rust wrappers around the raw <code>SYSCALL</code> instruction and a global heap allocator.</p>
 
-    <h3>Syscall Wrappers</h3>
-    <pre><code><span class="cmt">// Raw syscall (unsafe)</span>
-<span class="kw">unsafe fn</span> <span class="fn">syscall3</span>(nr: <span class="ty">u64</span>, arg1: <span class="ty">u64</span>, arg2: <span class="ty">u64</span>, arg3: <span class="ty">u64</span>) -&gt; <span class="ty">i64</span> {
-    <span class="kw">let</span> ret: <span class="ty">i64</span>;
-    <span class="fn">asm!</span>(
-        <span class="str">"syscall"</span>,
-        <span class="kw">in</span>(<span class="str">"rax"</span>) nr,
-        <span class="kw">in</span>(<span class="str">"rdi"</span>) arg1,
-        <span class="kw">in</span>(<span class="str">"rsi"</span>) arg2,
-        <span class="kw">in</span>(<span class="str">"rdx"</span>) arg3,
-        <span class="kw">out</span>(<span class="str">"rcx"</span>) _,  <span class="cmt">// clobbered by SYSCALL</span>
-        <span class="kw">out</span>(<span class="str">"r11"</span>) _,  <span class="cmt">// clobbered by SYSCALL</span>
-        <span class="kw">lateout</span>(<span class="str">"rax"</span>) ret,
-    );
-    ret
-}
+    <h3>Modules</h3>
+    <table>
+      <thead><tr><th>Module</th><th>Contents</th></tr></thead>
+      <tbody>
+        <tr><td><code>syscall</code></td><td>Raw <code>syscall4()</code> — inline asm SYSCALL with 4 args (RAX, RDI, RSI, RDX, R10)</td></tr>
+        <tr><td><code>ipc</code></td><td><code>sys_send()</code>, <code>sys_recv()</code> — synchronous IPC on endpoint capabilities</td></tr>
+        <tr><td><code>io</code></td><td><code>sys_port_out()</code>, <code>sys_port_in()</code> — I/O port access via IoPort capability</td></tr>
+        <tr><td><code>irq</code></td><td><code>sys_wait_irq()</code> — block until hardware IRQ on IrqLine capability</td></tr>
+        <tr><td><code>process</code></td><td><code>sys_spawn_process()</code>, <code>sys_alloc_memory()</code>, <code>sys_map_memory()</code>, <code>sys_delegate()</code>, <code>sys_spawn_thread()</code>, <code>sys_drop_cap()</code></td></tr>
+        <tr><td><code>heap</code></td><td><code>init_heap()</code> — Ring 3 global allocator bootstrap via linked_list_allocator</td></tr>
+      </tbody>
+    </table>
 
-<span class="cmt">// Safe wrapper</span>
-<span class="kw">pub fn</span> <span class="fn">ipc_send</span>(endpoint: <span class="ty">CapSlot</span>, msg: &amp;<span class="ty">IpcMessage</span>) -&gt; <span class="ty">Result</span>&lt;(), <span class="ty">IpcError</span>&gt; {
-    <span class="kw">let</span> ret = <span class="kw">unsafe</span> { <span class="fn">syscall3</span>(<span class="cn">SYS_IPC_SEND</span>, endpoint.<span class="num">0</span> <span class="kw">as</span> <span class="ty">u64</span>, msg <span class="kw">as</span> *<span class="kw">const</span> _ <span class="kw">as</span> <span class="ty">u64</span>, <span class="num">0</span>) };
-    <span class="kw">match</span> ret {
-        <span class="num">0</span> =&gt; <span class="cn">Ok</span>(()),
-        e =&gt; <span class="cn">Err</span>(<span class="ty">IpcError</span>::<span class="fn">from_code</span>(e)),
-    }
-}</code></pre>
+    <h3>Global Allocator (Sprint 10)</h3>
+    <p><code>libmnos</code> exports a <code>#[global_allocator]</code> backed by <code>linked_list_allocator::LockedHeap</code>. The <code>init_heap()</code> function bootstraps it:</p>
+    <pre><code><span class="cmt">// For each of 100 pages:</span>
+<span class="fn">sys_alloc_memory</span>(alloc_slot, scratch_slot);  <span class="cmt">// PMM → MemoryFrame cap</span>
+<span class="fn">sys_map_memory</span>(proc_slot, scratch_slot, vaddr, <span class="num">0x01</span>);  <span class="cmt">// Map RW at 0x4000_0000+</span>
+<span class="fn">sys_drop_cap</span>(scratch_slot);  <span class="cmt">// Free slot for reuse</span>
 
-    <h3>IPC Helpers</h3>
-    <pre><code><span class="cmt">// High-level RPC call</span>
-<span class="kw">pub fn</span> <span class="fn">rpc_call</span>&lt;Req: <span class="ty">Serialize</span>, Resp: <span class="ty">Deserialize</span>&gt;(
-    endpoint: <span class="ty">CapSlot</span>,
-    request: &amp;Req,
-) -&gt; <span class="ty">Result</span>&lt;Resp, <span class="ty">IpcError</span>&gt; {
-    <span class="kw">let</span> msg = <span class="ty">IpcMessage</span>::<span class="fn">encode</span>(request);
-    <span class="kw">let</span> reply = <span class="fn">ipc_call</span>(endpoint, &amp;msg)?;
-    <span class="cn">Ok</span>(reply.<span class="fn">decode</span>()?)
-}</code></pre>
-
-    <h3>Memory Allocation</h3>
-    <p>Userspace gets its own heap allocator that requests pages from the kernel:</p>
-    <pre><code><span class="kw">pub fn</span> <span class="fn">alloc_pages</span>(count: <span class="ty">usize</span>) -&gt; <span class="ty">Result</span>&lt;*<span class="kw">mut</span> <span class="ty">u8</span>, <span class="ty">MemError</span>&gt; {
-    <span class="kw">let</span> addr = <span class="kw">unsafe</span> { <span class="fn">syscall2</span>(<span class="cn">SYS_MEM_ALLOC</span>, count <span class="kw">as</span> <span class="ty">u64</span>, <span class="num">0</span>) };
-    <span class="kw">if</span> addr &lt; <span class="num">0</span> { <span class="cn">Err</span>(<span class="ty">MemError</span>::OutOfMemory) }
-    <span class="kw">else</span> { <span class="cn">Ok</span>(addr <span class="kw">as</span> *<span class="kw">mut</span> <span class="ty">u8</span>) }
-}</code></pre>
+<span class="cmt">// After all pages mapped:</span>
+<span class="cn">HEAP</span>.lock().<span class="fn">init</span>(heap_base, heap_size);  <span class="cmt">// 400 KiB usable heap</span></code></pre>
+    <p>After <code>init_heap()</code>, all <code>alloc</code> crate types (<code>Vec</code>, <code>Box</code>, <code>String</code>, etc.) work in Ring 3.</p>
 
     <hr>
 
     <h2 id="first-userspace-driver">First Userspace Driver <a href="#first-userspace-driver" class="anchor">#</a></h2>
 
-    <div class="callout todo">
-      <div class="callout-title">🔲 Not Yet Implemented</div>
+    <div class="callout info">
+      <div class="callout-title">✅ Implemented — user/serial_drv/ (Sprint 7)</div>
     </div>
 
     <h3>Serial Console Driver</h3>
-    <p>The first real userspace service — a serial console driver that demonstrates the full capability-based architecture:</p>
+    <p>The first real userspace service — a serial console driver loaded from the initrd TarFS, demonstrating the full capability-based architecture:</p>
     <pre class="mermaid">
     sequenceDiagram
       participant K as Kernel
-      participant I as Init Process
-      participant S as Serial Driver
-      K->>I: Boot capabilities
-      I->>S: Spawn + caps (IRQ 4, MMIO, IPC endpoint)
-      Note over K,S: Runtime operation
-      K-->>S: IRQ 4 fires → notify
-      S->>S: Read serial port, process input
-      S->>I: IPC: echo to output
+      participant I as Init (PID 1)
+      participant S as serial_drv (PID 2)
+      K->>I: Boot caps (PmmAllocator, IoPort, Process)
+      I->>K: SYS_SPAWN_PROCESS
+      K->>I: Process cap (slot N)
+      I->>K: SYS_DELEGATE (IoPort to child)
+      I->>K: SYS_SPAWN_THREAD (entry, stack)
+      K->>S: Ring 3 entry
+      Note over S: Polled COM1 via SYS_PORT_OUT/IN
     </pre>
 
     <h3>What This Demonstrates</h3>
     <ol>
-      <li><strong>Interrupt routing</strong>: IRQ 4 (COM1) is routed to the serial driver via an interrupt capability</li>
-      <li><strong>MMIO access</strong>: The driver has a memory capability for the serial port's I/O range</li>
-      <li><strong>Process isolation</strong>: The driver runs in Ring 3 — a bug in the driver can't crash the kernel</li>
-      <li><strong>IPC communication</strong>: The serial driver communicates with other processes via IPC</li>
-      <li><strong>Capability delegation</strong>: Init gives the serial driver exactly the capabilities it needs — nothing more</li>
+      <li><strong>ELF loading</strong>: serial_drv is a standalone <code>no_std</code> ELF binary in the initrd tar archive</li>
+      <li><strong>Capability delegation</strong>: Init gives serial_drv only the IoPort capability it needs — nothing more</li>
+      <li><strong>Process isolation</strong>: serial_drv runs in Ring 3 with its own PML4 — a bug cannot crash the kernel</li>
+      <li><strong>I/O port access</strong>: COM1 (0x3F8) accessed via SYS_PORT_OUT/SYS_PORT_IN through IoPort capability</li>
     </ol>
 
     <hr>
 
     <h2 id="initramfs">Initramfs <a href="#initramfs" class="anchor">#</a></h2>
-    <p>The init process and initial services are bundled into an <strong>in-memory filesystem</strong> (initramfs) that Limine loads alongside the kernel:</p>
+    <p>The init process and initial services are bundled into an <strong>initrd</strong> that Limine loads alongside the kernel:</p>
     <ul>
-      <li>Format: tar archive (simple, no compression needed for small images)</li>
-      <li>Contains: init binary, serial driver binary, other initial services</li>
-      <li>Loaded by Limine as a module</li>
-      <li>Init unpacks it to find and load service binaries</li>
+      <li><strong>Format:</strong> USTAR tar archive (no compression, parsed in Ring 3)</li>
+      <li><strong>Contains:</strong> <code>serial_drv</code> ELF binary (and future service binaries)</li>
+      <li><strong>Loaded by Limine</strong> as a module, mapped into Init's address space at <code>0x1000_0000</code></li>
+      <li><strong>Parsed in Init</strong> — USTAR headers walked to find entry names and sizes</li>
     </ul>
+
+    <h3>Address Space Layout (Init, Actual)</h3>
+    <pre class="mermaid">
+    block-beta
+      columns 1
+      block:stack["0x7FFFFFFFE000"]
+        A["User Stack (4 pages, RW)"]
+      end
+      block:heap["0x4000_0000"]
+        C["Heap (100 pages, 400 KiB, RW)"]
+      end
+      block:initrd["0x1000_0000"]
+        D["Initrd TarFS (kernel-mapped, R)"]
+      end
+      block:bss[" "]
+        E[".bss    RW (4K-aligned)"]
+      end
+      block:data[" "]
+        F[".data   RW (4K-aligned)"]
+      end
+      block:rodata[" "]
+        G[".rodata R  (4K-aligned)"]
+      end
+      block:text["0x400000 ← ELF base"]
+        H[".text   RX (4K-aligned)"]
+      end
+    </pre>
 
     <hr>
 
     <h2 id="dependencies">Dependencies <a href="#dependencies" class="anchor">#</a></h2>
     <ul>
-      <li><strong>Requires</strong>: Sprint 6 (SYSCALL/SYSRET, ELF loader, Ring 3 entry)</li>
-      <li><strong>Enables</strong>: Future milestones (VFS, disk drivers, networking — all built on this foundation)</li>
+      <li><strong>Requires</strong>: Sprint 6 (SYSCALL/SYSRET, ELF loader, Ring 3 entry), Sprint 5 (CNode, capabilities)</li>
+      <li><strong>Enables</strong>: Sprint 9.5 (process teardown, reaper), Sprint 10 (Ring 3 global allocator, Wasm hypervisor)</li>
     </ul>
 
     <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>

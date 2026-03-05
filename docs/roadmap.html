@@ -74,10 +74,12 @@
         <tr><td>1</td><td><a href="subsystems/boot.html">Boot &amp; Serial</a></td><td><span class="label label-green">✅ Complete</span></td><td>Toolchain, bootloader, serial UART, framebuffer console</td></tr>
         <tr><td>2</td><td><a href="subsystems/memory.html">Memory</a></td><td><span class="label label-green">✅ Complete</span></td><td>PMM bitmap allocator, VMM page tables, kernel heap</td></tr>
         <tr><td>3</td><td><a href="subsystems/interrupts.html">Interrupts</a></td><td><span class="label label-green">✅ Complete</span></td><td>GDT/TSS, IDT, ACPI/MADT, LAPIC, I/O APIC, W^X remap</td></tr>
-        <tr><td>4</td><td><a href="subsystems/scheduler.html">Scheduler</a></td><td><span class="label label-yellow">🔲 Planned</span></td><td>Processes, threads, tickless scheduler, SMP</td></tr>
-        <tr><td>5</td><td><a href="subsystems/capabilities.html">Capabilities</a></td><td><span class="label label-yellow">🔲 Planned</span></td><td>Capability tables, IPC channels, memory grants</td></tr>
-        <tr><td>6</td><td><a href="subsystems/syscalls.html">Syscalls</a></td><td><span class="label label-yellow">🔲 Planned</span></td><td>SYSCALL/SYSRET, ELF loader, Ring 3 entry</td></tr>
-        <tr><td>7</td><td><a href="subsystems/userspace.html">Userspace</a></td><td><span class="label label-yellow">🔲 Planned</span></td><td>Init process, libmnos, first userspace driver</td></tr>
+        <tr><td>4</td><td><a href="subsystems/scheduler.html">Scheduler</a></td><td><span class="label label-green">✅ Complete</span></td><td>Processes, threads, preemptive scheduler, SMP (4 cores)</td></tr>
+        <tr><td>5</td><td><a href="subsystems/capabilities.html">Capabilities</a></td><td><span class="label label-green">✅ Complete</span></td><td>CNode, capability types, IPC endpoints, synchronous IPC</td></tr>
+        <tr><td>6</td><td><a href="subsystems/syscalls.html">Syscalls</a></td><td><span class="label label-green">✅ Complete</span></td><td>SYSCALL/SYSRET, 12 syscalls, ELF loader, Ring 3 entry</td></tr>
+        <tr><td>7–9</td><td><a href="subsystems/userspace.html">Userspace</a></td><td><span class="label label-green">✅ Complete</span></td><td>Init (PID 1), libmnos, TarFS, delegation, memory management</td></tr>
+        <tr><td>9.5</td><td>Reaper</td><td><span class="label label-green">✅ Complete</span></td><td>DEAD_QUEUE, kernel stack reclamation, VMM walker, process teardown</td></tr>
+        <tr><td>10</td><td>Wasm Hypervisor</td><td><span class="label label-blue">🔄 In Progress</span></td><td>Ring 3 global allocator, linked_list_allocator, Vec in Ring 3</td></tr>
       </tbody>
     </table>
 
@@ -132,47 +134,76 @@
 
     <hr>
 
-    <h2 id="sprint-4">Sprint 4 — Processes &amp; Scheduler 🔲 <a href="#sprint-4" class="anchor">#</a></h2>
+    <h2 id="sprint-4">Sprint 4 — Processes &amp; Scheduler ✅ <a href="#sprint-4" class="anchor">#</a></h2>
     <blockquote><em>Run multiple threads of execution, share the CPU fairly.</em></blockquote>
     <ul class="checklist">
-      <li class="pending"><strong>Process / Thread structures</strong> — address space, capability table, state machine</li>
-      <li class="pending"><strong>Context switching</strong> — register save/restore, CR3 switch, FPU lazy state</li>
-      <li class="pending"><strong>Tickless scheduler</strong> — per-core run queues, work-stealing, idle thread</li>
-      <li class="pending"><strong>SMP initialization</strong> — INIT/SIPI, per-core GDT/IDT/TSS/LAPIC</li>
+      <li class="done"><strong>Process / Thread structures</strong> — Process owns PML4 + CNode, Thread is schedulable unit (states: Ready/Running/Blocked/Dead)</li>
+      <li class="done"><strong>Context switching</strong> — register save/restore trampoline, RSP swap, lazy FPU state</li>
+      <li class="done"><strong>Preemptive scheduler</strong> — LAPIC timer 10ms quantum, per-core run queues, idle threads with HLT</li>
+      <li class="done"><strong>SMP initialization</strong> — INIT/SIPI, per-core GDT/IDT/TSS/LAPIC, 4-core parallel boot</li>
+      <li class="done"><strong>Per-CPU data</strong> — CpuLocal via GS segment, per-core current_thread tracking</li>
     </ul>
 
     <hr>
 
-    <h2 id="sprint-5">Sprint 5 — Capabilities &amp; IPC 🔲 <a href="#sprint-5" class="anchor">#</a></h2>
+    <h2 id="sprint-5">Sprint 5 — Capabilities &amp; IPC ✅ <a href="#sprint-5" class="anchor">#</a></h2>
     <blockquote><em>The security model — unforgeable tokens and message passing.</em></blockquote>
     <ul class="checklist">
-      <li class="pending"><strong>Capability table</strong> — per-process, slot-based, typed with rights bitmask</li>
-      <li class="pending"><strong>Capability operations</strong> — create, delete, transfer (rights reduction), revoke</li>
-      <li class="pending"><strong>Synchronous IPC</strong> — send/receive on capability-protected endpoints</li>
-      <li class="pending"><strong>Call/Reply RPC</strong> — synchronous request-response pattern</li>
-      <li class="pending"><strong>Notifications</strong> — lightweight non-blocking event signaling</li>
-      <li class="pending"><strong>Zero-copy memory grants</strong> — share physical pages via capabilities</li>
+      <li class="done"><strong>CNode (Capability Node)</strong> — per-process table with 64 slots, typed capabilities with CapRights bitmask</li>
+      <li class="done"><strong>Capability types</strong> — PmmAllocator, MemoryFrame, IoPort, Process, IpcEndpoint, IrqLine, Empty</li>
+      <li class="done"><strong>Synchronous IPC</strong> — SYS_SEND/SYS_RECV on capability-protected endpoints, 3-word payload</li>
+      <li class="done"><strong>Interrupt routing</strong> — SYS_WAIT_IRQ blocks on IRQ capability, I/O APIC EOI</li>
+      <li class="done"><strong>Rights enforcement</strong> — all syscalls validate capability rights before operation</li>
     </ul>
 
     <hr>
 
-    <h2 id="sprint-6">Sprint 6 — Syscall Interface &amp; Userspace 🔲 <a href="#sprint-6" class="anchor">#</a></h2>
+    <h2 id="sprint-6">Sprint 6 — Syscall Interface &amp; Userspace ✅ <a href="#sprint-6" class="anchor">#</a></h2>
     <blockquote><em>Cross the Ring 0/Ring 3 boundary.</em></blockquote>
     <ul class="checklist">
-      <li class="pending"><strong>SYSCALL/SYSRET</strong> — MSR configuration, entry point, register save/restore</li>
-      <li class="pending"><strong>Syscall dispatch</strong> — ~22 syscalls indexed by RAX</li>
-      <li class="pending"><strong>ELF loader</strong> — parse ELF64, map segments, set up user stack</li>
-      <li class="pending"><strong>Ring 3 entry</strong> — user page tables, SYSRET to entry point</li>
+      <li class="done"><strong>SYSCALL/SYSRET</strong> — MSR configuration (STAR/LSTAR/SFMASK), naked entry point with swapgs + kernel stack swap</li>
+      <li class="done"><strong>Syscall dispatch</strong> — 12 implemented syscalls: SYS_EXIT, SEND, RECV, PORT_OUT, PORT_IN, WAIT_IRQ, SPAWN_PROCESS, ALLOC_MEMORY, MAP_MEMORY, DELEGATE, SPAWN_THREAD, DROP_CAP</li>
+      <li class="done"><strong>ELF loader</strong> — parse ELF64, map PT_LOAD segments with W^X permissions, BSS zeroing</li>
+      <li class="done"><strong>Ring 3 entry</strong> — IRETQ transition from kernel thread to user code at 0x400000</li>
     </ul>
 
     <hr>
 
-    <h2 id="sprint-7">Sprint 7 — Init Process &amp; First Program 🔲 <a href="#sprint-7" class="anchor">#</a></h2>
-    <blockquote><em>Life outside the kernel.</em></blockquote>
+    <h2 id="sprint-7">Sprint 7–9 — Init Process &amp; The God Process ✅ <a href="#sprint-7" class="anchor">#</a></h2>
+    <blockquote><em>Life outside the kernel — the Init process holds absolute power.</em></blockquote>
     <ul class="checklist">
-      <li class="pending"><strong>Init process</strong> — capability receiver, service spawner, name directory</li>
-      <li class="pending"><strong>Userspace library (<code>libmnos</code>)</strong> — syscall wrappers, IPC helpers, allocator</li>
-      <li class="pending"><strong>First userspace driver</strong> — serial console via IRQ capability + IPC</li>
+      <li class="done"><strong>Init process (PID 1)</strong> — isolated PML4, CNode with PmmAllocator + IoPort + Process(self) capabilities</li>
+      <li class="done"><strong>Userspace library (<code>libmnos</code>)</strong> — syscall wrappers (IPC, I/O, IRQ, process/memory management), Ring 3 heap bootstrap</li>
+      <li class="done"><strong>Serial driver (<code>serial_drv</code>)</strong> — userspace ELF loaded from initrd TarFS, COM1 via IoPort capability</li>
+      <li class="done"><strong>Initrd TarFS</strong> — USTAR tar archive loaded by Limine, mapped into Init’s address space at 0x1000_0000</li>
+      <li class="done"><strong>Delegation syscalls</strong> — SYS_SPAWN_PROCESS, SYS_DELEGATE, SYS_SPAWN_THREAD (Sprint 8)</li>
+      <li class="done"><strong>Memory management from Ring 3</strong> — SYS_ALLOC_MEMORY + SYS_MAP_MEMORY proven with write+readback (Sprint 9)</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="sprint-95">Sprint 9.5 — Reaper &amp; Resource Teardown ✅ <a href="#sprint-95" class="anchor">#</a></h2>
+    <blockquote><em>What is created must be destroyed — the kernel recycles its own entropy.</em></blockquote>
+    <ul class="checklist">
+      <li class="done"><strong>DEAD_QUEUE</strong> — lock-free queue for dead threads, schedule() pushes dead Box&lt;Thread&gt; to reaper</li>
+      <li class="done"><strong>Reaper daemon</strong> — kernel thread that drains DEAD_QUEUE on each scheduler tick</li>
+      <li class="done"><strong>Kernel stack reclamation</strong> — HHDM → phys conversion, free_frame() per page (+4 frames proven)</li>
+      <li class="done"><strong>VMM PML4 walker</strong> — destroy_user_address_space() walks PML4[0..256] bottom-up, frees all user pages + table pages</li>
+      <li class="done"><strong>Process teardown</strong> — unregister_process() removes from PROCESS_TABLE, drops Process Box + CNode</li>
+      <li class="done"><strong>SYS_DROP_CAP (syscall 11)</strong> — removes capability from CNode slot, enabling slot reuse</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="sprint-10">Sprint 10 — Wasm Hypervisor 🔄 <a href="#sprint-10" class="anchor">#</a></h2>
+    <blockquote><em>Turn Init into the WebAssembly hypervisor.</em></blockquote>
+    <ul class="checklist">
+      <li class="done"><strong>Ring 3 global allocator</strong> — linked_list_allocator in libmnos, fed by capability-gated page allocation</li>
+      <li class="done"><strong>init_heap() bootstrap</strong> — 100 pages (400 KiB) at 0x4000_0000 via SYS_ALLOC_MEMORY + SYS_MAP_MEMORY + SYS_DROP_CAP loop</li>
+      <li class="done"><strong>Vec in Ring 3</strong> — Vec&lt;u64&gt; constructed, grown (reallocation), and dropped in pure userspace</li>
+      <li class="pending"><strong>wasmi integration</strong> — WebAssembly interpreter engine in Ring 3</li>
+      <li class="pending"><strong>Wasm module loading</strong> — parse .wasm from initrd, instantiate via wasmi</li>
+      <li class="pending"><strong>Host function bindings</strong> — bridge wasmi imports to MinimalOS syscalls</li>
     </ul>
 
     <hr>
