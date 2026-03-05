@@ -78,11 +78,13 @@
 
     <h3>Design</h3>
     <p>A <strong>bitmap allocator</strong> where each bit represents one 4 KiB page frame:</p>
-    <pre class="diagram"><code>Bit 0  → Frame at physical address 0x0000
-Bit 1  → Frame at physical address 0x1000
-Bit 2  → Frame at physical address 0x2000
-...
-Bit N  → Frame at physical address N × 0x1000</code></pre>
+    <pre class="mermaid">
+    graph LR
+      B0["Bit 0"] --> F0["Frame 0x0000"]
+      B1["Bit 1"] --> F1["Frame 0x1000"]
+      B2["Bit 2"] --> F2["Frame 0x2000"]
+      BN["Bit N"] --> FN["Frame N × 0x1000"]
+    </pre>
     <ul>
       <li><strong>0</strong> = free, <strong>1</strong> = used</li>
       <li>Bitmap is stored in the first usable physical memory region large enough to hold it</li>
@@ -144,16 +146,14 @@ Bit N  → Frame at physical address N × 0x1000</code></pre>
 
     <h3>Design</h3>
     <p>Implements x86_64 <strong>4-level page table</strong> infrastructure for creating and managing virtual-to-physical address mappings.</p>
-    <pre class="diagram"><code>Virtual Address (48-bit):
-┌───────┬───────┬───────┬───────┬────────────┐
-│ PML4  │ PDP   │  PD   │  PT   │   Offset   │
-│ [47:39]│[38:30]│[29:21]│[20:12]│  [11:0]    │
-│ 9 bits│ 9 bits│ 9 bits│ 9 bits│  12 bits   │
-└───────┴───────┴───────┴───────┴────────────┘
-   │        │        │        │
-   ▼        ▼        ▼        ▼
-PML4 ──→ PDP ──→ PD ──→ PT ──→ Physical Frame
-Table    Table   Table   Table</code></pre>
+    <pre class="mermaid">
+    graph LR
+      VA["Virtual Address\n48-bit"] --> PML4["PML4 Table\n[47:39] 9 bits"]
+      PML4 --> PDP["PDP Table\n[38:30] 9 bits"]
+      PDP --> PD["PD Table\n[29:21] 9 bits"]
+      PD --> PT["PT Table\n[20:12] 9 bits"]
+      PT --> Frame["Physical Frame\n[11:0] 12 bits"]
+    </pre>
     <p>Each table has 512 entries, each entry is 8 bytes. Tables are 4 KiB (one page frame).</p>
 
     <h3>Page Table Flags</h3>
@@ -222,14 +222,18 @@ Table    Table   Table   Table</code></pre>
     <p>A <strong>linked-list free-list allocator</strong> that enables the Rust <code>alloc</code> crate in the kernel. After initialization, <code>Vec</code>, <code>Box</code>, <code>String</code>, <code>Arc</code>, and other heap types work normally.</p>
 
     <h3>Free Block Structure</h3>
-    <pre class="diagram"><code>┌──────────────────────┐
-│  FreeBlock Header    │
-│  ┌────────────────┐  │
-│  │ size: usize    │  │  ← Total block size (header + payload)
-│  │ next: *mut     │  │  ← Pointer to next free block (or null)
-│  └────────────────┘  │
-│  ... free space ...  │
-└──────────────────────┘</code></pre>
+    <pre class="mermaid">
+    graph LR
+      subgraph FB["FreeBlock"]
+        H["Header"]
+        S["size: usize\n(header + payload)"]
+        N["next: *mut\n(next free block or null)"]
+        F["... free space ..."]
+      end
+      H --> S
+      H --> N
+      N -.->|"linked list"| FB2["Next FreeBlock"]
+    </pre>
     <p>Free blocks are maintained in a <strong>sorted linked list</strong> (sorted by address), enabling efficient coalescing.</p>
 
     <h3>Allocation (First-Fit)</h3>
@@ -290,25 +294,12 @@ Table    Table   Table   Table</code></pre>
     <hr>
 
     <h2 id="memory-subsystem-interaction">Memory Subsystem Interaction <a href="#memory-subsystem-interaction" class="anchor">#</a></h2>
-    <pre class="diagram"><code>                ┌──────────────┐
-                │  alloc crate │  Vec, Box, String, etc.
-                │  (Rust std)  │
-                └──────┬───────┘
-                       │ GlobalAlloc::alloc / dealloc
-                ┌──────▼───────┐
-                │  Kernel Heap │  Linked-list free-list
-                │  (heap.rs)   │  with coalescing
-                └──────┬───────┘
-                       │ pmm::alloc_contiguous(64)
-                ┌──────▼───────┐
-                │     PMM      │  Bitmap frame allocator
-                │  (pmm.rs)    │  Tracks 4 KiB frames
-                └──────┬───────┘
-                       │ HHDM translation
-                ┌──────▼───────┐
-                │   Physical   │  RAM on the machine
-                │   Memory     │
-                └──────────────┘</code></pre>
+    <pre class="mermaid">
+    graph TD
+      A["alloc crate\nVec, Box, String, Arc"] -->|"GlobalAlloc::alloc / dealloc"| B["Kernel Heap — heap.rs\nLinked-list free-list with coalescing"]
+      B -->|"pmm::alloc_contiguous(64)"| C["PMM — pmm.rs\nBitmap frame allocator, 4 KiB frames"]
+      C -->|"HHDM translation"| D["Physical Memory\nRAM on the machine"]
+    </pre>
     <p>The VMM (<code>vmm.rs</code>) sits alongside this stack, providing page table manipulation that will be used when the kernel creates its own page tables in Sprint 3.</p>
 
     <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>
@@ -319,6 +310,14 @@ Table    Table   Table   Table</code></pre>
 <script>
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
 window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+  primaryColor: '#1c2128', primaryTextColor: '#e6edf3', primaryBorderColor: '#58a6ff',
+  lineColor: '#8b949e', secondaryColor: '#161b22', tertiaryColor: '#0d1117',
+  noteBkgColor: '#1c2128', noteTextColor: '#e6edf3', noteBorderColor: '#30363d'
+}});
 </script>
 </body>
 </html>

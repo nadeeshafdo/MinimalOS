@@ -85,16 +85,16 @@
 
     <h3>Capability Table</h3>
     <p>Each process has a <strong>capability table</strong> — an array of slots, each containing a capability or empty:</p>
-    <pre class="diagram"><code>Process Capability Table:
-┌──────┬───────────────┬────────────────┬──────────────┐
-│ Slot │ Type          │ Resource       │ Rights       │
-├──────┼───────────────┼────────────────┼──────────────┤
-│  0   │ IPC Endpoint  │ serial_channel │ Send, Recv   │
-│  1   │ Memory        │ 0x1000-0x2000  │ Read, Write  │
-│  2   │ Interrupt     │ IRQ 4 (COM1)   │ Receive      │
-│  3   │ (empty)       │ —              │ —            │
-│  4   │ Process       │ PID 7          │ Suspend, Kill│
-└──────┴───────────────┴────────────────┴──────────────┘</code></pre>
+    <pre class="mermaid">
+    graph LR
+      subgraph CT["Process Capability Table"]
+        S0["Slot 0: IPC Endpoint\nserial_channel\nSend, Recv"]
+        S1["Slot 1: Memory\n0x1000-0x2000\nRead, Write"]
+        S2["Slot 2: Interrupt\nIRQ 4 COM1\nReceive"]
+        S3["Slot 3: empty"]
+        S4["Slot 4: Process\nPID 7\nSuspend, Kill"]
+      end
+    </pre>
     <p>Syscalls reference capabilities by <strong>slot index</strong>: <code>sys_ipc_send(slot=0, message)</code>.</p>
 
     <h3>Capability Types</h3>
@@ -134,9 +134,10 @@
 
     <h3>Monotonic Rights Reduction</h3>
     <p>When transferring a capability, rights can only be <strong>reduced</strong>, never increased. This ensures that delegation cannot escalate privileges:</p>
-    <pre class="diagram"><code>Process A has: Memory(0x1000, Read+Write+Grant)
-Process A transfers to B with reduced rights:
-Process B receives: Memory(0x1000, Read)  ← no Write, no Grant</code></pre>
+    <pre class="mermaid">
+    graph LR
+      A["Process A\nMemory 0x1000\nRead+Write+Grant"] -->|"transfer with reduced rights"| B["Process B\nMemory 0x1000\nRead only"]
+    </pre>
 
     <hr>
 
@@ -236,6 +237,14 @@ Process B receives: Memory(0x1000, Read)  ← no Write, no Grant</code></pre>
 <script>
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
 window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+  primaryColor: '#1c2128', primaryTextColor: '#e6edf3', primaryBorderColor: '#58a6ff',
+  lineColor: '#8b949e', secondaryColor: '#161b22', tertiaryColor: '#0d1117',
+  noteBkgColor: '#1c2128', noteTextColor: '#e6edf3', noteBorderColor: '#30363d'
+}});
 </script>
 </body>
 </html>

@@ -102,18 +102,15 @@
 }</code></pre>
 
     <h3>Thread States</h3>
-    <pre class="diagram"><code>         ┌─────────┐
-         │  Ready  │◄──────────────────┐
-         └────┬────┘                   │
-              │ schedule()             │ wake() / timer
-         ┌────▼────┐             ┌────┴────┐
-         │ Running │────────────►│ Blocked │
-         └────┬────┘  block()    └─────────┘
-              │
-              │ exit() / kill()
-         ┌────▼────┐
-         │  Dead   │
-         └─────────┘</code></pre>
+    <pre class="mermaid">
+    stateDiagram-v2
+      [*] --> Ready
+      Ready --> Running : schedule()
+      Running --> Blocked : block()
+      Blocked --> Ready : wake() / timer
+      Running --> Dead : exit() / kill()
+      Dead --> [*]
+    </pre>
 
     <hr>
 
@@ -160,11 +157,19 @@
 
     <h3>Per-Core Run Queues</h3>
     <p>Each CPU core has its own run queue with multiple priority levels:</p>
-    <pre class="diagram"><code>Core 0 Run Queue:
-  Priority 0 (highest): [timer_thread]
-  Priority 1:           [driver_thread_a, driver_thread_b]
-  Priority 2 (normal):  [user_proc_1, user_proc_2, ...]
-  Priority 3 (idle):    [idle_thread_0]</code></pre>
+    <pre class="mermaid">
+    graph TD
+      RQ["Core 0 Run Queue"] --> P0["Priority 0 - highest"]
+      RQ --> P1["Priority 1"]
+      RQ --> P2["Priority 2 - normal"]
+      RQ --> P3["Priority 3 - idle"]
+      P0 --> T0["timer_thread"]
+      P1 --> D1["driver_thread_a"]
+      P1 --> D2["driver_thread_b"]
+      P2 --> U1["user_proc_1"]
+      P2 --> U2["user_proc_2"]
+      P3 --> I0["idle_thread_0"]
+    </pre>
 
     <h3>Work Stealing</h3>
     <p>When a core's run queue is empty (except for the idle thread), it can <strong>steal</strong> threads from other cores' run queues. This balances load across the 4 N3710 cores automatically.</p>
@@ -220,6 +225,14 @@
 <script>
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
 window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+  primaryColor: '#1c2128', primaryTextColor: '#e6edf3', primaryBorderColor: '#58a6ff',
+  lineColor: '#8b949e', secondaryColor: '#161b22', tertiaryColor: '#0d1117',
+  noteBkgColor: '#1c2128', noteTextColor: '#e6edf3', noteBorderColor: '#30363d'
+}});
 </script>
 </body>
 </html>

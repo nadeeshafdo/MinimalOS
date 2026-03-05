@@ -196,24 +196,26 @@ make run-release  <span class="cmt"># Release build</span></code></pre>
 
     <h2 id="project-structure">Project Structure <a href="#project-structure" class="anchor">#</a></h2>
 
-    <pre class="diagram"><code>MinimalOS/
-├── .cargo/config.toml      # Build target &amp; rustflags
-├── .github/workflows/      # CI pipeline
-├── boot/limine.conf        # Bootloader configuration
-├── docs/                   # This documentation site
-├── kernel/
-│   ├── Cargo.toml          # Kernel crate dependencies
-│   ├── linker.ld           # Memory layout linker script
-│   └── src/
-│       ├── main.rs          # Entry point (5-phase boot)
-│       ├── arch/x86_64/     # CPU HAL (serial, cpu, boot)
-│       ├── drivers/         # Framebuffer console
-│       ├── memory/          # PMM, VMM, heap, addresses
-│       ├── sync/            # Spinlock primitives
-│       └── util/            # Logging, panic handler
-├── Cargo.toml              # Workspace root
-├── Makefile                # Build orchestration
-└── rust-toolchain.toml     # Pinned nightly version</code></pre>
+    <pre class="mermaid">
+    graph TD
+      Root["MinimalOS/"] --> Cargo[".cargo/config.toml"]
+      Root --> GH[".github/workflows/"]
+      Root --> Boot["boot/limine.conf"]
+      Root --> Docs["docs/"]
+      Root --> Kernel["kernel/"]
+      Root --> CRoot["Cargo.toml"]
+      Root --> MK["Makefile"]
+      Root --> RT["rust-toolchain.toml"]
+      Kernel --> KCargo["Cargo.toml"]
+      Kernel --> Linker["linker.ld"]
+      Kernel --> Src["src/"]
+      Src --> Main["main.rs"]
+      Src --> Arch["arch/x86_64/"]
+      Src --> Drivers["drivers/"]
+      Src --> Memory["memory/"]
+      Src --> Sync["sync/"]
+      Src --> Util["util/"]
+    </pre>
 
     <hr>
 
@@ -255,6 +257,14 @@ make run-release  <span class="cmt"># Release build</span></code></pre>
 <script>
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
 window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+  primaryColor: '#1c2128', primaryTextColor: '#e6edf3', primaryBorderColor: '#58a6ff',
+  lineColor: '#8b949e', secondaryColor: '#161b22', tertiaryColor: '#0d1117',
+  noteBkgColor: '#1c2128', noteTextColor: '#e6edf3', noteBorderColor: '#30363d'
+}});
 </script>
 </body>
 </html>

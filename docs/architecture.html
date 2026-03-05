@@ -66,29 +66,31 @@
 
     <p>MinimalOS NextGen follows a <strong>strict microkernel</strong> architecture. The kernel provides only the minimal set of mechanisms required to build a complete operating system — all policy decisions are made in userspace.</p>
 
-    <pre class="diagram"><code>┌─────────────────────────────────────────────────────────────┐
-│                      USERSPACE (Ring 3)                      │
-│                                                              │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
-│  │  Init     │  │  Serial  │  │  VFS     │  │  Network │    │
-│  │  Process  │  │  Driver  │  │  Service │  │  Stack   │    │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘    │
-│       │              │              │              │          │
-│       └──────────────┴──────────────┴──────────────┘          │
-│                           IPC                                │
-├──────────────────────────────────────────────────────────────┤
-│                    KERNEL (Ring 0)                            │
-│                                                              │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
-│  │ Address  │  │ Capabil- │  │   IPC    │  │ Sched-   │    │
-│  │ Spaces   │  │  ities   │  │ Delivery │  │  uler    │    │
-│  ├──────────┤  ├──────────┤  ├──────────┤  ├──────────┤    │
-│  │ Interrupt│  │ Memory   │  │          │  │          │    │
-│  │ Routing  │  │ Grants   │  │          │  │          │    │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
-├──────────────────────────────────────────────────────────────┤
-│                    HARDWARE (x86_64)                          │
-└──────────────────────────────────────────────────────────────┘</code></pre>
+    <pre class="mermaid">
+    graph TD
+      subgraph US["USERSPACE - Ring 3"]
+        Init["Init Process"]
+        Serial["Serial Driver"]
+        VFS["VFS Service"]
+        Net["Network Stack"]
+      end
+      subgraph KN["KERNEL - Ring 0"]
+        AS["Address Spaces"]
+        Cap["Capabilities"]
+        IPC["IPC Delivery"]
+        Sched["Scheduler"]
+        IRQ["Interrupt Routing"]
+        MemG["Memory Grants"]
+      end
+      subgraph HW["HARDWARE - x86_64"]
+        CPU["CPU Cores"]
+        RAM["Physical RAM"]
+        IO["I/O Devices"]
+      end
+      Init & Serial & VFS & Net -->|"IPC"| IPC
+      IPC --> AS & Cap & Sched
+      AS & IRQ & MemG --> CPU & RAM & IO
+    </pre>
 
     <h3 id="kernel-responsibilities">Kernel Responsibilities (6 services)</h3>
     <ol>
@@ -142,29 +144,31 @@
     <h2 id="memory-layout">Memory Layout <a href="#memory-layout" class="anchor">#</a></h2>
 
     <h3>Virtual Address Space</h3>
-    <pre class="diagram"><code>0xFFFFFFFFFFFFFFFF  ┬─────────────────────────────────────┐
-                    │  (reserved / guard)                  │
-0xFFFFFFFF80200000  ├─────────────────────────────────────┤
-                    │  Kernel (.text, .rodata, .data, .bss)│
-0xFFFFFFFF80000000  ├─────────────────────────────────────┤ ← Kernel base
-                    │  (2MB padding)                       │
-                    ├─────────────────────────────────────┤
-                    │                                      │
-                    │  Higher Half Direct Map (HHDM)       │
-                    │  All physical RAM mapped here        │
-                    │  Offset: ~0xFFFF800000000000         │
-                    │                                      │
-                    ├─────────────────────────────────────┤
-                    │                                      │
-                    │  Canonical hole (not addressable)     │
-                    │  x86_64 architecture gap              │
-                    │                                      │
-0x00007FFFFFFFFFFF  ├─────────────────────────────────────┤
-                    │                                      │
-                    │  User address space                   │
-                    │  (One per process, full lower half)   │
-                    │                                      │
-0x0000000000000000  └─────────────────────────────────────┘</code></pre>
+    <pre class="mermaid">
+    block-beta
+      columns 1
+      block:top["0xFFFFFFFFFFFFFFFF"]
+        A["Reserved / Guard"]
+      end
+      block:kernel["0xFFFFFFFF80200000"]
+        B["Kernel .text, .rodata, .data, .bss"]
+      end
+      block:kbase["0xFFFFFFFF80000000 ← Kernel base"]
+        C["2MB Padding"]
+      end
+      block:hhdm["~0xFFFF800000000000"]
+        D["Higher Half Direct Map - HHDM\nAll physical RAM mapped here"]
+      end
+      block:hole[" "]
+        E["Canonical Hole\nx86_64 architecture gap"]
+      end
+      block:user["0x00007FFFFFFFFFFF"]
+        F["User Address Space\nOne per process, full lower half"]
+      end
+      block:zero["0x0000000000000000"]
+        columns 1
+      end
+    </pre>
 
     <h3>Kernel Sections</h3>
     <p>Each section is page-aligned (4 KiB) for W^X enforcement:</p>
@@ -295,6 +299,14 @@
 <script>
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
 window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+  primaryColor: '#1c2128', primaryTextColor: '#e6edf3', primaryBorderColor: '#58a6ff',
+  lineColor: '#8b949e', secondaryColor: '#161b22', tertiaryColor: '#0d1117',
+  noteBkgColor: '#1c2128', noteTextColor: '#e6edf3', noteBorderColor: '#30363d'
+}});
 </script>
 </body>
 </html>

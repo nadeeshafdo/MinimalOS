@@ -647,6 +647,21 @@ pre.diagram {
   color: var(--text-secondary);
 }
 
+/* ── Mermaid Diagrams ────────────────────────────────────── */
+pre.mermaid {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  text-align: center;
+  padding: 1.5rem 1rem;
+  margin-bottom: 1.25rem;
+}
+
+pre.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
 /* ── Footer ───────────────────────────────────────────────── */
 .site-footer {
   margin-top: 4rem;

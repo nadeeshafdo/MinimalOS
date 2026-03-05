@@ -186,22 +186,31 @@
     </ol>
 
     <h3>Address Space Layout (Userspace)</h3>
-    <pre class="diagram"><code>0x00007FFFFFFFFFFF  ┬──────────────────────┐
-                    │  User stack (grows ↓) │
-0x00007FFFFFFFE000  ├──────────────────────┤
-                    │  (guard page)         │
-                    ├──────────────────────┤
-                    │  ...                  │
-                    │  Heap (grows ↑)       │
-                    ├──────────────────────┤
-                    │  .bss                 │  R+W
-                    ├──────────────────────┤
-                    │  .data                │  R+W
-                    ├──────────────────────┤
-                    │  .rodata              │  R
-                    ├──────────────────────┤
-                    │  .text                │  R+X
-0x0000000000400000  └──────────────────────┘  ← ELF base address</code></pre>
+    <pre class="mermaid">
+    block-beta
+      columns 1
+      block:stack["0x00007FFFFFFFFFFF"]
+        A["User Stack (grows ↓)"]
+      end
+      block:guard["0x00007FFFFFFFE000"]
+        B["Guard Page"]
+      end
+      block:heap[" "]
+        C["Heap (grows ↑)"]
+      end
+      block:bss[" "]
+        D[".bss    R+W"]
+      end
+      block:data[" "]
+        E[".data   R+W"]
+      end
+      block:rodata[" "]
+        F[".rodata R"]
+      end
+      block:text["0x0000000000400000 ← ELF base"]
+        G[".text   R+X"]
+      end
+    </pre>
 
     <hr>
 
@@ -262,6 +271,14 @@
 <script>
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
 window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+  primaryColor: '#1c2128', primaryTextColor: '#e6edf3', primaryBorderColor: '#58a6ff',
+  lineColor: '#8b949e', secondaryColor: '#161b22', tertiaryColor: '#0d1117',
+  noteBkgColor: '#1c2128', noteTextColor: '#e6edf3', noteBorderColor: '#30363d'
+}});
 </script>
 </body>
 </html>

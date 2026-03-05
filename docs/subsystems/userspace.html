@@ -99,14 +99,14 @@
     </ol>
 
     <h3>Service Registration Protocol</h3>
-    <pre class="diagram"><code>Init Process Service Directory:
-┌──────────────────┬──────────────┐
-│ Service Name     │ IPC Endpoint │
-├──────────────────┼──────────────┤
-│ serial_driver    │ endpoint_7   │
-│ vfs_service      │ endpoint_12  │
-│ network_stack    │ endpoint_15  │
-└──────────────────┴──────────────┘</code></pre>
+    <pre class="mermaid">
+    graph LR
+      subgraph SD["Init Process Service Directory"]
+        S1["serial_driver"] --> E1["endpoint_7"]
+        S2["vfs_service"] --> E2["endpoint_12"]
+        S3["network_stack"] --> E3["endpoint_15"]
+      end
+    </pre>
 
     <p>Services register with init via IPC:</p>
     <pre><code>→ IPC_SEND(init_endpoint, { type: REGISTER, name: <span class="str">"serial_driver"</span>, endpoint: my_endpoint })
@@ -182,19 +182,18 @@
 
     <h3>Serial Console Driver</h3>
     <p>The first real userspace service — a serial console driver that demonstrates the full capability-based architecture:</p>
-    <pre class="diagram"><code>Kernel                    Init Process              Serial Driver
-  │                           │                          │
-  │ ── boot caps ──►          │                          │
-  │                           │ ── spawn + caps ──►      │
-  │                           │   (IRQ 4 cap,            │
-  │                           │    MMIO cap,             │
-  │                           │    IPC endpoint)         │
-  │                           │                          │
-  │ ◄── IRQ 4 fires ──       │                          │
-  │ ── notify ──────────────────────────────────►        │
-  │                           │                   read serial port
-  │                           │                   process input
-  │                           │   ◄── IPC ──      echo to output</code></pre>
+    <pre class="mermaid">
+    sequenceDiagram
+      participant K as Kernel
+      participant I as Init Process
+      participant S as Serial Driver
+      K->>I: Boot capabilities
+      I->>S: Spawn + caps (IRQ 4, MMIO, IPC endpoint)
+      Note over K,S: Runtime operation
+      K-->>S: IRQ 4 fires → notify
+      S->>S: Read serial port, process input
+      S->>I: IPC: echo to output
+    </pre>
 
     <h3>What This Demonstrates</h3>
     <ol>
@@ -232,6 +231,14 @@
 <script>
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
 window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+  primaryColor: '#1c2128', primaryTextColor: '#e6edf3', primaryBorderColor: '#58a6ff',
+  lineColor: '#8b949e', secondaryColor: '#161b22', tertiaryColor: '#0d1117',
+  noteBkgColor: '#1c2128', noteTextColor: '#e6edf3', noteBorderColor: '#30363d'
+}});
 </script>
 </body>
 </html>
