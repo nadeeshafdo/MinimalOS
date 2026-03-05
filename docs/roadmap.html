@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Roadmap — MinimalOS NextGen</title>
+  <meta name="description" content="Development plan from bare-metal boot to self-hosting OS.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+  <a href="index.html" class="logo"><span class="logo-icon">M</span> MinimalOS NextGen</a>
+  <div class="header-right"><a href="https://github.com/example/MinimalOS" target="_blank">GitHub ↗</a></div>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+<aside class="sidebar" id="sidebar">
+  <nav>
+    <ul>
+      <li><a href="index.html">Home</a></li>
+      <li><a href="getting-started.html">Getting Started</a></li>
+      <li><a href="architecture.html">Architecture</a></li>
+      <li>
+        <span class="nav-section-title">Subsystems</span>
+        <ul>
+          <li><a href="subsystems/index.html">Overview</a></li>
+          <li><a href="subsystems/boot.html">Boot &amp; Serial Output</a></li>
+          <li><a href="subsystems/memory.html">Memory Management</a></li>
+          <li><a href="subsystems/interrupts.html">Interrupts &amp; Exceptions</a></li>
+          <li><a href="subsystems/scheduler.html">Processes &amp; Scheduler</a></li>
+          <li><a href="subsystems/capabilities.html">Capabilities &amp; IPC</a></li>
+          <li><a href="subsystems/syscalls.html">Syscalls &amp; Userspace</a></li>
+          <li><a href="subsystems/userspace.html">Init &amp; Userspace</a></li>
+        </ul>
+      </li>
+      <li><a href="roadmap.html" class="active">Roadmap</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main class="main-content">
+  <div class="content-wrapper">
+
+    <h1>Roadmap</h1>
+    <p class="subtitle">Development plan from bare-metal boot to self-hosting OS.</p>
+
+    <details class="toc" open>
+      <summary>Table of contents</summary>
+      <ul>
+        <li><a href="#sprint-overview">Sprint Overview</a></li>
+        <li><a href="#sprint-1">Sprint 1 — Boot &amp; Serial Output ✅</a></li>
+        <li><a href="#sprint-2">Sprint 2 — Memory Management ✅</a></li>
+        <li><a href="#sprint-3">Sprint 3 — Interrupts &amp; Exceptions ✅</a></li>
+        <li><a href="#sprint-4">Sprint 4 — Processes &amp; Scheduler</a></li>
+        <li><a href="#sprint-5">Sprint 5 — Capabilities &amp; IPC</a></li>
+        <li><a href="#sprint-6">Sprint 6 — Syscall Interface &amp; Userspace</a></li>
+        <li><a href="#sprint-7">Sprint 7 — Init Process &amp; First Program</a></li>
+        <li><a href="#future-milestones">Future Milestones</a></li>
+        <li><a href="#contributing">Contributing</a></li>
+      </ul>
+    </details>
+
+    <hr>
+
+    <h2 id="sprint-overview">Sprint Overview <a href="#sprint-overview" class="anchor">#</a></h2>
+
+    <table>
+      <thead><tr><th>Sprint</th><th>Focus</th><th>Status</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><a href="subsystems/boot.html">Boot &amp; Serial</a></td><td><span class="label label-green">✅ Complete</span></td><td>Toolchain, bootloader, serial UART, framebuffer console</td></tr>
+        <tr><td>2</td><td><a href="subsystems/memory.html">Memory</a></td><td><span class="label label-green">✅ Complete</span></td><td>PMM bitmap allocator, VMM page tables, kernel heap</td></tr>
+        <tr><td>3</td><td><a href="subsystems/interrupts.html">Interrupts</a></td><td><span class="label label-green">✅ Complete</span></td><td>GDT/TSS, IDT, ACPI/MADT, LAPIC, I/O APIC, W^X remap</td></tr>
+        <tr><td>4</td><td><a href="subsystems/scheduler.html">Scheduler</a></td><td><span class="label label-yellow">🔲 Planned</span></td><td>Processes, threads, tickless scheduler, SMP</td></tr>
+        <tr><td>5</td><td><a href="subsystems/capabilities.html">Capabilities</a></td><td><span class="label label-yellow">🔲 Planned</span></td><td>Capability tables, IPC channels, memory grants</td></tr>
+        <tr><td>6</td><td><a href="subsystems/syscalls.html">Syscalls</a></td><td><span class="label label-yellow">🔲 Planned</span></td><td>SYSCALL/SYSRET, ELF loader, Ring 3 entry</td></tr>
+        <tr><td>7</td><td><a href="subsystems/userspace.html">Userspace</a></td><td><span class="label label-yellow">🔲 Planned</span></td><td>Init process, libmnos, first userspace driver</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <h2 id="sprint-1">Sprint 1 — Boot &amp; Serial Output ✅ <a href="#sprint-1" class="anchor">#</a></h2>
+    <blockquote><em>Get the kernel running, prove it with visible output.</em></blockquote>
+    <ul class="checklist">
+      <li class="done">Rust nightly toolchain configuration (<code>rust-toolchain.toml</code>)</li>
+      <li class="done">Cargo workspace with kernel crate, dev/release profiles</li>
+      <li class="done"><code>.cargo/config.toml</code> — bare-metal target, kernel code-model, no SSE/AVX, build-std</li>
+      <li class="done">Linker script — higher-half kernel, page-aligned sections</li>
+      <li class="done">Limine bootloader configuration</li>
+      <li class="done">IRQ-safe ticket spinlock</li>
+      <li class="done"><code>PhysAddr</code> / <code>VirtAddr</code> newtypes with HHDM translation</li>
+      <li class="done">COM1 serial UART driver — 16550, 115200 baud 8N1</li>
+      <li class="done">CPU primitives — halt, CR2/CR3, INVLPG, RDTSC, MSRs</li>
+      <li class="done">Limine boot protocol interface</li>
+      <li class="done"><code>kprint!</code> / <code>kprintln!</code> logging macros</li>
+      <li class="done">Kernel panic handler</li>
+      <li class="done">Framebuffer text console — 8×16 bitmap font, scrolling</li>
+      <li class="done">Kernel entry point — 5-phase boot</li>
+      <li class="done">Makefile build system</li>
+      <li class="done">Boots in QEMU with UEFI</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="sprint-2">Sprint 2 — Memory Management ✅ <a href="#sprint-2" class="anchor">#</a></h2>
+    <blockquote><em>Teach the kernel to manage physical and virtual memory.</em></blockquote>
+    <ul class="checklist">
+      <li class="done"><strong>Physical Memory Manager</strong> — bitmap allocator (alloc, free, zeroed, contiguous)</li>
+      <li class="done"><strong>VMM page table infrastructure</strong> (map, unmap, translate)</li>
+      <li class="done"><strong>Kernel Heap</strong> — linked-list allocator with coalescing, enables <code>alloc</code> crate</li>
+      <li class="done"><strong>Linker script fix</strong> — <code>.got</code> section handling</li>
+      <li class="done">Kernel higher-half remap (completed in Sprint 3)</li>
+      <li class="done">W^X enforcement via remap (completed in Sprint 3)</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="sprint-3">Sprint 3 — Interrupts &amp; Exceptions ✅ <a href="#sprint-3" class="anchor">#</a></h2>
+    <blockquote><em>Handle CPU exceptions and hardware interrupts safely.</em></blockquote>
+    <ul class="checklist">
+      <li class="done"><strong>GDT</strong> — kernel/user segments, TSS with IST1 guard page, SYSRET layout</li>
+      <li class="done"><strong>IDT</strong> — 15 exception handlers + 16 IRQ stubs + spurious @255 (swapgs + SysV ABI)</li>
+      <li class="done"><strong>ACPI</strong> — XSDT-first MADT parser, Limine rev3 HHDM gap fix</li>
+      <li class="done"><strong>LAPIC</strong> — CPUID 0x15 + PIT calibration, one-shot mode, spurious handler</li>
+      <li class="done"><strong>I/O APIC</strong> — MADT parsing, IRQ routing, legacy PIC disable</li>
+      <li class="done"><strong>W^X remap</strong> — in-place page table update (.text=R+X, .rodata=R, .data/.bss=R+W+NX)</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="sprint-4">Sprint 4 — Processes &amp; Scheduler 🔲 <a href="#sprint-4" class="anchor">#</a></h2>
+    <blockquote><em>Run multiple threads of execution, share the CPU fairly.</em></blockquote>
+    <ul class="checklist">
+      <li class="pending"><strong>Process / Thread structures</strong> — address space, capability table, state machine</li>
+      <li class="pending"><strong>Context switching</strong> — register save/restore, CR3 switch, FPU lazy state</li>
+      <li class="pending"><strong>Tickless scheduler</strong> — per-core run queues, work-stealing, idle thread</li>
+      <li class="pending"><strong>SMP initialization</strong> — INIT/SIPI, per-core GDT/IDT/TSS/LAPIC</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="sprint-5">Sprint 5 — Capabilities &amp; IPC 🔲 <a href="#sprint-5" class="anchor">#</a></h2>
+    <blockquote><em>The security model — unforgeable tokens and message passing.</em></blockquote>
+    <ul class="checklist">
+      <li class="pending"><strong>Capability table</strong> — per-process, slot-based, typed with rights bitmask</li>
+      <li class="pending"><strong>Capability operations</strong> — create, delete, transfer (rights reduction), revoke</li>
+      <li class="pending"><strong>Synchronous IPC</strong> — send/receive on capability-protected endpoints</li>
+      <li class="pending"><strong>Call/Reply RPC</strong> — synchronous request-response pattern</li>
+      <li class="pending"><strong>Notifications</strong> — lightweight non-blocking event signaling</li>
+      <li class="pending"><strong>Zero-copy memory grants</strong> — share physical pages via capabilities</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="sprint-6">Sprint 6 — Syscall Interface &amp; Userspace 🔲 <a href="#sprint-6" class="anchor">#</a></h2>
+    <blockquote><em>Cross the Ring 0/Ring 3 boundary.</em></blockquote>
+    <ul class="checklist">
+      <li class="pending"><strong>SYSCALL/SYSRET</strong> — MSR configuration, entry point, register save/restore</li>
+      <li class="pending"><strong>Syscall dispatch</strong> — ~22 syscalls indexed by RAX</li>
+      <li class="pending"><strong>ELF loader</strong> — parse ELF64, map segments, set up user stack</li>
+      <li class="pending"><strong>Ring 3 entry</strong> — user page tables, SYSRET to entry point</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="sprint-7">Sprint 7 — Init Process &amp; First Program 🔲 <a href="#sprint-7" class="anchor">#</a></h2>
+    <blockquote><em>Life outside the kernel.</em></blockquote>
+    <ul class="checklist">
+      <li class="pending"><strong>Init process</strong> — capability receiver, service spawner, name directory</li>
+      <li class="pending"><strong>Userspace library (<code>libmnos</code>)</strong> — syscall wrappers, IPC helpers, allocator</li>
+      <li class="pending"><strong>First userspace driver</strong> — serial console via IRQ capability + IPC</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="future-milestones">Future Milestones <a href="#future-milestones" class="anchor">#</a></h2>
+    <p>These features are planned for after Sprint 7 completes the core OS:</p>
+    <table>
+      <thead><tr><th>Milestone</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><strong>VFS Service</strong></td><td>Virtual filesystem abstraction in userspace</td></tr>
+        <tr><td><strong>Initramfs</strong></td><td>In-memory tar filesystem for boot-time binaries</td></tr>
+        <tr><td><strong>Disk Driver</strong></td><td>AHCI/NVMe driver in userspace</td></tr>
+        <tr><td><strong>Filesystem</strong></td><td>ext2 or FAT32 implementation as userspace service</td></tr>
+        <tr><td><strong>Networking</strong></td><td>TCP/IP stack as a userspace service</td></tr>
+        <tr><td><strong>Shell</strong></td><td>Basic interactive command-line shell</td></tr>
+        <tr><td><strong>USB HID</strong></td><td>Keyboard and mouse drivers</td></tr>
+        <tr><td><strong>GPU Driver</strong></td><td>Intel HD 405 framebuffer driver</td></tr>
+        <tr><td><strong>Compositor</strong></td><td>Window manager / display server</td></tr>
+        <tr><td><strong>Rust std Port</strong></td><td>Port Rust's standard library to MinimalOS</td></tr>
+        <tr><td><strong>Self-hosting</strong></td><td>Compile MinimalOS on MinimalOS</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <h2 id="contributing">Contributing <a href="#contributing" class="anchor">#</a></h2>
+    <p>Contributions are welcome! The project is structured around sprints — each sprint focuses on a self-contained subsystem.</p>
+
+    <h3>How to Contribute</h3>
+    <ol>
+      <li>Check the current sprint's open items above</li>
+      <li>Read the relevant <a href="subsystems/index.html">subsystem documentation</a></li>
+      <li>Fork the repository and create a feature branch</li>
+      <li>Implement your changes with tests where applicable</li>
+      <li>Submit a pull request</li>
+    </ol>
+
+    <h3>Development Guidelines</h3>
+    <ul>
+      <li><strong>Rust edition 2024</strong> with <code>no_std</code> — no standard library</li>
+      <li><strong>No unsafe without justification</strong> — document why each <code>unsafe</code> block is sound</li>
+      <li><strong>Comments explain WHY</strong>, not what — assume the reader knows Rust</li>
+      <li><strong>One commit per logical change</strong> — granular, descriptive commit messages</li>
+      <li><strong>Test in QEMU</strong> — <code>make run</code> before submitting</li>
+    </ul>
+
+    <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>
+  </div>
+</main>
+
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0})" aria-label="Back to top">↑</button>
+<script>
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
+window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+</body>
+</html>

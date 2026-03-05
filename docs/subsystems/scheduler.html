@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Processes &amp; Scheduler — MinimalOS NextGen</title>
+  <meta name="description" content="Sprint 4 — Run multiple threads of execution, share the CPU fairly across cores.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+  <a href="../index.html" class="logo"><span class="logo-icon">M</span> MinimalOS NextGen</a>
+  <div class="header-right"><a href="https://github.com/example/MinimalOS" target="_blank">GitHub ↗</a></div>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+<aside class="sidebar" id="sidebar">
+  <nav>
+    <ul>
+      <li><a href="../index.html">Home</a></li>
+      <li><a href="../getting-started.html">Getting Started</a></li>
+      <li><a href="../architecture.html">Architecture</a></li>
+      <li>
+        <span class="nav-section-title">Subsystems</span>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="boot.html">Boot &amp; Serial Output</a></li>
+          <li><a href="memory.html">Memory Management</a></li>
+          <li><a href="interrupts.html">Interrupts &amp; Exceptions</a></li>
+          <li><a href="scheduler.html" class="active">Processes &amp; Scheduler</a></li>
+          <li><a href="capabilities.html">Capabilities &amp; IPC</a></li>
+          <li><a href="syscalls.html">Syscalls &amp; Userspace</a></li>
+          <li><a href="userspace.html">Init &amp; Userspace</a></li>
+        </ul>
+      </li>
+      <li><a href="../roadmap.html">Roadmap</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main class="main-content">
+  <div class="content-wrapper">
+
+    <h1>Sprint 4 — Processes &amp; Scheduler</h1>
+    <p class="subtitle">Run multiple threads of execution, share the CPU fairly across cores.</p>
+    <p><span class="label label-yellow">🔲 Planned</span></p>
+
+    <details class="toc" open>
+      <summary>Table of contents</summary>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#process-thread-model">Process &amp; Thread Model</a></li>
+        <li><a href="#context-switching">Context Switching</a></li>
+        <li><a href="#tickless-scheduler">Tickless Scheduler</a></li>
+        <li><a href="#smp-initialization">SMP Initialization</a></li>
+        <li><a href="#dependencies">Dependencies</a></li>
+      </ul>
+    </details>
+
+    <hr>
+
+    <h2 id="overview">Overview <a href="#overview" class="anchor">#</a></h2>
+    <p>Sprint 4 introduces <strong>processes</strong>, <strong>threads</strong>, and a <strong>tickless scheduler</strong> — the foundation for running multiple programs on the 4-core N3710 processor. This sprint also initializes the Application Processors (AP cores) for symmetric multiprocessing (SMP).</p>
+
+    <hr>
+
+    <h2 id="process-thread-model">Process &amp; Thread Model <a href="#process-thread-model" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <h3>Process</h3>
+    <p>A process owns an <strong>address space</strong> and a <strong>capability table</strong>:</p>
+    <pre><code><span class="kw">pub struct</span> <span class="ty">Process</span> {
+    pid: <span class="ty">ProcessId</span>,
+    address_space: <span class="ty">AddressSpace</span>,  <span class="cmt">// PML4 page table + VMAs</span>
+    capability_table: <span class="ty">CapTable</span>,   <span class="cmt">// Indexed capability slots</span>
+    threads: <span class="ty">Vec</span>&lt;<span class="ty">ThreadId</span>&gt;,       <span class="cmt">// Threads belonging to this process</span>
+    state: <span class="ty">ProcessState</span>,          <span class="cmt">// Running, Suspended, Dead</span>
+}</code></pre>
+    <ul>
+      <li>Each process has its own PML4 (top-level page table) — complete isolation</li>
+      <li>Processes communicate only through kernel-mediated IPC</li>
+      <li>No shared memory by default — memory sharing requires explicit capability grants</li>
+    </ul>
+
+    <h3>Thread</h3>
+    <p>A thread is a schedulable unit of execution within a process:</p>
+    <pre><code><span class="kw">pub struct</span> <span class="ty">Thread</span> {
+    tid: <span class="ty">ThreadId</span>,
+    process: <span class="ty">ProcessId</span>,
+    state: <span class="ty">ThreadState</span>,         <span class="cmt">// Ready, Running, Blocked, Dead</span>
+    kernel_stack: <span class="ty">VirtAddr</span>,     <span class="cmt">// Per-thread kernel stack</span>
+    saved_context: <span class="ty">CpuContext</span>,  <span class="cmt">// Saved registers on context switch</span>
+    priority: <span class="ty">u8</span>,               <span class="cmt">// Scheduler priority level</span>
+    time_slice_ns: <span class="ty">u64</span>,         <span class="cmt">// Remaining time in nanoseconds</span>
+}</code></pre>
+
+    <h3>Thread States</h3>
+    <pre class="diagram"><code>         ┌─────────┐
+         │  Ready  │◄──────────────────┐
+         └────┬────┘                   │
+              │ schedule()             │ wake() / timer
+         ┌────▼────┐             ┌────┴────┐
+         │ Running │────────────►│ Blocked │
+         └────┬────┘  block()    └─────────┘
+              │
+              │ exit() / kill()
+         ┌────▼────┐
+         │  Dead   │
+         └─────────┘</code></pre>
+
+    <hr>
+
+    <h2 id="context-switching">Context Switching <a href="#context-switching" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <p>When the scheduler switches from thread A to thread B:</p>
+    <ol>
+      <li><strong>Save</strong> thread A's registers (GPRs, RSP, RIP, RFLAGS, FS/GS base)</li>
+      <li><strong>Switch kernel stack</strong> to thread B's kernel stack</li>
+      <li><strong>Switch page tables</strong> if threads are in different processes (<code>mov cr3, new_pml4</code>)</li>
+      <li><strong>Restore</strong> thread B's registers</li>
+      <li><strong>Return</strong> to thread B's saved instruction pointer</li>
+    </ol>
+
+    <h3>FPU/SSE State</h3>
+    <p>The kernel disables SSE in Ring 0 (<code>-target-feature=-sse,-sse2</code>). Userspace processes may use SSE/AVX. The kernel handles this via <strong>lazy FPU save/restore</strong>:</p>
+    <ol>
+      <li>Mark FPU state as "owned by thread A"</li>
+      <li>On context switch to thread B, set CR0.TS (task switched flag)</li>
+      <li>If thread B uses FPU → #NM exception → save A's state, restore B's state, clear TS</li>
+      <li>If thread B never uses FPU → no save/restore overhead</li>
+    </ol>
+
+    <hr>
+
+    <h2 id="tickless-scheduler">Tickless Scheduler <a href="#tickless-scheduler" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <h3>Design</h3>
+    <p>Instead of periodic timer ticks (which waste power on idle systems), MinimalOS uses a <strong>tickless</strong> design:</p>
+    <ol>
+      <li>When scheduling a thread, calculate its <strong>deadline</strong> (current time + time slice)</li>
+      <li>Program the <strong>LAPIC one-shot timer</strong> for that deadline</li>
+      <li>When the timer fires, preempt the thread and reschedule</li>
+      <li>If the thread blocks before the timer, cancel the timer and reschedule immediately</li>
+    </ol>
+
+    <h3>Per-Core Run Queues</h3>
+    <p>Each CPU core has its own run queue with multiple priority levels:</p>
+    <pre class="diagram"><code>Core 0 Run Queue:
+  Priority 0 (highest): [timer_thread]
+  Priority 1:           [driver_thread_a, driver_thread_b]
+  Priority 2 (normal):  [user_proc_1, user_proc_2, ...]
+  Priority 3 (idle):    [idle_thread_0]</code></pre>
+
+    <h3>Work Stealing</h3>
+    <p>When a core's run queue is empty (except for the idle thread), it can <strong>steal</strong> threads from other cores' run queues. This balances load across the 4 N3710 cores automatically.</p>
+
+    <h3>Idle Thread</h3>
+    <p>Each core has a dedicated idle thread that executes <code>hlt</code> in a loop. This puts the core into a low-power C-state until the next interrupt — important for battery life on the HP laptop.</p>
+
+    <hr>
+
+    <h2 id="smp-initialization">SMP Initialization <a href="#smp-initialization" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <p>On boot, only the BSP (Bootstrap Processor, core 0) is running. The other 3 cores (APs) are halted, waiting for a startup sequence.</p>
+
+    <h3>AP Boot Sequence</h3>
+    <ol>
+      <li><strong>Parse MADT</strong> — find each AP's LAPIC ID</li>
+      <li><strong>Prepare AP trampoline</strong> — 16-bit real-mode code at an address below 1 MB</li>
+      <li><strong>Send INIT IPI</strong> — reset the AP</li>
+      <li><strong>Wait 10ms</strong></li>
+      <li><strong>Send SIPI (Startup IPI)</strong> — AP starts executing the trampoline</li>
+      <li><strong>Trampoline</strong>: switch to protected mode → long mode → jump to Rust AP entry</li>
+      <li><strong>AP initialization</strong>: set up per-core GDT, IDT, TSS, LAPIC, run queue</li>
+      <li><strong>AP enters scheduler loop</strong></li>
+    </ol>
+
+    <h3>Per-Core State</h3>
+    <p>Each core maintains:</p>
+    <ul>
+      <li>Its own GDT (for per-core TSS)</li>
+      <li>Its own IDT (same table, but loaded via <code>lidt</code> on each core)</li>
+      <li>Its own LAPIC (memory-mapped, same physical address)</li>
+      <li>Its own run queue</li>
+      <li>Its own idle thread</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="dependencies">Dependencies <a href="#dependencies" class="anchor">#</a></h2>
+    <ul>
+      <li><strong>Requires</strong>: Sprint 3 (IDT for timer interrupts, LAPIC for preemption)</li>
+      <li><strong>Enables</strong>: Sprint 5 (capabilities need process/thread structures), Sprint 6 (userspace needs Ring 3 processes)</li>
+    </ul>
+
+    <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>
+  </div>
+</main>
+
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0})" aria-label="Back to top">↑</button>
+<script>
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
+window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+</body>
+</html>

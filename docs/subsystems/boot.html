@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Boot &amp; Serial Output — MinimalOS NextGen</title>
+  <meta name="description" content="Sprint 1 — Get the kernel running on bare metal and prove it with visible output.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+  <a href="../index.html" class="logo"><span class="logo-icon">M</span> MinimalOS NextGen</a>
+  <div class="header-right"><a href="https://github.com/example/MinimalOS" target="_blank">GitHub ↗</a></div>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+<aside class="sidebar" id="sidebar">
+  <nav>
+    <ul>
+      <li><a href="../index.html">Home</a></li>
+      <li><a href="../getting-started.html">Getting Started</a></li>
+      <li><a href="../architecture.html">Architecture</a></li>
+      <li>
+        <span class="nav-section-title">Subsystems</span>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="boot.html" class="active">Boot &amp; Serial Output</a></li>
+          <li><a href="memory.html">Memory Management</a></li>
+          <li><a href="interrupts.html">Interrupts &amp; Exceptions</a></li>
+          <li><a href="scheduler.html">Processes &amp; Scheduler</a></li>
+          <li><a href="capabilities.html">Capabilities &amp; IPC</a></li>
+          <li><a href="syscalls.html">Syscalls &amp; Userspace</a></li>
+          <li><a href="userspace.html">Init &amp; Userspace</a></li>
+        </ul>
+      </li>
+      <li><a href="../roadmap.html">Roadmap</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main class="main-content">
+  <div class="content-wrapper">
+
+    <h1>Sprint 1 — Boot &amp; Serial Output</h1>
+    <p class="subtitle">Get the kernel running on bare metal and prove it with visible output.</p>
+    <p><span class="label label-green">✅ Complete</span></p>
+
+    <details class="toc" open>
+      <summary>Table of contents</summary>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#toolchain-configuration">Toolchain Configuration</a></li>
+        <li><a href="#linker-script">Linker Script</a></li>
+        <li><a href="#boot-protocol">Boot Protocol</a></li>
+        <li><a href="#serial-uart">Serial UART</a></li>
+        <li><a href="#cpu-primitives">CPU Primitives</a></li>
+        <li><a href="#logging">Logging</a></li>
+        <li><a href="#framebuffer-console">Framebuffer Console</a></li>
+        <li><a href="#synchronization">Synchronization</a></li>
+        <li><a href="#address-types">Address Types</a></li>
+        <li><a href="#panic-handler">Panic Handler</a></li>
+        <li><a href="#entry-point">Entry Point</a></li>
+        <li><a href="#files-implemented">Files Implemented</a></li>
+      </ul>
+    </details>
+
+    <hr>
+
+    <h2 id="overview">Overview <a href="#overview" class="anchor">#</a></h2>
+    <p>Sprint 1 is the foundation — everything needed to boot the kernel and get diagnostic output. After this sprint, the kernel boots via UEFI, prints to the serial port, and renders text on the framebuffer.</p>
+
+    <hr>
+
+    <h2 id="toolchain-configuration">Toolchain Configuration <a href="#toolchain-configuration" class="anchor">#</a></h2>
+
+    <h3><code>rust-toolchain.toml</code></h3>
+    <p>Pins the exact Rust nightly version and includes <code>rust-src</code> (needed to rebuild <code>core</code> and <code>alloc</code> for bare metal):</p>
+    <pre><code><span class="cmt">[toolchain]</span>
+channel = <span class="str">"nightly-2026-02-13"</span>
+components = [<span class="str">"rust-src"</span>, <span class="str">"rustfmt"</span>, <span class="str">"clippy"</span>]
+targets = [<span class="str">"x86_64-unknown-none"</span>]</code></pre>
+
+    <h3><code>.cargo/config.toml</code></h3>
+    <p>Configures the bare-metal compilation target:</p>
+    <ul>
+      <li><strong>Target</strong>: <code>x86_64-unknown-none</code> — no OS, no libc</li>
+      <li><strong>Code model</strong>: <code>kernel</code> — efficient RIP-relative addressing in the higher half</li>
+      <li><strong>Disabled features</strong>: SSE, SSE2, AVX — the kernel doesn't save FPU state on interrupts</li>
+      <li><strong>Soft float</strong>: Avoids SIMD entirely (no <code>xmm</code> registers in Ring 0)</li>
+      <li><strong>Build-std</strong>: Rebuilds <code>core</code> and <code>alloc</code> from source for the bare metal target</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="linker-script">Linker Script (<code>kernel/linker.ld</code>) <a href="#linker-script" class="anchor">#</a></h2>
+    <p>Controls the kernel's memory layout in virtual address space.</p>
+
+    <h3>Higher-Half Mapping</h3>
+    <p>The kernel is placed at <code>0xFFFFFFFF80200000</code> — the top 2 GB of the 64-bit address space plus a 2 MB offset:</p>
+    <ul>
+      <li><strong>Lower half</strong> (<code>0x0000...7FFF...</code>) — reserved for userspace</li>
+      <li><strong>Canonical hole</strong> — hardware-enforced gap (invalid addresses)</li>
+      <li><strong>Higher half</strong> (<code>0xFFFF8000...</code>) — kernel territory</li>
+    </ul>
+
+    <h3>Sections</h3>
+    <p>Each section is page-aligned (4 KiB) to enable per-section page table permissions:</p>
+    <table>
+      <thead><tr><th>Section</th><th>Contents</th><th>Permissions</th></tr></thead>
+      <tbody>
+        <tr><td><code>.text</code></td><td>Executable code (<code>kmain</code> first)</td><td>R+X</td></tr>
+        <tr><td><code>.rodata</code></td><td>Constants, strings, Limine requests, <code>.got</code> entries</td><td>R</td></tr>
+        <tr><td><code>.data</code></td><td>Initialized mutable globals</td><td>R+W</td></tr>
+        <tr><td><code>.bss</code></td><td>Zero-initialized globals</td><td>R+W</td></tr>
+      </tbody>
+    </table>
+    <p>Boundary symbols (<code>_kernel_start</code>, <code>_kernel_end</code>, <code>_text_start</code>, etc.) let the kernel know its own memory layout at runtime.</p>
+
+    <hr>
+
+    <h2 id="boot-protocol">Boot Protocol (<code>arch/x86_64/boot.rs</code>) <a href="#boot-protocol" class="anchor">#</a></h2>
+    <p>Uses the <a href="https://limine-bootloader.org/" target="_blank">Limine boot protocol</a> to communicate with the bootloader. The kernel defines static request structures; Limine fills in the responses before jumping to <code>kmain()</code>.</p>
+
+    <h3>Requests</h3>
+    <table>
+      <thead><tr><th>Request</th><th>Data Provided</th></tr></thead>
+      <tbody>
+        <tr><td><code>HhdmRequest</code></td><td>HHDM offset — where all physical RAM is mapped in virtual space</td></tr>
+        <tr><td><code>MemoryMapRequest</code></td><td>Physical memory map — usable, reserved, ACPI, framebuffer regions</td></tr>
+        <tr><td><code>FramebufferRequest</code></td><td>Framebuffer address, dimensions, pixel format</td></tr>
+        <tr><td><code>RsdpRequest</code></td><td>ACPI RSDP table pointer (for hardware discovery)</td></tr>
+        <tr><td><code>ExecutableAddressRequest</code></td><td>Kernel physical/virtual load addresses</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Bootloader Configuration (<code>boot/limine.conf</code>)</h3>
+    <pre><code>timeout: 0
+serial: yes
+
+/MinimalOS NextGen
+    protocol: limine
+    kernel_path: boot():/boot/minimalos-kernel</code></pre>
+
+    <hr>
+
+    <h2 id="serial-uart">Serial UART (<code>arch/x86_64/serial.rs</code>) <a href="#serial-uart" class="anchor">#</a></h2>
+    <p>A 16550-compatible UART driver for COM1 (<code>0x3F8</code>), the first output device initialized during boot.</p>
+
+    <h3>Configuration</h3>
+    <ul>
+      <li><strong>Baud rate</strong>: 115200</li>
+      <li><strong>Format</strong>: 8 data bits, no parity, 1 stop bit (8N1)</li>
+      <li><strong>FIFO</strong>: Enabled, 14-byte trigger level</li>
+    </ul>
+
+    <h3>Key Details</h3>
+    <ul>
+      <li>Uses direct x86 port I/O (<code>outb</code>/<code>inb</code>)</li>
+      <li>Protected by a ticket spinlock for thread safety</li>
+      <li>Implements <code>core::fmt::Write</code> for <code>write!()</code> macro support</li>
+      <li>Polls the transmit holding register before each byte</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="cpu-primitives">CPU Primitives (<code>arch/x86_64/cpu.rs</code>) <a href="#cpu-primitives" class="anchor">#</a></h2>
+    <p>Low-level CPU operations used throughout the kernel:</p>
+    <table>
+      <thead><tr><th>Function</th><th>Instruction</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>halt()</code></td><td><code>hlt</code></td><td>Halt CPU until next interrupt</td></tr>
+        <tr><td><code>halt_forever()</code></td><td><code>cli; hlt</code> loop</td><td>Permanent halt (used after boot)</td></tr>
+        <tr><td><code>read_cr2()</code></td><td><code>mov rax, cr2</code></td><td>Faulting address on page fault</td></tr>
+        <tr><td><code>read_cr3()</code></td><td><code>mov rax, cr3</code></td><td>Current page table base</td></tr>
+        <tr><td><code>write_cr3()</code></td><td><code>mov cr3, rax</code></td><td>Switch page tables</td></tr>
+        <tr><td><code>invlpg()</code></td><td><code>invlpg [addr]</code></td><td>Flush single TLB entry</td></tr>
+        <tr><td><code>flush_tlb_all()</code></td><td>Write CR3</td><td>Flush entire TLB</td></tr>
+        <tr><td><code>rdtsc()</code></td><td><code>rdtsc</code></td><td>Read timestamp counter</td></tr>
+        <tr><td><code>rdmsr()</code> / <code>wrmsr()</code></td><td><code>rdmsr</code> / <code>wrmsr</code></td><td>Read/write model-specific registers</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <h2 id="logging">Logging (<code>util/logger.rs</code>) <a href="#logging" class="anchor">#</a></h2>
+    <p>Provides <code>kprint!()</code> and <code>kprintln!()</code> macros that write to the serial port. These are the kernel's primary debugging tool.</p>
+    <pre><code><span class="fn">kprintln!</span>(<span class="str">"[boot] HHDM offset: {:#018X}"</span>, hhdm_offset);
+<span class="fn">kprintln!</span>(<span class="str">"[pmm] {} free frames"</span>, stats.free_frames);</code></pre>
+    <p>Uses Rust's <code>core::fmt</code> formatting infrastructure — supports <code>{}</code>, <code>{:#X}</code>, <code>{:?}</code>, and all standard format specifiers.</p>
+
+    <hr>
+
+    <h2 id="framebuffer-console">Framebuffer Console (<code>drivers/framebuffer.rs</code>) <a href="#framebuffer-console" class="anchor">#</a></h2>
+    <p>A text-mode console rendered on the UEFI framebuffer using a built-in 8×16 bitmap font.</p>
+
+    <h3>Features</h3>
+    <ul>
+      <li>Renders ASCII characters using a 256-glyph bitmap font</li>
+      <li>White text on black background</li>
+      <li>Automatic line wrapping and scrolling</li>
+      <li>Supports newline, carriage return, and tab characters</li>
+      <li>Direct pixel manipulation via the linear framebuffer</li>
+    </ul>
+
+    <h3>How It Works</h3>
+    <ol>
+      <li>Limine provides a framebuffer with address, dimensions, and pixel format</li>
+      <li>The console tracks a cursor position (row, column) on a character grid</li>
+      <li>Each character write renders 8×16 pixels from the font bitmap</li>
+      <li>When the cursor reaches the bottom, the screen scrolls up by one row (memcopy)</li>
+    </ol>
+
+    <hr>
+
+    <h2 id="synchronization">Synchronization (<code>sync/spinlock.rs</code>) <a href="#synchronization" class="anchor">#</a></h2>
+    <p>An IRQ-safe <strong>ticket spinlock</strong> used to protect shared kernel state.</p>
+
+    <h3>How Ticket Locks Work</h3>
+    <p>Unlike test-and-set spinlocks that cause thundering herd, ticket locks provide FIFO fairness:</p>
+    <ol>
+      <li>Arriving thread atomically increments <code>next_ticket</code> and saves its ticket number</li>
+      <li>Thread spins until <code>now_serving</code> equals its ticket</li>
+      <li>On unlock, <code>now_serving</code> is incremented, waking the next waiter</li>
+    </ol>
+
+    <h3>Properties</h3>
+    <ul>
+      <li><strong>IRQ-safe</strong>: Disables interrupts while the lock is held</li>
+      <li><strong>FIFO ordering</strong>: Prevents starvation</li>
+      <li><strong>Bounded spin</strong>: Each waiter spins O(1) times per advancement</li>
+      <li>Uses <code>AtomicU64</code> with <code>Ordering::Acquire</code> / <code>Ordering::Release</code> for correctness</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="address-types">Address Types (<code>memory/address.rs</code>) <a href="#address-types" class="anchor">#</a></h2>
+    <p>Type-safe wrappers for physical and virtual addresses:</p>
+    <table>
+      <thead><tr><th>Type</th><th>Range</th><th>Use</th></tr></thead>
+      <tbody>
+        <tr><td><code>PhysAddr</code></td><td>Physical memory (0 → ~8 GB)</td><td>PMM, DMA, page table entries</td></tr>
+        <tr><td><code>VirtAddr</code></td><td>Virtual memory (full 64-bit)</td><td>Pointers, kernel addresses</td></tr>
+      </tbody>
+    </table>
+
+    <h3>HHDM Translation</h3>
+    <p>The Higher Half Direct Map (HHDM) provides a simple, total mapping of all physical memory into the kernel's virtual address space:</p>
+    <pre><code><span class="cmt">// Convert physical address to virtual via HHDM</span>
+<span class="kw">let</span> virt = phys_addr.<span class="fn">to_virt</span>();  <span class="cmt">// phys + HHDM_OFFSET</span>
+
+<span class="cmt">// Convert virtual HHDM address back to physical</span>
+<span class="kw">let</span> phys = <span class="ty">VirtAddr</span>::<span class="fn">to_phys</span>(virt);  <span class="cmt">// virt - HHDM_OFFSET</span></code></pre>
+    <p>The HHDM offset is provided by Limine at boot and stored in a global.</p>
+
+    <hr>
+
+    <h2 id="panic-handler">Panic Handler (<code>util/panic.rs</code>) <a href="#panic-handler" class="anchor">#</a></h2>
+    <p>On panic, the kernel:</p>
+    <ol>
+      <li>Prints the panic message and source location to serial</li>
+      <li>Halts all CPU cores indefinitely</li>
+    </ol>
+    <p>In a microkernel, panics should be extremely rare — they indicate a bug in the trusted computing base.</p>
+
+    <hr>
+
+    <h2 id="entry-point">Entry Point (<code>main.rs</code>) <a href="#entry-point" class="anchor">#</a></h2>
+    <p>The <code>kmain()</code> function orchestrates the entire boot sequence through 5 phases. Sprint 1 implements Phases 1–2:</p>
+    <pre><code><span class="kw">#[unsafe(no_mangle)]</span>
+<span class="kw">extern</span> <span class="str">"C"</span> <span class="kw">fn</span> <span class="fn">kmain</span>() -&gt; ! {
+    <span class="cmt">// Phase 1: Init serial → kprintln!() works</span>
+    <span class="cmt">// Phase 2: Parse boot info, init framebuffer</span>
+    <span class="cmt">// Phase 3: Memory management (Sprint 2)</span>
+    <span class="cmt">// Phase 4: Scheduler + processes (Sprint 3-4)</span>
+    <span class="cmt">// Phase 5: Userspace entry (Sprint 5-7)</span>
+
+    arch::cpu::<span class="fn">halt_forever</span>()
+}</code></pre>
+
+    <hr>
+
+    <h2 id="files-implemented">Files Implemented <a href="#files-implemented" class="anchor">#</a></h2>
+    <table>
+      <thead><tr><th>File</th><th>Lines</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>rust-toolchain.toml</code></td><td>~15</td><td>Nightly toolchain pin</td></tr>
+        <tr><td><code>.cargo/config.toml</code></td><td>~30</td><td>Bare-metal build config</td></tr>
+        <tr><td><code>Cargo.toml</code></td><td>~50</td><td>Workspace configuration</td></tr>
+        <tr><td><code>kernel/Cargo.toml</code></td><td>~60</td><td>Kernel dependencies</td></tr>
+        <tr><td><code>kernel/linker.ld</code></td><td>~180</td><td>Memory layout</td></tr>
+        <tr><td><code>boot/limine.conf</code></td><td>~5</td><td>Bootloader config</td></tr>
+        <tr><td><code>kernel/src/main.rs</code></td><td>~420</td><td>Entry point</td></tr>
+        <tr><td><code>kernel/src/arch/x86_64/boot.rs</code></td><td>~200</td><td>Limine protocol</td></tr>
+        <tr><td><code>kernel/src/arch/x86_64/serial.rs</code></td><td>~200</td><td>Serial UART</td></tr>
+        <tr><td><code>kernel/src/arch/x86_64/cpu.rs</code></td><td>~180</td><td>CPU primitives</td></tr>
+        <tr><td><code>kernel/src/memory/address.rs</code></td><td>~120</td><td>Address types</td></tr>
+        <tr><td><code>kernel/src/sync/spinlock.rs</code></td><td>~150</td><td>Ticket spinlock</td></tr>
+        <tr><td><code>kernel/src/drivers/framebuffer.rs</code></td><td>~350</td><td>Framebuffer console</td></tr>
+        <tr><td><code>kernel/src/util/logger.rs</code></td><td>~50</td><td>kprint! macros</td></tr>
+        <tr><td><code>kernel/src/util/panic.rs</code></td><td>~20</td><td>Panic handler</td></tr>
+        <tr><td><code>Makefile</code></td><td>~290</td><td>Build system</td></tr>
+      </tbody>
+    </table>
+
+    <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>
+  </div>
+</main>
+
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0})" aria-label="Back to top">↑</button>
+<script>
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
+window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+</body>
+</html>

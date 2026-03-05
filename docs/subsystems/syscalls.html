@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Syscalls &amp; Userspace — MinimalOS NextGen</title>
+  <meta name="description" content="Sprint 6 — Cross the Ring 0 / Ring 3 boundary.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+  <a href="../index.html" class="logo"><span class="logo-icon">M</span> MinimalOS NextGen</a>
+  <div class="header-right"><a href="https://github.com/example/MinimalOS" target="_blank">GitHub ↗</a></div>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+<aside class="sidebar" id="sidebar">
+  <nav>
+    <ul>
+      <li><a href="../index.html">Home</a></li>
+      <li><a href="../getting-started.html">Getting Started</a></li>
+      <li><a href="../architecture.html">Architecture</a></li>
+      <li>
+        <span class="nav-section-title">Subsystems</span>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="boot.html">Boot &amp; Serial Output</a></li>
+          <li><a href="memory.html">Memory Management</a></li>
+          <li><a href="interrupts.html">Interrupts &amp; Exceptions</a></li>
+          <li><a href="scheduler.html">Processes &amp; Scheduler</a></li>
+          <li><a href="capabilities.html">Capabilities &amp; IPC</a></li>
+          <li><a href="syscalls.html" class="active">Syscalls &amp; Userspace</a></li>
+          <li><a href="userspace.html">Init &amp; Userspace</a></li>
+        </ul>
+      </li>
+      <li><a href="../roadmap.html">Roadmap</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main class="main-content">
+  <div class="content-wrapper">
+
+    <h1>Sprint 6 — Syscall Interface &amp; Userspace Entry</h1>
+    <p class="subtitle">Cross the Ring 0 / Ring 3 boundary.</p>
+    <p><span class="label label-yellow">🔲 Planned</span></p>
+
+    <details class="toc" open>
+      <summary>Table of contents</summary>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#syscall-sysret">SYSCALL/SYSRET</a></li>
+        <li><a href="#syscall-dispatch-table">Syscall Dispatch Table</a></li>
+        <li><a href="#elf-loader">ELF Loader</a></li>
+        <li><a href="#ring-3-entry">Ring 3 Entry</a></li>
+        <li><a href="#security-considerations">Security Considerations</a></li>
+        <li><a href="#dependencies">Dependencies</a></li>
+      </ul>
+    </details>
+
+    <hr>
+
+    <h2 id="overview">Overview <a href="#overview" class="anchor">#</a></h2>
+    <p>Sprint 6 connects all the kernel subsystems together into a usable system by implementing the <strong>SYSCALL/SYSRET</strong> fast transition mechanism, an <strong>ELF loader</strong>, and the actual transition into <strong>Ring 3</strong> (user mode). After this sprint, the kernel can load and run a userspace program.</p>
+
+    <hr>
+
+    <h2 id="syscall-sysret">SYSCALL/SYSRET <a href="#syscall-sysret" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <h3>What is SYSCALL/SYSRET?</h3>
+    <p>The <code>SYSCALL</code> instruction is the fast path for entering the kernel from userspace on x86_64. Unlike software interrupts (<code>int 0x80</code>), SYSCALL doesn't push to the stack or read the IDT — it uses pre-configured MSRs (Model-Specific Registers) for maximum speed.</p>
+
+    <h3>MSR Configuration</h3>
+    <table>
+      <thead><tr><th>MSR</th><th>Name</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>STAR</code></td><td>Segment Selectors</td><td>Bits 47:32 = kernel CS, Bits 63:48 = user CS base</td></tr>
+        <tr><td><code>LSTAR</code></td><td>Syscall Entry</td><td>64-bit address of the syscall handler entry point</td></tr>
+        <tr><td><code>SFMASK</code></td><td>RFLAGS Mask</td><td>Flags to clear on syscall entry (disable interrupts)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Syscall Entry Point</h3>
+    <p>When userspace executes <code>SYSCALL</code>:</p>
+    <ol>
+      <li>CPU saves RIP in RCX, RFLAGS in R11</li>
+      <li>CPU loads CS/SS from STAR MSR → kernel mode</li>
+      <li>CPU masks RFLAGS with SFMASK → interrupts disabled</li>
+      <li>CPU jumps to LSTAR → our entry point</li>
+    </ol>
+    <p>Our handler then:</p>
+    <ol>
+      <li><strong>Swap to kernel stack</strong> (from TSS RSP0)</li>
+      <li><strong>Save all user registers</strong> to the thread's save area</li>
+      <li><strong>Dispatch</strong> based on RAX (syscall number)</li>
+      <li><strong>Execute</strong> the syscall handler</li>
+      <li><strong>Restore user registers</strong></li>
+      <li><strong>SYSRET</strong> back to userspace</li>
+    </ol>
+
+    <h3>Register Convention</h3>
+    <table>
+      <thead><tr><th>Register</th><th>Role</th></tr></thead>
+      <tbody>
+        <tr><td>RAX</td><td>Syscall number (in) / return value (out)</td></tr>
+        <tr><td>RDI</td><td>Argument 1</td></tr>
+        <tr><td>RSI</td><td>Argument 2</td></tr>
+        <tr><td>RDX</td><td>Argument 3</td></tr>
+        <tr><td>R10</td><td>Argument 4 (RCX is clobbered by SYSCALL)</td></tr>
+        <tr><td>R8</td><td>Argument 5</td></tr>
+        <tr><td>R9</td><td>Argument 6</td></tr>
+        <tr><td>RCX</td><td>Saved RIP (by CPU)</td></tr>
+        <tr><td>R11</td><td>Saved RFLAGS (by CPU)</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <h2 id="syscall-dispatch-table">Syscall Dispatch Table <a href="#syscall-dispatch-table" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <p>The kernel dispatches syscalls via a function pointer table indexed by RAX:</p>
+    <pre><code><span class="kw">const</span> <span class="cn">SYSCALL_TABLE</span>: [<span class="ty">SyscallHandler</span>; <span class="num">22</span>] = [
+    sys_mem_map,         <span class="cmt">// 0</span>
+    sys_mem_unmap,       <span class="cmt">// 1</span>
+    sys_mem_grant,       <span class="cmt">// 2</span>
+    sys_mem_alloc,       <span class="cmt">// 3</span>
+    sys_ipc_send,        <span class="cmt">// 4</span>
+    sys_ipc_recv,        <span class="cmt">// 5</span>
+    sys_ipc_call,        <span class="cmt">// 6</span>
+    sys_ipc_reply,       <span class="cmt">// 7</span>
+    sys_ipc_notify,      <span class="cmt">// 8</span>
+    sys_cap_create,      <span class="cmt">// 9</span>
+    sys_cap_delete,      <span class="cmt">// 10</span>
+    sys_cap_transfer,    <span class="cmt">// 11</span>
+    sys_cap_revoke,      <span class="cmt">// 12</span>
+    sys_cap_inspect,     <span class="cmt">// 13</span>
+    sys_proc_create,     <span class="cmt">// 14</span>
+    sys_proc_destroy,    <span class="cmt">// 15</span>
+    sys_thread_create,   <span class="cmt">// 16</span>
+    sys_thread_destroy,  <span class="cmt">// 17</span>
+    sys_thread_yield,    <span class="cmt">// 18</span>
+    sys_thread_block,    <span class="cmt">// 19</span>
+    sys_thread_wake,     <span class="cmt">// 20</span>
+    sys_irq_bind,        <span class="cmt">// 21</span>
+];</code></pre>
+    <p>Each handler validates capability arguments, performs the operation, and returns a result code.</p>
+
+    <hr>
+
+    <h2 id="elf-loader">ELF Loader <a href="#elf-loader" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <h3>What is ELF?</h3>
+    <p>ELF (Executable and Linkable Format) is the standard binary format for executables on Linux and bare-metal systems. The kernel must parse ELF files to load userspace programs.</p>
+
+    <h3>Loading Process</h3>
+    <ol>
+      <li><strong>Read ELF header</strong> — verify magic bytes, architecture (x86_64), type (executable)</li>
+      <li><strong>Parse program headers</strong> — each <code>PT_LOAD</code> segment describes a chunk to map:
+        <ul>
+          <li>Virtual address, file offset, file size, memory size</li>
+          <li>Permissions (Read, Write, Execute)</li>
+        </ul>
+      </li>
+      <li><strong>Allocate pages</strong> — use PMM to allocate physical frames for each segment</li>
+      <li><strong>Map pages</strong> — use VMM to create mappings in the process's address space with correct permissions</li>
+      <li><strong>Copy data</strong> — copy segment contents from the ELF file into the mapped pages</li>
+      <li><strong>Zero BSS</strong> — if memory size &gt; file size, zero the remaining bytes</li>
+      <li><strong>Set up user stack</strong> — allocate and map pages at the top of userspace (e.g., <code>0x7FFFFFFFE000</code>)</li>
+      <li><strong>Return entry point</strong> — the ELF header contains the address where execution begins</li>
+    </ol>
+
+    <h3>Address Space Layout (Userspace)</h3>
+    <pre class="diagram"><code>0x00007FFFFFFFFFFF  ┬──────────────────────┐
+                    │  User stack (grows ↓) │
+0x00007FFFFFFFE000  ├──────────────────────┤
+                    │  (guard page)         │
+                    ├──────────────────────┤
+                    │  ...                  │
+                    │  Heap (grows ↑)       │
+                    ├──────────────────────┤
+                    │  .bss                 │  R+W
+                    ├──────────────────────┤
+                    │  .data                │  R+W
+                    ├──────────────────────┤
+                    │  .rodata              │  R
+                    ├──────────────────────┤
+                    │  .text                │  R+X
+0x0000000000400000  └──────────────────────┘  ← ELF base address</code></pre>
+
+    <hr>
+
+    <h2 id="ring-3-entry">Ring 3 Entry <a href="#ring-3-entry" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <h3>Steps to Enter Userspace</h3>
+    <ol>
+      <li><strong>Create process</strong> — allocate a new PML4, capability table, thread structure</li>
+      <li><strong>Load ELF</strong> — parse and map the init binary into the process's address space</li>
+      <li><strong>Set up user stack</strong> — map stack pages with User + Writable + NX permissions</li>
+      <li><strong>Prepare initial capabilities</strong> — the init process receives:
+        <ul>
+          <li>IPC endpoint for serial driver communication</li>
+          <li>Memory capability for its own address space</li>
+          <li>Process capability for spawning children</li>
+        </ul>
+      </li>
+      <li><strong>Switch to user page tables</strong> — load the process's PML4 into CR3</li>
+      <li><strong>SYSRET</strong> — pop into Ring 3 at the ELF entry point</li>
+    </ol>
+
+    <h3>Verification</h3>
+    <p>Test that the syscall round-trip works correctly:</p>
+    <ol>
+      <li>Userspace calls <code>SYSCALL</code> → enters kernel</li>
+      <li>Kernel processes the request</li>
+      <li>Kernel returns via <code>SYSRET</code> → back in userspace</li>
+      <li>Verify registers are preserved, return value is correct</li>
+    </ol>
+
+    <hr>
+
+    <h2 id="security-considerations">Security Considerations <a href="#security-considerations" class="anchor">#</a></h2>
+    <ul>
+      <li><strong>SMAP/SMEP</strong>: Supervisor Mode Access/Execution Prevention — the kernel cannot accidentally access or execute user pages</li>
+      <li><strong>KPTI</strong>: Kernel Page Table Isolation — in the user PML4, only a minimal kernel stub is mapped (syscall entry/exit)</li>
+      <li><strong>Stack guard pages</strong>: Unmapped pages above the user stack to catch overflows</li>
+      <li><strong>ASLR</strong>: Address Space Layout Randomization — randomize base addresses (future enhancement)</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="dependencies">Dependencies <a href="#dependencies" class="anchor">#</a></h2>
+    <ul>
+      <li><strong>Requires</strong>: Sprint 5 (capability system for access control during syscalls)</li>
+      <li><strong>Enables</strong>: Sprint 7 (init process loaded via ELF, communicates via syscalls)</li>
+    </ul>
+
+    <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>
+  </div>
+</main>
+
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0})" aria-label="Back to top">↑</button>
+<script>
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
+window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+</body>
+</html>

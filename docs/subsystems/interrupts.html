@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interrupts &amp; Exceptions — MinimalOS NextGen</title>
+  <meta name="description" content="Sprint 3 — Handle CPU exceptions and hardware interrupts safely.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+  <a href="../index.html" class="logo"><span class="logo-icon">M</span> MinimalOS NextGen</a>
+  <div class="header-right"><a href="https://github.com/example/MinimalOS" target="_blank">GitHub ↗</a></div>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+<aside class="sidebar" id="sidebar">
+  <nav>
+    <ul>
+      <li><a href="../index.html">Home</a></li>
+      <li><a href="../getting-started.html">Getting Started</a></li>
+      <li><a href="../architecture.html">Architecture</a></li>
+      <li>
+        <span class="nav-section-title">Subsystems</span>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="boot.html">Boot &amp; Serial Output</a></li>
+          <li><a href="memory.html">Memory Management</a></li>
+          <li><a href="interrupts.html" class="active">Interrupts &amp; Exceptions</a></li>
+          <li><a href="scheduler.html">Processes &amp; Scheduler</a></li>
+          <li><a href="capabilities.html">Capabilities &amp; IPC</a></li>
+          <li><a href="syscalls.html">Syscalls &amp; Userspace</a></li>
+          <li><a href="userspace.html">Init &amp; Userspace</a></li>
+        </ul>
+      </li>
+      <li><a href="../roadmap.html">Roadmap</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main class="main-content">
+  <div class="content-wrapper">
+
+    <h1>Sprint 3 — Interrupts &amp; Exceptions</h1>
+    <p class="subtitle">Handle CPU exceptions and hardware interrupts safely.</p>
+    <p><span class="label label-yellow">🔲 Planned</span></p>
+
+    <details class="toc" open>
+      <summary>Table of contents</summary>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#gdt">GDT (Global Descriptor Table)</a></li>
+        <li><a href="#idt">IDT (Interrupt Descriptor Table)</a></li>
+        <li><a href="#lapic">LAPIC (Local APIC)</a></li>
+        <li><a href="#io-apic">I/O APIC</a></li>
+        <li><a href="#dependencies">Dependencies</a></li>
+        <li><a href="#deferred-from-sprint-2">Deferred from Sprint 2</a></li>
+      </ul>
+    </details>
+
+    <hr>
+
+    <h2 id="overview">Overview <a href="#overview" class="anchor">#</a></h2>
+    <p>Sprint 3 enables the kernel to respond to CPU exceptions (page faults, general protection faults) and hardware interrupts (timer, keyboard). This is a prerequisite for the scheduler (Sprint 4) and for safely switching to our own page tables.</p>
+
+    <hr>
+
+    <h2 id="gdt">GDT (Global Descriptor Table) <a href="#gdt" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <p>The GDT defines memory segments for Ring 0 (kernel) and Ring 3 (user) code. On x86_64, segments are mostly legacy, but the GDT is still required for:</p>
+    <ul>
+      <li><strong>Kernel code segment</strong> (Ring 0) — used by SYSCALL entry</li>
+      <li><strong>Kernel data segment</strong> (Ring 0)</li>
+      <li><strong>User code segments</strong> (Ring 3, both 64-bit and 32-bit compat)</li>
+      <li><strong>User data segment</strong> (Ring 3)</li>
+      <li><strong>TSS (Task State Segment)</strong> — per-core, defines:
+        <ul>
+          <li><code>RSP0</code>: kernel stack pointer (used on privilege level change)</li>
+          <li><code>IST1–7</code>: Interrupt Stack Table entries (dedicated stacks for critical exceptions)</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>Planned Design</h3>
+    <ul>
+      <li>One GDT per CPU core (for per-core TSS)</li>
+      <li>Double fault handler gets its own IST stack (IST1) so it works even if the kernel stack overflows</li>
+      <li>Loaded via <code>lgdt</code> instruction during early boot</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="idt">IDT (Interrupt Descriptor Table) <a href="#idt" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <p>The IDT maps interrupt/exception vectors (0–255) to handler functions.</p>
+
+    <h3>Exception Handlers (Vectors 0–31)</h3>
+    <table>
+      <thead><tr><th>Vector</th><th>Exception</th><th>Handler Plan</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td>Divide Error</td><td>Print diagnostics, kill process</td></tr>
+        <tr><td>6</td><td>Invalid Opcode</td><td>Print diagnostics, kill process</td></tr>
+        <tr><td>8</td><td>Double Fault</td><td>IST1 stack, print registers, halt</td></tr>
+        <tr><td>13</td><td>General Protection Fault</td><td>Print error code + RIP, kill process</td></tr>
+        <tr><td>14</td><td>Page Fault</td><td>Detailed handler (see below)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Page Fault Handler (Vector 14)</h3>
+    <p>The most important exception handler. On page fault, the CPU provides:</p>
+    <ul>
+      <li><strong>CR2</strong>: the faulting virtual address</li>
+      <li><strong>Error code</strong>: why the fault occurred (not-present, write to read-only, user vs kernel, instruction fetch)</li>
+    </ul>
+    <p>Planned behavior:</p>
+    <ol>
+      <li><strong>Kernel fault</strong> → panic with full register dump (bug in the kernel)</li>
+      <li><strong>User fault on valid VMA</strong> → map the page (demand paging, copy-on-write)</li>
+      <li><strong>User fault on invalid address</strong> → deliver signal / kill process</li>
+    </ol>
+
+    <h3>IRQ Handlers (Vectors 32+)</h3>
+    <p>After the LAPIC and I/O APIC are configured:</p>
+    <ul>
+      <li><strong>Vector 32</strong>: LAPIC timer (used for preemptive scheduling)</li>
+      <li><strong>Vector 33+</strong>: I/O APIC routed interrupts (keyboard, serial, etc.)</li>
+      <li><strong>Vector 255</strong>: Spurious interrupt (LAPIC)</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="lapic">LAPIC (Local APIC) <a href="#lapic" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <p>Each CPU core has its own Local APIC for:</p>
+    <ul>
+      <li><strong>Timer interrupts</strong> — calibrated one-shot timer for tickless scheduling</li>
+      <li><strong>Inter-Processor Interrupts (IPI)</strong> — used for SMP coordination</li>
+      <li><strong>Interrupt priority</strong> — Task Priority Register (TPR) for masking</li>
+    </ul>
+
+    <h3>Timer Calibration</h3>
+    <ol>
+      <li>Program the PIT (Programmable Interval Timer) for a known interval</li>
+      <li>Start the LAPIC timer in free-running mode</li>
+      <li>Wait for the PIT interval to elapse</li>
+      <li>Read the LAPIC timer count → compute ticks per millisecond</li>
+      <li>Use one-shot mode: set the deadline, get exactly one interrupt, reprogram</li>
+    </ol>
+
+    <h3>MMIO Access</h3>
+    <p>The LAPIC is accessed via memory-mapped registers at a fixed physical address (typically <code>0xFEE00000</code>), accessed through the HHDM.</p>
+
+    <hr>
+
+    <h2 id="io-apic">I/O APIC <a href="#io-apic" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <p>The I/O APIC routes external hardware interrupts to CPU cores.</p>
+
+    <h3>MADT Parsing</h3>
+    <p>The ACPI MADT (Multiple APIC Description Table) contains:</p>
+    <ul>
+      <li>I/O APIC base address and global interrupt base</li>
+      <li>Interrupt Source Override entries (IRQ remapping, e.g., IRQ0 → GSI2)</li>
+      <li>Local APIC entries for each CPU core (used in SMP init)</li>
+    </ul>
+
+    <h3>Redirection Table</h3>
+    <p>Each I/O APIC pin has a Redirection Table Entry (RTE) that specifies:</p>
+    <ul>
+      <li><strong>Destination CPU</strong> (or broadcast)</li>
+      <li><strong>Delivery mode</strong> (fixed, lowest priority, NMI, etc.)</li>
+      <li><strong>Trigger mode</strong> (edge vs level)</li>
+      <li><strong>Vector number</strong> (which IDT entry to invoke)</li>
+      <li><strong>Mask bit</strong> (enable/disable)</li>
+    </ul>
+
+    <h3>Legacy IRQ Routing</h3>
+    <table>
+      <thead><tr><th>IRQ</th><th>Device</th><th>I/O APIC Pin</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td>PIT Timer</td><td>GSI 2 (typically remapped)</td></tr>
+        <tr><td>1</td><td>Keyboard</td><td>GSI 1</td></tr>
+        <tr><td>3</td><td>COM2</td><td>GSI 3</td></tr>
+        <tr><td>4</td><td>COM1</td><td>GSI 4</td></tr>
+        <tr><td>8</td><td>RTC</td><td>GSI 8</td></tr>
+        <tr><td>12</td><td>PS/2 Mouse</td><td>GSI 12</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <h2 id="dependencies">Dependencies <a href="#dependencies" class="anchor">#</a></h2>
+    <ul>
+      <li><strong>Requires</strong>: Sprint 2 (PMM for IST stack allocation, VMM for understanding page faults)</li>
+      <li><strong>Enables</strong>: Sprint 4 (scheduler needs timer interrupts, context switch needs IST)</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="deferred-from-sprint-2">Deferred from Sprint 2 <a href="#deferred-from-sprint-2" class="anchor">#</a></h2>
+    <p>Two VMM features were deferred to Sprint 3 because they require exception handling:</p>
+    <ol>
+      <li><strong>Kernel higher-half remap</strong> — Create our own PML4, map the kernel with proper W^X permissions, switch from Limine's page tables</li>
+      <li><strong>W^X enforcement</strong> — Set <code>.text</code> as Execute-only, <code>.rodata</code> as Read-only, <code>.data</code>/<code>.bss</code> as NX (No Execute)</li>
+    </ol>
+    <p>These will be the first tasks in Sprint 3, immediately after IDT setup enables page fault debugging.</p>
+
+    <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>
+  </div>
+</main>
+
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0})" aria-label="Back to top">↑</button>
+<script>
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
+window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+</body>
+</html>

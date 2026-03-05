@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Capabilities &amp; IPC — MinimalOS NextGen</title>
+  <meta name="description" content="Sprint 5 — The security model — unforgeable tokens and message passing.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+  <a href="../index.html" class="logo"><span class="logo-icon">M</span> MinimalOS NextGen</a>
+  <div class="header-right"><a href="https://github.com/example/MinimalOS" target="_blank">GitHub ↗</a></div>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+<aside class="sidebar" id="sidebar">
+  <nav>
+    <ul>
+      <li><a href="../index.html">Home</a></li>
+      <li><a href="../getting-started.html">Getting Started</a></li>
+      <li><a href="../architecture.html">Architecture</a></li>
+      <li>
+        <span class="nav-section-title">Subsystems</span>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="boot.html">Boot &amp; Serial Output</a></li>
+          <li><a href="memory.html">Memory Management</a></li>
+          <li><a href="interrupts.html">Interrupts &amp; Exceptions</a></li>
+          <li><a href="scheduler.html">Processes &amp; Scheduler</a></li>
+          <li><a href="capabilities.html" class="active">Capabilities &amp; IPC</a></li>
+          <li><a href="syscalls.html">Syscalls &amp; Userspace</a></li>
+          <li><a href="userspace.html">Init &amp; Userspace</a></li>
+        </ul>
+      </li>
+      <li><a href="../roadmap.html">Roadmap</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main class="main-content">
+  <div class="content-wrapper">
+
+    <h1>Sprint 5 — Capabilities &amp; IPC</h1>
+    <p class="subtitle">The security model — unforgeable tokens and message passing.</p>
+    <p><span class="label label-yellow">🔲 Planned</span></p>
+
+    <details class="toc" open>
+      <summary>Table of contents</summary>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#capability-system">Capability System</a></li>
+        <li><a href="#ipc">IPC (Inter-Process Communication)</a></li>
+        <li><a href="#security-guarantees">Security Guarantees</a></li>
+        <li><a href="#dependencies">Dependencies</a></li>
+      </ul>
+    </details>
+
+    <hr>
+
+    <h2 id="overview">Overview <a href="#overview" class="anchor">#</a></h2>
+    <p>Sprint 5 implements the two defining features of MinimalOS: <strong>capability-based access control</strong> and <strong>IPC (Inter-Process Communication)</strong>. Together, they replace traditional Unix permissions with a mathematically sound security model where every resource access requires an explicit, unforgeable token.</p>
+
+    <hr>
+
+    <h2 id="capability-system">Capability System <a href="#capability-system" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <h3>What is a Capability?</h3>
+    <p>A capability is a <strong>kernel-managed token</strong> that represents the right to perform specific operations on a specific resource. Capabilities are:</p>
+    <ul>
+      <li><strong>Unforgeable</strong> — only the kernel creates them; userspace cannot fabricate them</li>
+      <li><strong>Typed</strong> — each capability refers to a specific kind of resource</li>
+      <li><strong>Rights-bearing</strong> — capabilities carry a bitmask of permitted operations</li>
+      <li><strong>Transferable</strong> — processes can send capabilities to other processes via IPC</li>
+      <li><strong>Revocable</strong> — the creator can invalidate a capability</li>
+    </ul>
+
+    <h3>Capability Table</h3>
+    <p>Each process has a <strong>capability table</strong> — an array of slots, each containing a capability or empty:</p>
+    <pre class="diagram"><code>Process Capability Table:
+┌──────┬───────────────┬────────────────┬──────────────┐
+│ Slot │ Type          │ Resource       │ Rights       │
+├──────┼───────────────┼────────────────┼──────────────┤
+│  0   │ IPC Endpoint  │ serial_channel │ Send, Recv   │
+│  1   │ Memory        │ 0x1000-0x2000  │ Read, Write  │
+│  2   │ Interrupt     │ IRQ 4 (COM1)   │ Receive      │
+│  3   │ (empty)       │ —              │ —            │
+│  4   │ Process       │ PID 7          │ Suspend, Kill│
+└──────┴───────────────┴────────────────┴──────────────┘</code></pre>
+    <p>Syscalls reference capabilities by <strong>slot index</strong>: <code>sys_ipc_send(slot=0, message)</code>.</p>
+
+    <h3>Capability Types</h3>
+    <table>
+      <thead><tr><th>Type</th><th>Resource</th><th>Typical Rights</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Memory</strong></td><td>Physical page range</td><td>Read, Write, Execute, Grant</td></tr>
+        <tr><td><strong>IPC Endpoint</strong></td><td>Communication channel</td><td>Send, Receive, Grant</td></tr>
+        <tr><td><strong>Interrupt</strong></td><td>Hardware IRQ line</td><td>Receive, Mask</td></tr>
+        <tr><td><strong>Process</strong></td><td>Another process</td><td>Inspect, Suspend, Resume, Kill</td></tr>
+        <tr><td><strong>Thread</strong></td><td>A thread</td><td>Suspend, Resume, Set Priority</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Rights Bitmask</h3>
+    <pre><code><span class="kw">bitflags!</span> {
+    <span class="kw">pub struct</span> <span class="ty">CapRights</span>: <span class="ty">u32</span> {
+        <span class="kw">const</span> <span class="cn">READ</span>    = <span class="num">1</span> &lt;&lt; <span class="num">0</span>;   <span class="cmt">// Read data</span>
+        <span class="kw">const</span> <span class="cn">WRITE</span>   = <span class="num">1</span> &lt;&lt; <span class="num">1</span>;   <span class="cmt">// Write / modify</span>
+        <span class="kw">const</span> <span class="cn">EXECUTE</span> = <span class="num">1</span> &lt;&lt; <span class="num">2</span>;   <span class="cmt">// Execute code</span>
+        <span class="kw">const</span> <span class="cn">GRANT</span>   = <span class="num">1</span> &lt;&lt; <span class="num">3</span>;   <span class="cmt">// Transfer to another process</span>
+        <span class="kw">const</span> <span class="cn">REVOKE</span>  = <span class="num">1</span> &lt;&lt; <span class="num">4</span>;   <span class="cmt">// Revoke derived capabilities</span>
+    }
+}</code></pre>
+
+    <h3>Capability Operations</h3>
+    <table>
+      <thead><tr><th>Syscall</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>sys_cap_create(type, resource, rights)</code></td><td>Kernel-only: create a new capability</td></tr>
+        <tr><td><code>sys_cap_delete(slot)</code></td><td>Remove a capability from the table</td></tr>
+        <tr><td><code>sys_cap_transfer(src_slot, dest_process, rights)</code></td><td>Send a capability (rights can only be reduced)</td></tr>
+        <tr><td><code>sys_cap_revoke(slot)</code></td><td>Revoke all capabilities derived from this one</td></tr>
+        <tr><td><code>sys_cap_inspect(slot)</code></td><td>Query type, resource, and rights</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Monotonic Rights Reduction</h3>
+    <p>When transferring a capability, rights can only be <strong>reduced</strong>, never increased. This ensures that delegation cannot escalate privileges:</p>
+    <pre class="diagram"><code>Process A has: Memory(0x1000, Read+Write+Grant)
+Process A transfers to B with reduced rights:
+Process B receives: Memory(0x1000, Read)  ← no Write, no Grant</code></pre>
+
+    <hr>
+
+    <h2 id="ipc">IPC (Inter-Process Communication) <a href="#ipc" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <h3>Design Principles</h3>
+    <ul>
+      <li><strong>Synchronous</strong> — send blocks until the receiver accepts; receive blocks until a message arrives</li>
+      <li><strong>Capability-mediated</strong> — both sender and receiver must hold an IPC endpoint capability</li>
+      <li><strong>Zero-copy option</strong> — large data transfers use memory grant capabilities instead of copying bytes</li>
+      <li><strong>Small message optimization</strong> — short messages (≤ 64 bytes) are passed in registers, avoiding copies entirely</li>
+    </ul>
+
+    <h3>Message Format</h3>
+    <pre><code><span class="kw">pub struct</span> <span class="ty">IpcMessage</span> {
+    <span class="cmt">// Inline data (passed in registers for small messages)</span>
+    data: [<span class="ty">u64</span>; <span class="num">8</span>],              <span class="cmt">// 64 bytes of inline data</span>
+    data_len: <span class="ty">usize</span>,             <span class="cmt">// Actual length used</span>
+
+    <span class="cmt">// Optional capability transfers</span>
+    caps: [<span class="ty">CapSlot</span>; <span class="num">4</span>],          <span class="cmt">// Up to 4 capabilities transferred</span>
+    cap_count: <span class="ty">usize</span>,
+}</code></pre>
+
+    <h3>Communication Patterns</h3>
+
+    <h4>Send / Receive</h4>
+    <p>Basic one-way message passing:</p>
+    <pre><code><span class="cmt">// Sender (process A)</span>
+<span class="fn">sys_ipc_send</span>(endpoint_slot, &amp;message);
+
+<span class="cmt">// Receiver (process B)</span>
+<span class="kw">let</span> msg = <span class="fn">sys_ipc_recv</span>(endpoint_slot);</code></pre>
+
+    <h4>Call / Reply (RPC)</h4>
+    <p>Synchronous request-response, like a function call across processes:</p>
+    <pre><code><span class="cmt">// Client</span>
+<span class="kw">let</span> response = <span class="fn">sys_ipc_call</span>(server_endpoint, &amp;request);
+
+<span class="cmt">// Server</span>
+<span class="kw">loop</span> {
+    <span class="kw">let</span> (client_badge, request) = <span class="fn">sys_ipc_recv</span>(listen_endpoint);
+    <span class="kw">let</span> response = <span class="fn">handle_request</span>(request);
+    <span class="fn">sys_ipc_reply</span>(client_badge, &amp;response);
+}</code></pre>
+    <p>The <code>call</code> operation atomically sends a message and blocks waiting for the reply, while temporarily granting the server a reply capability.</p>
+
+    <h4>Notifications</h4>
+    <p>Lightweight event signaling — non-blocking, no data transfer:</p>
+    <pre><code><span class="cmt">// Signal an event (non-blocking)</span>
+<span class="fn">sys_ipc_notify</span>(endpoint_slot, <span class="cn">EVENT_DATA_READY</span>);
+
+<span class="cmt">// Wait for notifications (blocking)</span>
+<span class="kw">let</span> events = <span class="fn">sys_ipc_wait</span>(endpoint_slot);</code></pre>
+    <p>Notifications are OR'd together if multiple arrive before the receiver checks — they never queue up or overflow.</p>
+
+    <h3>Zero-Copy Memory Grants</h3>
+    <p>For large data transfers (disk blocks, network packets), the sender shares physical pages directly:</p>
+    <ol>
+      <li>Sender creates a Memory capability for the relevant pages</li>
+      <li>Sender transfers the capability via IPC to the receiver</li>
+      <li>Receiver maps the pages into its own address space</li>
+      <li>Both processes access the same physical memory — zero copies</li>
+    </ol>
+
+    <hr>
+
+    <h2 id="security-guarantees">Security Guarantees <a href="#security-guarantees" class="anchor">#</a></h2>
+    <table>
+      <thead><tr><th>Property</th><th>Mechanism</th></tr></thead>
+      <tbody>
+        <tr><td><strong>No ambient authority</strong></td><td>All resources accessed via capability slots</td></tr>
+        <tr><td><strong>Information hiding</strong></td><td>Processes only see capabilities they were granted</td></tr>
+        <tr><td><strong>Controlled delegation</strong></td><td>Capabilities transfer with monotonically decreasing rights</td></tr>
+        <tr><td><strong>Complete mediation</strong></td><td>Every resource access goes through the kernel's capability check</td></tr>
+        <tr><td><strong>Revocation</strong></td><td>Creator can revoke derived capabilities instantly</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <h2 id="dependencies">Dependencies <a href="#dependencies" class="anchor">#</a></h2>
+    <ul>
+      <li><strong>Requires</strong>: Sprint 4 (process/thread structures, scheduler)</li>
+      <li><strong>Enables</strong>: Sprint 6 (syscall dispatch needs capability validation), Sprint 7 (init process uses IPC for service registration)</li>
+    </ul>
+
+    <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>
+  </div>
+</main>
+
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0})" aria-label="Back to top">↑</button>
+<script>
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
+window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+</body>
+</html>

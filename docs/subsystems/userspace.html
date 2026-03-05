@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Init &amp; Userspace — MinimalOS NextGen</title>
+  <meta name="description" content="Sprint 7 — Life outside the kernel.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+  <a href="../index.html" class="logo"><span class="logo-icon">M</span> MinimalOS NextGen</a>
+  <div class="header-right"><a href="https://github.com/example/MinimalOS" target="_blank">GitHub ↗</a></div>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+<aside class="sidebar" id="sidebar">
+  <nav>
+    <ul>
+      <li><a href="../index.html">Home</a></li>
+      <li><a href="../getting-started.html">Getting Started</a></li>
+      <li><a href="../architecture.html">Architecture</a></li>
+      <li>
+        <span class="nav-section-title">Subsystems</span>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="boot.html">Boot &amp; Serial Output</a></li>
+          <li><a href="memory.html">Memory Management</a></li>
+          <li><a href="interrupts.html">Interrupts &amp; Exceptions</a></li>
+          <li><a href="scheduler.html">Processes &amp; Scheduler</a></li>
+          <li><a href="capabilities.html">Capabilities &amp; IPC</a></li>
+          <li><a href="syscalls.html">Syscalls &amp; Userspace</a></li>
+          <li><a href="userspace.html" class="active">Init &amp; Userspace</a></li>
+        </ul>
+      </li>
+      <li><a href="../roadmap.html">Roadmap</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main class="main-content">
+  <div class="content-wrapper">
+
+    <h1>Sprint 7 — Init Process &amp; First Real Program</h1>
+    <p class="subtitle">Life outside the kernel.</p>
+    <p><span class="label label-yellow">🔲 Planned</span></p>
+
+    <details class="toc" open>
+      <summary>Table of contents</summary>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#init-process">Init Process</a></li>
+        <li><a href="#userspace-library">Userspace Library (libmnos)</a></li>
+        <li><a href="#first-userspace-driver">First Userspace Driver</a></li>
+        <li><a href="#initramfs">Initramfs</a></li>
+        <li><a href="#dependencies">Dependencies</a></li>
+      </ul>
+    </details>
+
+    <hr>
+
+    <h2 id="overview">Overview <a href="#overview" class="anchor">#</a></h2>
+    <p>Sprint 7 is where MinimalOS becomes a real operating system. The kernel loads the <strong>init process</strong> — the first userspace program — and everything after that happens through capability-mediated IPC. This sprint also creates the <strong>userspace library</strong> (<code>libmnos</code>) that provides safe Rust wrappers around the raw syscall interface.</p>
+
+    <hr>
+
+    <h2 id="init-process">Init Process <a href="#init-process" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <h3>Role</h3>
+    <p>The init process is the <strong>root of the process tree</strong> and the <strong>service manager</strong>. It's the only process that receives capabilities directly from the kernel at boot — all other processes receive their capabilities from init or its children.</p>
+
+    <h3>Boot Capabilities</h3>
+    <p>The kernel creates these capabilities and places them in init's capability table:</p>
+    <table>
+      <thead><tr><th>Slot</th><th>Type</th><th>Resource</th><th>Rights</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td>Memory</td><td>All usable RAM</td><td>Read, Write, Grant</td></tr>
+        <tr><td>1</td><td>IPC Endpoint</td><td>Kernel log</td><td>Send</td></tr>
+        <tr><td>2</td><td>Process</td><td>Self</td><td>All</td></tr>
+        <tr><td>3</td><td>Interrupt</td><td>All unmasked IRQs</td><td>Receive, Grant</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Responsibilities</h3>
+    <ol>
+      <li><strong>Spawn child processes</strong> — load service binaries from the initramfs</li>
+      <li><strong>Distribute capabilities</strong> — give each service the minimum capabilities it needs</li>
+      <li><strong>Service registration</strong> — maintain a name→endpoint directory ("serial_driver" → endpoint #7)</li>
+      <li><strong>Service lookup</strong> — respond to queries: "where is the VFS service?"</li>
+      <li><strong>Crash recovery</strong> — restart failed services</li>
+    </ol>
+
+    <h3>Service Registration Protocol</h3>
+    <pre class="diagram"><code>Init Process Service Directory:
+┌──────────────────┬──────────────┐
+│ Service Name     │ IPC Endpoint │
+├──────────────────┼──────────────┤
+│ serial_driver    │ endpoint_7   │
+│ vfs_service      │ endpoint_12  │
+│ network_stack    │ endpoint_15  │
+└──────────────────┴──────────────┘</code></pre>
+
+    <p>Services register with init via IPC:</p>
+    <pre><code>→ IPC_SEND(init_endpoint, { type: REGISTER, name: <span class="str">"serial_driver"</span>, endpoint: my_endpoint })
+← IPC_REPLY({ status: OK })</code></pre>
+
+    <p>Clients look up services:</p>
+    <pre><code>→ IPC_SEND(init_endpoint, { type: LOOKUP, name: <span class="str">"serial_driver"</span> })
+← IPC_REPLY({ status: OK, endpoint: serial_endpoint_cap })</code></pre>
+
+    <hr>
+
+    <h2 id="userspace-library">Userspace Library (<code>libmnos</code>) <a href="#userspace-library" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <h3>Purpose</h3>
+    <p><code>libmnos</code> is a static library that userspace programs link against. It provides safe Rust abstractions over the raw SYSCALL interface.</p>
+
+    <h3>Syscall Wrappers</h3>
+    <pre><code><span class="cmt">// Raw syscall (unsafe)</span>
+<span class="kw">unsafe fn</span> <span class="fn">syscall3</span>(nr: <span class="ty">u64</span>, arg1: <span class="ty">u64</span>, arg2: <span class="ty">u64</span>, arg3: <span class="ty">u64</span>) -&gt; <span class="ty">i64</span> {
+    <span class="kw">let</span> ret: <span class="ty">i64</span>;
+    <span class="fn">asm!</span>(
+        <span class="str">"syscall"</span>,
+        <span class="kw">in</span>(<span class="str">"rax"</span>) nr,
+        <span class="kw">in</span>(<span class="str">"rdi"</span>) arg1,
+        <span class="kw">in</span>(<span class="str">"rsi"</span>) arg2,
+        <span class="kw">in</span>(<span class="str">"rdx"</span>) arg3,
+        <span class="kw">out</span>(<span class="str">"rcx"</span>) _,  <span class="cmt">// clobbered by SYSCALL</span>
+        <span class="kw">out</span>(<span class="str">"r11"</span>) _,  <span class="cmt">// clobbered by SYSCALL</span>
+        <span class="kw">lateout</span>(<span class="str">"rax"</span>) ret,
+    );
+    ret
+}
+
+<span class="cmt">// Safe wrapper</span>
+<span class="kw">pub fn</span> <span class="fn">ipc_send</span>(endpoint: <span class="ty">CapSlot</span>, msg: &amp;<span class="ty">IpcMessage</span>) -&gt; <span class="ty">Result</span>&lt;(), <span class="ty">IpcError</span>&gt; {
+    <span class="kw">let</span> ret = <span class="kw">unsafe</span> { <span class="fn">syscall3</span>(<span class="cn">SYS_IPC_SEND</span>, endpoint.<span class="num">0</span> <span class="kw">as</span> <span class="ty">u64</span>, msg <span class="kw">as</span> *<span class="kw">const</span> _ <span class="kw">as</span> <span class="ty">u64</span>, <span class="num">0</span>) };
+    <span class="kw">match</span> ret {
+        <span class="num">0</span> =&gt; <span class="cn">Ok</span>(()),
+        e =&gt; <span class="cn">Err</span>(<span class="ty">IpcError</span>::<span class="fn">from_code</span>(e)),
+    }
+}</code></pre>
+
+    <h3>IPC Helpers</h3>
+    <pre><code><span class="cmt">// High-level RPC call</span>
+<span class="kw">pub fn</span> <span class="fn">rpc_call</span>&lt;Req: <span class="ty">Serialize</span>, Resp: <span class="ty">Deserialize</span>&gt;(
+    endpoint: <span class="ty">CapSlot</span>,
+    request: &amp;Req,
+) -&gt; <span class="ty">Result</span>&lt;Resp, <span class="ty">IpcError</span>&gt; {
+    <span class="kw">let</span> msg = <span class="ty">IpcMessage</span>::<span class="fn">encode</span>(request);
+    <span class="kw">let</span> reply = <span class="fn">ipc_call</span>(endpoint, &amp;msg)?;
+    <span class="cn">Ok</span>(reply.<span class="fn">decode</span>()?)
+}</code></pre>
+
+    <h3>Memory Allocation</h3>
+    <p>Userspace gets its own heap allocator that requests pages from the kernel:</p>
+    <pre><code><span class="kw">pub fn</span> <span class="fn">alloc_pages</span>(count: <span class="ty">usize</span>) -&gt; <span class="ty">Result</span>&lt;*<span class="kw">mut</span> <span class="ty">u8</span>, <span class="ty">MemError</span>&gt; {
+    <span class="kw">let</span> addr = <span class="kw">unsafe</span> { <span class="fn">syscall2</span>(<span class="cn">SYS_MEM_ALLOC</span>, count <span class="kw">as</span> <span class="ty">u64</span>, <span class="num">0</span>) };
+    <span class="kw">if</span> addr &lt; <span class="num">0</span> { <span class="cn">Err</span>(<span class="ty">MemError</span>::OutOfMemory) }
+    <span class="kw">else</span> { <span class="cn">Ok</span>(addr <span class="kw">as</span> *<span class="kw">mut</span> <span class="ty">u8</span>) }
+}</code></pre>
+
+    <hr>
+
+    <h2 id="first-userspace-driver">First Userspace Driver <a href="#first-userspace-driver" class="anchor">#</a></h2>
+
+    <div class="callout todo">
+      <div class="callout-title">🔲 Not Yet Implemented</div>
+    </div>
+
+    <h3>Serial Console Driver</h3>
+    <p>The first real userspace service — a serial console driver that demonstrates the full capability-based architecture:</p>
+    <pre class="diagram"><code>Kernel                    Init Process              Serial Driver
+  │                           │                          │
+  │ ── boot caps ──►          │                          │
+  │                           │ ── spawn + caps ──►      │
+  │                           │   (IRQ 4 cap,            │
+  │                           │    MMIO cap,             │
+  │                           │    IPC endpoint)         │
+  │                           │                          │
+  │ ◄── IRQ 4 fires ──       │                          │
+  │ ── notify ──────────────────────────────────►        │
+  │                           │                   read serial port
+  │                           │                   process input
+  │                           │   ◄── IPC ──      echo to output</code></pre>
+
+    <h3>What This Demonstrates</h3>
+    <ol>
+      <li><strong>Interrupt routing</strong>: IRQ 4 (COM1) is routed to the serial driver via an interrupt capability</li>
+      <li><strong>MMIO access</strong>: The driver has a memory capability for the serial port's I/O range</li>
+      <li><strong>Process isolation</strong>: The driver runs in Ring 3 — a bug in the driver can't crash the kernel</li>
+      <li><strong>IPC communication</strong>: The serial driver communicates with other processes via IPC</li>
+      <li><strong>Capability delegation</strong>: Init gives the serial driver exactly the capabilities it needs — nothing more</li>
+    </ol>
+
+    <hr>
+
+    <h2 id="initramfs">Initramfs <a href="#initramfs" class="anchor">#</a></h2>
+    <p>The init process and initial services are bundled into an <strong>in-memory filesystem</strong> (initramfs) that Limine loads alongside the kernel:</p>
+    <ul>
+      <li>Format: tar archive (simple, no compression needed for small images)</li>
+      <li>Contains: init binary, serial driver binary, other initial services</li>
+      <li>Loaded by Limine as a module</li>
+      <li>Init unpacks it to find and load service binaries</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="dependencies">Dependencies <a href="#dependencies" class="anchor">#</a></h2>
+    <ul>
+      <li><strong>Requires</strong>: Sprint 6 (SYSCALL/SYSRET, ELF loader, Ring 3 entry)</li>
+      <li><strong>Enables</strong>: Future milestones (VFS, disk drivers, networking — all built on this foundation)</li>
+    </ul>
+
+    <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>
+  </div>
+</main>
+
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0})" aria-label="Back to top">↑</button>
+<script>
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
+window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+</body>
+</html>

@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture — MinimalOS NextGen</title>
+  <meta name="description" content="The design and structure of the MinimalOS NextGen kernel.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+  <a href="index.html" class="logo"><span class="logo-icon">M</span> MinimalOS NextGen</a>
+  <div class="header-right"><a href="https://github.com/example/MinimalOS" target="_blank">GitHub ↗</a></div>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+<aside class="sidebar" id="sidebar">
+  <nav>
+    <ul>
+      <li><a href="index.html">Home</a></li>
+      <li><a href="getting-started.html">Getting Started</a></li>
+      <li><a href="architecture.html" class="active">Architecture</a></li>
+      <li>
+        <span class="nav-section-title">Subsystems</span>
+        <ul>
+          <li><a href="subsystems/index.html">Overview</a></li>
+          <li><a href="subsystems/boot.html">Boot &amp; Serial Output</a></li>
+          <li><a href="subsystems/memory.html">Memory Management</a></li>
+          <li><a href="subsystems/interrupts.html">Interrupts &amp; Exceptions</a></li>
+          <li><a href="subsystems/scheduler.html">Processes &amp; Scheduler</a></li>
+          <li><a href="subsystems/capabilities.html">Capabilities &amp; IPC</a></li>
+          <li><a href="subsystems/syscalls.html">Syscalls &amp; Userspace</a></li>
+          <li><a href="subsystems/userspace.html">Init &amp; Userspace</a></li>
+        </ul>
+      </li>
+      <li><a href="roadmap.html">Roadmap</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main class="main-content">
+  <div class="content-wrapper">
+
+    <h1>Architecture</h1>
+    <p class="subtitle">The design and structure of the MinimalOS NextGen kernel.</p>
+
+    <details class="toc" open>
+      <summary>Table of contents</summary>
+      <ul>
+        <li><a href="#microkernel-design">Microkernel Design</a></li>
+        <li><a href="#capability-based-security">Capability-Based Security</a></li>
+        <li><a href="#memory-layout">Memory Layout</a></li>
+        <li><a href="#boot-sequence">Boot Sequence</a></li>
+        <li><a href="#syscall-interface">Syscall Interface (Planned)</a></li>
+        <li><a href="#technology-stack">Technology Stack</a></li>
+      </ul>
+    </details>
+
+    <hr>
+
+    <h2 id="microkernel-design">Microkernel Design <a href="#microkernel-design" class="anchor">#</a></h2>
+
+    <p>MinimalOS NextGen follows a <strong>strict microkernel</strong> architecture. The kernel provides only the minimal set of mechanisms required to build a complete operating system — all policy decisions are made in userspace.</p>
+
+    <pre class="diagram"><code>┌─────────────────────────────────────────────────────────────┐
+│                      USERSPACE (Ring 3)                      │
+│                                                              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
+│  │  Init     │  │  Serial  │  │  VFS     │  │  Network │    │
+│  │  Process  │  │  Driver  │  │  Service │  │  Stack   │    │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘    │
+│       │              │              │              │          │
+│       └──────────────┴──────────────┴──────────────┘          │
+│                           IPC                                │
+├──────────────────────────────────────────────────────────────┤
+│                    KERNEL (Ring 0)                            │
+│                                                              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
+│  │ Address  │  │ Capabil- │  │   IPC    │  │ Sched-   │    │
+│  │ Spaces   │  │  ities   │  │ Delivery │  │  uler    │    │
+│  ├──────────┤  ├──────────┤  ├──────────┤  ├──────────┤    │
+│  │ Interrupt│  │ Memory   │  │          │  │          │    │
+│  │ Routing  │  │ Grants   │  │          │  │          │    │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
+├──────────────────────────────────────────────────────────────┤
+│                    HARDWARE (x86_64)                          │
+└──────────────────────────────────────────────────────────────┘</code></pre>
+
+    <h3 id="kernel-responsibilities">Kernel Responsibilities (6 services)</h3>
+    <ol>
+      <li><strong>Address space isolation</strong> — Create and manage per-process page tables</li>
+      <li><strong>Capability enforcement</strong> — Validate unforgeable tokens on every resource access</li>
+      <li><strong>IPC message delivery</strong> — Transfer opaque byte buffers + capabilities between processes</li>
+      <li><strong>CPU time multiplexing</strong> — Tickless scheduler with per-core run queues</li>
+      <li><strong>Interrupt routing</strong> — Deliver hardware interrupts to capability holders</li>
+      <li><strong>Memory grant transfers</strong> — Zero-copy page sharing between address spaces</li>
+    </ol>
+
+    <h3 id="what-kernel-does-not-do">What the kernel does NOT do</h3>
+    <ul>
+      <li>No filesystem code in the kernel</li>
+      <li>No device drivers (except boot-critical serial/framebuffer)</li>
+      <li>No networking</li>
+      <li>No process management policy</li>
+      <li>No graphical rendering</li>
+      <li>No user authentication</li>
+    </ul>
+    <p>All of these are implemented as userspace services communicating via IPC.</p>
+
+    <hr>
+
+    <h2 id="capability-based-security">Capability-Based Security <a href="#capability-based-security" class="anchor">#</a></h2>
+
+    <p>Instead of traditional Unix-style permissions (user/group/other), MinimalOS uses <strong>capabilities</strong> — unforgeable tokens that grant specific rights to specific resources.</p>
+
+    <h3>Key Properties</h3>
+    <ul>
+      <li><strong>No ambient authority</strong> — A process can only access resources for which it holds a capability. There is no "root" user.</li>
+      <li><strong>Principle of least privilege</strong> — Capabilities carry specific rights flags (Read, Write, Execute, Grant, Revoke). A process only gets the rights it needs.</li>
+      <li><strong>Delegatable</strong> — A process can transfer (grant) capabilities to other processes via IPC, enabling controlled sharing.</li>
+      <li><strong>Revocable</strong> — The creator of a capability can revoke it, instantly removing access.</li>
+    </ul>
+
+    <h3>Capability Types (Planned)</h3>
+    <table>
+      <thead><tr><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Memory</strong></td><td>Access to a region of physical memory (for DMA, MMIO)</td></tr>
+        <tr><td><strong>IPC Endpoint</strong></td><td>Permission to send/receive on a communication channel</td></tr>
+        <tr><td><strong>Interrupt</strong></td><td>Right to receive a specific hardware interrupt</td></tr>
+        <tr><td><strong>Process</strong></td><td>Control over a process (suspend, resume, kill)</td></tr>
+        <tr><td><strong>Thread</strong></td><td>Control over a thread within a process</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <h2 id="memory-layout">Memory Layout <a href="#memory-layout" class="anchor">#</a></h2>
+
+    <h3>Virtual Address Space</h3>
+    <pre class="diagram"><code>0xFFFFFFFFFFFFFFFF  ┬─────────────────────────────────────┐
+                    │  (reserved / guard)                  │
+0xFFFFFFFF80200000  ├─────────────────────────────────────┤
+                    │  Kernel (.text, .rodata, .data, .bss)│
+0xFFFFFFFF80000000  ├─────────────────────────────────────┤ ← Kernel base
+                    │  (2MB padding)                       │
+                    ├─────────────────────────────────────┤
+                    │                                      │
+                    │  Higher Half Direct Map (HHDM)       │
+                    │  All physical RAM mapped here        │
+                    │  Offset: ~0xFFFF800000000000         │
+                    │                                      │
+                    ├─────────────────────────────────────┤
+                    │                                      │
+                    │  Canonical hole (not addressable)     │
+                    │  x86_64 architecture gap              │
+                    │                                      │
+0x00007FFFFFFFFFFF  ├─────────────────────────────────────┤
+                    │                                      │
+                    │  User address space                   │
+                    │  (One per process, full lower half)   │
+                    │                                      │
+0x0000000000000000  └─────────────────────────────────────┘</code></pre>
+
+    <h3>Kernel Sections</h3>
+    <p>Each section is page-aligned (4 KiB) for W^X enforcement:</p>
+    <table>
+      <thead><tr><th>Section</th><th>Permissions</th><th>Contents</th></tr></thead>
+      <tbody>
+        <tr><td><code>.text</code></td><td>Read + Execute</td><td>Executable code</td></tr>
+        <tr><td><code>.rodata</code></td><td>Read only</td><td>String literals, constants, Limine requests, <code>.got</code></td></tr>
+        <tr><td><code>.data</code></td><td>Read + Write</td><td>Initialized mutable globals</td></tr>
+        <tr><td><code>.bss</code></td><td>Read + Write</td><td>Zero-initialized mutable globals</td></tr>
+      </tbody>
+    </table>
+    <p>The linker script places the kernel at <code>0xFFFFFFFF80200000</code> (higher-half base + 2MB offset). Limine sets up the page tables at boot.</p>
+
+    <h3>Physical Memory Management</h3>
+    <p>The kernel uses a <strong>bitmap allocator</strong> for physical frames:</p>
+    <ul>
+      <li>1 bit per 4 KiB page frame</li>
+      <li>Tracks only up to the highest usable address (avoids wasting bitmap space on PCI MMIO holes)</li>
+      <li>Optimized scanning: u64-at-a-time search for free frames</li>
+      <li>Reserved regions (kernel, framebuffer, ACPI, bitmap itself) are marked as used at init</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="boot-sequence">Boot Sequence <a href="#boot-sequence" class="anchor">#</a></h2>
+
+    <p>MinimalOS boots via the <a href="https://limine-bootloader.org/" target="_blank">Limine</a> boot protocol:</p>
+
+    <h3>Firmware → Bootloader → Kernel</h3>
+    <ol>
+      <li><strong>Power on</strong> → UEFI firmware initializes hardware</li>
+      <li><strong>UEFI</strong> loads Limine from the EFI System Partition</li>
+      <li><strong>Limine</strong> reads <code>boot/limine.conf</code>, loads the kernel ELF</li>
+      <li><strong>Limine</strong> sets up 64-bit long mode with paging:
+        <ul>
+          <li>Identity map of low memory</li>
+          <li>Higher-half kernel map at <code>0xFFFFFFFF80000000+</code></li>
+          <li>HHDM (all physical RAM accessible at a fixed offset)</li>
+        </ul>
+      </li>
+      <li><strong>Limine</strong> fills in request structures and jumps to <code>kmain()</code></li>
+    </ol>
+
+    <h3>Kernel Initialization (5 Phases)</h3>
+    <table>
+      <thead><tr><th>Phase</th><th>Name</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><strong>Deaf and Blind</strong></td><td>Initialize COM1 serial UART. After this, <code>kprintln!()</code> works.</td></tr>
+        <tr><td>2</td><td><strong>Can See</strong></td><td>Parse boot info (HHDM, memory map, framebuffer, ACPI). Init framebuffer console.</td></tr>
+        <tr><td>3</td><td><strong>Can Remember</strong></td><td>Init PMM (bitmap allocator), kernel heap (<code>Vec</code>, <code>Box</code>, <code>String</code> available). VMM infrastructure ready.</td></tr>
+        <tr><td>4</td><td><strong>Can Think</strong></td><td><em>(Planned)</em> GDT/IDT, LAPIC, I/O APIC, scheduler, SMP.</td></tr>
+        <tr><td>5</td><td><strong>Alive</strong></td><td><em>(Planned)</em> SYSCALL/SYSRET, ELF loader, init process, enter Ring 3.</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <h2 id="syscall-interface">Syscall Interface (Planned) <a href="#syscall-interface" class="anchor">#</a></h2>
+
+    <p>The kernel will expose approximately 22 syscalls, grouped by subsystem:</p>
+
+    <h3>Memory Syscalls</h3>
+    <ul>
+      <li><code>sys_mem_map</code> — Map physical pages into an address space</li>
+      <li><code>sys_mem_unmap</code> — Remove a page mapping</li>
+      <li><code>sys_mem_grant</code> — Share pages with another process (zero-copy)</li>
+      <li><code>sys_mem_alloc</code> — Allocate physical frames</li>
+    </ul>
+
+    <h3>IPC Syscalls</h3>
+    <ul>
+      <li><code>sys_ipc_send</code> — Send a message to an endpoint</li>
+      <li><code>sys_ipc_recv</code> — Receive a message from an endpoint</li>
+      <li><code>sys_ipc_call</code> — Send + wait for reply (RPC pattern)</li>
+      <li><code>sys_ipc_reply</code> — Reply to a call</li>
+      <li><code>sys_ipc_notify</code> — Lightweight event signal</li>
+    </ul>
+
+    <h3>Capability Syscalls</h3>
+    <ul>
+      <li><code>sys_cap_create</code> — Create a new capability</li>
+      <li><code>sys_cap_delete</code> — Destroy a capability</li>
+      <li><code>sys_cap_transfer</code> — Transfer a capability via IPC</li>
+      <li><code>sys_cap_revoke</code> — Revoke a previously granted capability</li>
+      <li><code>sys_cap_inspect</code> — Query capability type and rights</li>
+    </ul>
+
+    <h3>Process/Thread Syscalls</h3>
+    <ul>
+      <li><code>sys_proc_create</code> — Create a new process</li>
+      <li><code>sys_proc_destroy</code> — Destroy a process</li>
+      <li><code>sys_thread_create</code> — Create a new thread</li>
+      <li><code>sys_thread_destroy</code> — Destroy a thread</li>
+      <li><code>sys_thread_yield</code> — Voluntarily yield CPU time</li>
+      <li><code>sys_thread_block</code> — Block current thread</li>
+      <li><code>sys_thread_wake</code> — Wake a blocked thread</li>
+    </ul>
+
+    <h3>System Syscalls</h3>
+    <ul>
+      <li><code>sys_irq_bind</code> — Bind an interrupt to a capability endpoint</li>
+      <li><code>sys_debug_write</code> — Write to serial console (debug only)</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="technology-stack">Technology Stack <a href="#technology-stack" class="anchor">#</a></h2>
+
+    <table>
+      <thead><tr><th>Component</th><th>Choice</th><th>Rationale</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Language</strong></td><td>Rust (nightly)</td><td>Memory safety, zero-cost abstractions, <code>no_std</code> support</td></tr>
+        <tr><td><strong>Target</strong></td><td><code>x86_64-unknown-none</code></td><td>Bare metal, no OS dependency</td></tr>
+        <tr><td><strong>Bootloader</strong></td><td>Limine v8.6.0</td><td>UEFI support, higher-half mapping, rich boot protocol</td></tr>
+        <tr><td><strong>Build</strong></td><td>Cargo + Make</td><td>Cargo for Rust, Make for ISO &amp; QEMU orchestration</td></tr>
+        <tr><td><strong>CI</strong></td><td>GitHub Actions</td><td>Automated build, ISO creation, release management</td></tr>
+        <tr><td><strong>Edition</strong></td><td>2024</td><td>Latest Rust edition</td></tr>
+        <tr><td><strong>Key crates</strong></td><td><code>limine</code>, <code>spin</code>, <code>bitflags</code>, <code>x86_64</code>, <code>log</code></td><td>Minimal, audited dependencies for Ring 0</td></tr>
+      </tbody>
+    </table>
+
+    <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>
+  </div>
+</main>
+
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0})" aria-label="Back to top">↑</button>
+<script>
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
+window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+</body>
+</html>

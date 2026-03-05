@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Getting Started — MinimalOS NextGen</title>
+  <meta name="description" content="Build MinimalOS NextGen from source, create a bootable ISO, and run it in QEMU.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+  <a href="index.html" class="logo"><span class="logo-icon">M</span> MinimalOS NextGen</a>
+  <div class="header-right"><a href="https://github.com/example/MinimalOS" target="_blank">GitHub ↗</a></div>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+<aside class="sidebar" id="sidebar">
+  <nav>
+    <ul>
+      <li><a href="index.html">Home</a></li>
+      <li><a href="getting-started.html" class="active">Getting Started</a></li>
+      <li><a href="architecture.html">Architecture</a></li>
+      <li>
+        <span class="nav-section-title">Subsystems</span>
+        <ul>
+          <li><a href="subsystems/index.html">Overview</a></li>
+          <li><a href="subsystems/boot.html">Boot &amp; Serial Output</a></li>
+          <li><a href="subsystems/memory.html">Memory Management</a></li>
+          <li><a href="subsystems/interrupts.html">Interrupts &amp; Exceptions</a></li>
+          <li><a href="subsystems/scheduler.html">Processes &amp; Scheduler</a></li>
+          <li><a href="subsystems/capabilities.html">Capabilities &amp; IPC</a></li>
+          <li><a href="subsystems/syscalls.html">Syscalls &amp; Userspace</a></li>
+          <li><a href="subsystems/userspace.html">Init &amp; Userspace</a></li>
+        </ul>
+      </li>
+      <li><a href="roadmap.html">Roadmap</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main class="main-content">
+  <div class="content-wrapper">
+
+    <h1>Getting Started</h1>
+    <p class="subtitle">Build MinimalOS NextGen from source, create a bootable ISO, and run it in QEMU.</p>
+
+    <details class="toc" open>
+      <summary>Table of contents</summary>
+      <ul>
+        <li><a href="#prerequisites">Prerequisites</a></li>
+        <li><a href="#building">Building</a></li>
+        <li><a href="#running-in-qemu">Running in QEMU</a></li>
+        <li><a href="#expected-boot-output">Expected Boot Output</a></li>
+        <li><a href="#project-structure">Project Structure</a></li>
+        <li><a href="#makefile-targets">Makefile Targets</a></li>
+        <li><a href="#continuous-integration">Continuous Integration</a></li>
+      </ul>
+    </details>
+
+    <hr>
+
+    <h2 id="prerequisites">Prerequisites <a href="#prerequisites" class="anchor">#</a></h2>
+
+    <h3 id="rust-toolchain">Rust Toolchain</h3>
+    <p>MinimalOS uses Rust <strong>nightly</strong> (configured automatically via <code>rust-toolchain.toml</code>):</p>
+    <pre><code><span class="cmt"># Install rustup if you haven't already</span>
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+<span class="cmt"># The nightly toolchain and rust-src component install automatically</span>
+<span class="cmt"># when you run cargo in the project directory</span></code></pre>
+    <p>The toolchain file pins the exact nightly version and includes the <code>rust-src</code> component (required for building <code>core</code>/<code>alloc</code> for bare metal).</p>
+
+    <h3 id="system-packages">System Packages</h3>
+    <p>On Ubuntu/Debian:</p>
+    <pre><code>sudo apt install xorriso qemu-system-x86 git make</code></pre>
+    <p>On Fedora:</p>
+    <pre><code>sudo dnf install xorriso qemu-system-x86 git make</code></pre>
+    <p>On Arch Linux:</p>
+    <pre><code>sudo pacman -S libisoburn qemu-system-x86 git make</code></pre>
+
+    <table>
+      <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>xorriso</code></td><td>Creates bootable ISO images</td></tr>
+        <tr><td><code>qemu-system-x86</code></td><td>x86_64 emulator for testing</td></tr>
+        <tr><td><code>git</code></td><td>Downloads the Limine bootloader</td></tr>
+        <tr><td><code>make</code></td><td>Orchestrates the build</td></tr>
+      </tbody>
+    </table>
+
+    <h3 id="uefi-firmware">UEFI Firmware (for QEMU)</h3>
+    <p>QEMU needs OVMF firmware for UEFI boot:</p>
+    <pre><code><span class="cmt"># Ubuntu/Debian</span>
+sudo apt install ovmf
+
+<span class="cmt"># The firmware is expected at /usr/share/qemu/OVMF.fd</span>
+<span class="cmt"># or /usr/share/OVMF/OVMF_CODE.fd</span></code></pre>
+
+    <hr>
+
+    <h2 id="building">Building <a href="#building" class="anchor">#</a></h2>
+
+    <h3>Debug Build</h3>
+    <pre><code>make</code></pre>
+    <p>Builds the kernel with debug symbols and minimal optimization for development. Dependencies are still optimized (<code>opt-level = 2</code>) for faster boot.</p>
+
+    <h3>Release Build</h3>
+    <pre><code>make release</code></pre>
+    <p>Builds with full optimizations: <code>opt-level = 2</code>, link-time optimization (LTO), single codegen unit. Produces a smaller, faster kernel binary.</p>
+
+    <h3>Create Bootable ISO</h3>
+    <pre><code>make iso          <span class="cmt"># Debug ISO → target/minimalos-debug.iso</span>
+make iso-release  <span class="cmt"># Release ISO → target/minimalos-release.iso</span></code></pre>
+
+    <p>The ISO creation process:</p>
+    <ol>
+      <li>Downloads and compiles the Limine bootloader (cached in <code>target/limine-src/</code>)</li>
+      <li>Copies the kernel ELF binary and boot config into an ISO directory structure</li>
+      <li>Uses <code>xorriso</code> to create a hybrid BIOS/UEFI bootable ISO</li>
+    </ol>
+
+    <hr>
+
+    <h2 id="running-in-qemu">Running in QEMU <a href="#running-in-qemu" class="anchor">#</a></h2>
+
+    <h3>Interactive (with display)</h3>
+    <pre><code>make run          <span class="cmt"># Debug build</span>
+make run-release  <span class="cmt"># Release build</span></code></pre>
+    <p>This opens a QEMU window showing the framebuffer console. Serial output goes to the terminal.</p>
+
+    <h3>Headless (CI-friendly)</h3>
+    <pre><code>make run-headless</code></pre>
+    <p>Boots without a display window. Serial output is captured to <code>target/serial-output.log</code>. QEMU auto-terminates after 5 seconds. Useful for automated testing.</p>
+
+    <h3>Manual QEMU Command</h3>
+    <pre><code>qemu-system-x86_64 \
+    -M q35 \
+    -m 512M \
+    -cpu Goldmont \
+    -smp 4 \
+    -bios /usr/share/qemu/OVMF.fd \
+    -cdrom target/minimalos-debug.iso \
+    -serial stdio \
+    -no-reboot</code></pre>
+
+    <table>
+      <thead><tr><th>Flag</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>-M q35</code></td><td>Modern chipset (PCIe, AHCI)</td></tr>
+        <tr><td><code>-m 512M</code></td><td>512 MB RAM (approximate N3710 test config)</td></tr>
+        <tr><td><code>-cpu Goldmont</code></td><td>Closest QEMU CPU model to Airmont</td></tr>
+        <tr><td><code>-smp 4</code></td><td>4 CPU cores (matches N3710)</td></tr>
+        <tr><td><code>-serial stdio</code></td><td>Serial output to terminal</td></tr>
+        <tr><td><code>-no-reboot</code></td><td>Don't reboot on triple fault — hang for debugging</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <h2 id="expected-boot-output">Expected Boot Output <a href="#expected-boot-output" class="anchor">#</a></h2>
+
+    <p>A successful boot produces serial output similar to:</p>
+    <pre><code>==========================================================
+  MinimalOS NextGen v0.1.0
+  Capability-based microkernel for x86_64
+==========================================================
+
+[boot] HHDM offset: 0xFFFF800000000000
+[boot] Kernel physical base: 0x00200000
+[boot] Kernel virtual base:  0xFFFFFFFF80200000
+[boot] Kernel size:          XX KiB (Y pages)
+[boot] Sections:
+  .text:   ...
+  .rodata: ...
+  .data:   ...
+  .bss:    ...
+
+[boot] Physical memory map (N entries):
+  ...
+
+[init] Phase 3: Memory management
+[pmm] XXXXX total frames, XXXX used, XXXXX free (498 MiB free)
+[heap] Test allocation OK: [42, 1337, 3735928559] (heap used: 32 bytes)
+[heap] After drop: 0 bytes used / 256 KiB total
+[vmm] Page table infrastructure ready (CR3 switch deferred to Sprint 3)
+
+==========================================================
+  Sprint 2 complete — memory management initialized!
+==========================================================</code></pre>
+
+    <hr>
+
+    <h2 id="project-structure">Project Structure <a href="#project-structure" class="anchor">#</a></h2>
+
+    <pre class="diagram"><code>MinimalOS/
+├── .cargo/config.toml      # Build target &amp; rustflags
+├── .github/workflows/      # CI pipeline
+├── boot/limine.conf        # Bootloader configuration
+├── docs/                   # This documentation site
+├── kernel/
+│   ├── Cargo.toml          # Kernel crate dependencies
+│   ├── linker.ld           # Memory layout linker script
+│   └── src/
+│       ├── main.rs          # Entry point (5-phase boot)
+│       ├── arch/x86_64/     # CPU HAL (serial, cpu, boot)
+│       ├── drivers/         # Framebuffer console
+│       ├── memory/          # PMM, VMM, heap, addresses
+│       ├── sync/            # Spinlock primitives
+│       └── util/            # Logging, panic handler
+├── Cargo.toml              # Workspace root
+├── Makefile                # Build orchestration
+└── rust-toolchain.toml     # Pinned nightly version</code></pre>
+
+    <hr>
+
+    <h2 id="makefile-targets">Makefile Targets <a href="#makefile-targets" class="anchor">#</a></h2>
+
+    <table>
+      <thead><tr><th>Target</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>make</code></td><td>Build kernel (debug)</td></tr>
+        <tr><td><code>make release</code></td><td>Build kernel (release, LTO)</td></tr>
+        <tr><td><code>make iso</code></td><td>Build + create bootable ISO (debug)</td></tr>
+        <tr><td><code>make iso-release</code></td><td>Build + create bootable ISO (release)</td></tr>
+        <tr><td><code>make run</code></td><td>Build + ISO + boot in QEMU (debug)</td></tr>
+        <tr><td><code>make run-release</code></td><td>Build + ISO + boot in QEMU (release)</td></tr>
+        <tr><td><code>make run-headless</code></td><td>Headless QEMU boot, serial to file</td></tr>
+        <tr><td><code>make clean</code></td><td>Remove build artifacts</td></tr>
+        <tr><td><code>make distclean</code></td><td>Remove everything including Limine</td></tr>
+        <tr><td><code>make help</code></td><td>Show all targets</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <h2 id="continuous-integration">Continuous Integration <a href="#continuous-integration" class="anchor">#</a></h2>
+
+    <p>The project includes a GitHub Actions workflow (<code>.github/workflows/build.yml</code>) that:</p>
+    <ol>
+      <li>Builds the kernel in both debug and release modes</li>
+      <li>Creates a bootable ISO</li>
+      <li>Uploads the ISO as a build artifact</li>
+      <li>On version tags (<code>v*</code>): creates a GitHub Release with the ISO and SHA256 checksum</li>
+    </ol>
+
+    <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>
+  </div>
+</main>
+
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0})" aria-label="Back to top">↑</button>
+<script>
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
+window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+</body>
+</html>

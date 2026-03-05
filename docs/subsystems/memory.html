@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Management — MinimalOS NextGen</title>
+  <meta name="description" content="Sprint 2 — Teach the kernel to manage physical and virtual memory.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+  <a href="../index.html" class="logo"><span class="logo-icon">M</span> MinimalOS NextGen</a>
+  <div class="header-right"><a href="https://github.com/example/MinimalOS" target="_blank">GitHub ↗</a></div>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+<aside class="sidebar" id="sidebar">
+  <nav>
+    <ul>
+      <li><a href="../index.html">Home</a></li>
+      <li><a href="../getting-started.html">Getting Started</a></li>
+      <li><a href="../architecture.html">Architecture</a></li>
+      <li>
+        <span class="nav-section-title">Subsystems</span>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="boot.html">Boot &amp; Serial Output</a></li>
+          <li><a href="memory.html" class="active">Memory Management</a></li>
+          <li><a href="interrupts.html">Interrupts &amp; Exceptions</a></li>
+          <li><a href="scheduler.html">Processes &amp; Scheduler</a></li>
+          <li><a href="capabilities.html">Capabilities &amp; IPC</a></li>
+          <li><a href="syscalls.html">Syscalls &amp; Userspace</a></li>
+          <li><a href="userspace.html">Init &amp; Userspace</a></li>
+        </ul>
+      </li>
+      <li><a href="../roadmap.html">Roadmap</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main class="main-content">
+  <div class="content-wrapper">
+
+    <h1>Sprint 2 — Memory Management</h1>
+    <p class="subtitle">Teach the kernel to manage physical and virtual memory.</p>
+    <p><span class="label label-green">✅ Complete</span></p>
+
+    <details class="toc" open>
+      <summary>Table of contents</summary>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#pmm">Physical Memory Manager</a></li>
+        <li><a href="#vmm">Virtual Memory Manager</a></li>
+        <li><a href="#kernel-heap">Kernel Heap</a></li>
+        <li><a href="#linker-script-changes">Linker Script Changes</a></li>
+        <li><a href="#memory-subsystem-interaction">Memory Subsystem Interaction</a></li>
+      </ul>
+    </details>
+
+    <hr>
+
+    <h2 id="overview">Overview <a href="#overview" class="anchor">#</a></h2>
+    <p>Sprint 2 builds the memory management subsystem in three layers:</p>
+    <ol>
+      <li><strong>PMM (Physical Memory Manager)</strong> — tracks which 4 KiB frames are free or used</li>
+      <li><strong>VMM (Virtual Memory Manager)</strong> — manipulates x86_64 4-level page tables</li>
+      <li><strong>Kernel Heap</strong> — enables <code>alloc</code> crate (<code>Vec</code>, <code>Box</code>, <code>String</code> in kernel code)</li>
+    </ol>
+    <p>After Sprint 2, the kernel can dynamically allocate and free both physical frames and kernel heap memory.</p>
+
+    <hr>
+
+    <h2 id="pmm">Physical Memory Manager (<code>memory/pmm.rs</code>) <a href="#pmm" class="anchor">#</a></h2>
+
+    <h3>Design</h3>
+    <p>A <strong>bitmap allocator</strong> where each bit represents one 4 KiB page frame:</p>
+    <pre class="diagram"><code>Bit 0  → Frame at physical address 0x0000
+Bit 1  → Frame at physical address 0x1000
+Bit 2  → Frame at physical address 0x2000
+...
+Bit N  → Frame at physical address N × 0x1000</code></pre>
+    <ul>
+      <li><strong>0</strong> = free, <strong>1</strong> = used</li>
+      <li>Bitmap is stored in the first usable physical memory region large enough to hold it</li>
+      <li>Only tracks up to the highest usable address (avoids wasting memory on PCI MMIO holes at <code>0xFD00000000+</code>)</li>
+    </ul>
+
+    <h3>Data Structure</h3>
+    <pre><code><span class="kw">pub struct</span> <span class="ty">BitmapAllocator</span> {
+    bitmap: <span class="ty">*mut u64</span>,          <span class="cmt">// Pointer to bitmap (via HHDM)</span>
+    bitmap_frames: <span class="ty">usize</span>,      <span class="cmt">// Frames used by bitmap itself</span>
+    total_frames: <span class="ty">usize</span>,       <span class="cmt">// Total tracked frames</span>
+    used_frames: <span class="ty">usize</span>,        <span class="cmt">// Currently allocated frames</span>
+    highest_frame: <span class="ty">usize</span>,      <span class="cmt">// Highest tracked frame index</span>
+    search_start: <span class="ty">usize</span>,       <span class="cmt">// Optimization: resume search from last alloc</span>
+}</code></pre>
+    <p>Protected by a global <code>SpinLock&lt;BitmapAllocator&gt;</code> — <code>PMM</code>.</p>
+
+    <h3>Initialization</h3>
+    <p><code>pmm::init(memory_map)</code>:</p>
+    <ol>
+      <li><strong>Scan phases</strong> — walk the Limine memory map twice:
+        <ul>
+          <li>Phase 1: Find the highest usable address to determine bitmap size</li>
+          <li>Phase 2: Find a usable region large enough to store the bitmap</li>
+        </ul>
+      </li>
+      <li><strong>Place bitmap</strong> — store it in physical memory, accessed via HHDM</li>
+      <li><strong>Mark regions</strong> — iterate the memory map, marking each frame as free or used based on region type</li>
+      <li><strong>Reserve kernel</strong> — mark kernel binary, framebuffer, and bitmap frames as used</li>
+    </ol>
+
+    <h3>API</h3>
+    <table>
+      <thead><tr><th>Function</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>pmm::init(memory_map)</code></td><td>Initialize from Limine memory map</td></tr>
+        <tr><td><code>pmm::alloc_frame() → Option&lt;PhysAddr&gt;</code></td><td>Allocate one 4 KiB frame</td></tr>
+        <tr><td><code>pmm::free_frame(addr)</code></td><td>Return a frame (double-free detection)</td></tr>
+        <tr><td><code>pmm::alloc_frame_zeroed() → Option&lt;PhysAddr&gt;</code></td><td>Allocate and zero a frame (for page tables)</td></tr>
+        <tr><td><code>pmm::alloc_contiguous(n) → Option&lt;PhysAddr&gt;</code></td><td>Allocate N physically contiguous frames</td></tr>
+        <tr><td><code>pmm::stats() → MemStats</code></td><td>Get total/used/free frame counts</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Optimizations</h3>
+    <ul>
+      <li><strong>u64-at-a-time scanning</strong> — checks 64 frames per comparison instead of one. Only falls back to bit-level scan when a u64 word has a free bit.</li>
+      <li><strong>Search cursor</strong> — <code>search_start</code> remembers where the last allocation came from, avoiding repeated scans of fully-allocated regions.</li>
+      <li><strong>Optimized range operations</strong> — <code>clear_range()</code> uses full-word zeroing for bulk free operations.</li>
+    </ul>
+
+    <h3>Statistics (QEMU, 512 MB)</h3>
+    <pre><code>[pmm] 525288 total frames, 127737 free (498 MiB free)
+[pmm] Bitmap: 65 KiB at physical address 0x100000</code></pre>
+
+    <hr>
+
+    <h2 id="vmm">Virtual Memory Manager (<code>memory/vmm.rs</code>) <a href="#vmm" class="anchor">#</a></h2>
+
+    <h3>Design</h3>
+    <p>Implements x86_64 <strong>4-level page table</strong> infrastructure for creating and managing virtual-to-physical address mappings.</p>
+    <pre class="diagram"><code>Virtual Address (48-bit):
+┌───────┬───────┬───────┬───────┬────────────┐
+│ PML4  │ PDP   │  PD   │  PT   │   Offset   │
+│ [47:39]│[38:30]│[29:21]│[20:12]│  [11:0]    │
+│ 9 bits│ 9 bits│ 9 bits│ 9 bits│  12 bits   │
+└───────┴───────┴───────┴───────┴────────────┘
+   │        │        │        │
+   ▼        ▼        ▼        ▼
+PML4 ──→ PDP ──→ PD ──→ PT ──→ Physical Frame
+Table    Table   Table   Table</code></pre>
+    <p>Each table has 512 entries, each entry is 8 bytes. Tables are 4 KiB (one page frame).</p>
+
+    <h3>Page Table Flags</h3>
+    <pre><code><span class="kw">bitflags!</span> {
+    <span class="kw">pub struct</span> <span class="ty">PageTableFlags</span>: <span class="ty">u64</span> {
+        <span class="kw">const</span> <span class="cn">PRESENT</span>    = <span class="num">1</span> &lt;&lt; <span class="num">0</span>;   <span class="cmt">// Page is mapped</span>
+        <span class="kw">const</span> <span class="cn">WRITABLE</span>   = <span class="num">1</span> &lt;&lt; <span class="num">1</span>;   <span class="cmt">// Read+Write (vs Read-only)</span>
+        <span class="kw">const</span> <span class="cn">USER</span>       = <span class="num">1</span> &lt;&lt; <span class="num">2</span>;   <span class="cmt">// Accessible from Ring 3</span>
+        <span class="kw">const</span> <span class="cn">PWT</span>        = <span class="num">1</span> &lt;&lt; <span class="num">3</span>;   <span class="cmt">// Page-level write-through</span>
+        <span class="kw">const</span> <span class="cn">PCD</span>        = <span class="num">1</span> &lt;&lt; <span class="num">4</span>;   <span class="cmt">// Page-level cache disable</span>
+        <span class="kw">const</span> <span class="cn">ACCESSED</span>   = <span class="num">1</span> &lt;&lt; <span class="num">5</span>;   <span class="cmt">// Has been read</span>
+        <span class="kw">const</span> <span class="cn">DIRTY</span>      = <span class="num">1</span> &lt;&lt; <span class="num">6</span>;   <span class="cmt">// Has been written</span>
+        <span class="kw">const</span> <span class="cn">HUGE</span>       = <span class="num">1</span> &lt;&lt; <span class="num">7</span>;   <span class="cmt">// 2 MiB page (in PD entries)</span>
+        <span class="kw">const</span> <span class="cn">GLOBAL</span>     = <span class="num">1</span> &lt;&lt; <span class="num">8</span>;   <span class="cmt">// Don't flush on CR3 switch</span>
+        <span class="kw">const</span> <span class="cn">NO_EXECUTE</span> = <span class="num">1</span> &lt;&lt; <span class="num">63</span>;  <span class="cmt">// XD: cannot execute code</span>
+    }
+}</code></pre>
+
+    <h3>Preset Flag Combinations</h3>
+    <table>
+      <thead><tr><th>Name</th><th>Flags</th><th>Use</th></tr></thead>
+      <tbody>
+        <tr><td><code>KERNEL_CODE</code></td><td>Present + Global + (no NX)</td><td>Kernel <code>.text</code></td></tr>
+        <tr><td><code>KERNEL_RODATA</code></td><td>Present + Global + NX</td><td>Kernel <code>.rodata</code></td></tr>
+        <tr><td><code>KERNEL_DATA</code></td><td>Present + Writable + Global + NX</td><td>Kernel <code>.data</code>, <code>.bss</code></td></tr>
+        <tr><td><code>USER_CODE</code></td><td>Present + User + (no NX)</td><td>Userspace <code>.text</code></td></tr>
+        <tr><td><code>USER_DATA</code></td><td>Present + Writable + User + NX</td><td>Userspace data</td></tr>
+        <tr><td><code>INTERMEDIATE</code></td><td>Present + Writable + User</td><td>Intermediate table entries</td></tr>
+      </tbody>
+    </table>
+
+    <h3>API</h3>
+    <table>
+      <thead><tr><th>Function</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>map_page(pml4, virt, phys, flags) → Result&lt;(), MapError&gt;</code></td><td>Map a 4 KiB page</td></tr>
+        <tr><td><code>unmap_page(pml4, virt) → Result&lt;PhysAddr, UnmapError&gt;</code></td><td>Unmap a page, return its physical address</td></tr>
+        <tr><td><code>translate(pml4, virt) → Option&lt;PhysAddr&gt;</code></td><td>Walk page tables, resolve virtual → physical</td></tr>
+        <tr><td><code>new_table() → *mut PageTable</code></td><td>Allocate a zeroed page table from PMM</td></tr>
+        <tr><td><code>flush(virt)</code></td><td>Invalidate TLB for a single page (<code>invlpg</code>)</td></tr>
+        <tr><td><code>flush_all()</code></td><td>Flush entire TLB (reload CR3)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Error Types</h3>
+    <pre><code><span class="kw">pub enum</span> <span class="ty">MapError</span> {
+    <span class="cn">AlreadyMapped</span>,      <span class="cmt">// Target virtual address already has a mapping</span>
+    <span class="cn">AllocationFailed</span>,   <span class="cmt">// PMM couldn't allocate a page table frame</span>
+}
+
+<span class="kw">pub enum</span> <span class="ty">UnmapError</span> {
+    <span class="cn">NotMapped</span>,          <span class="cmt">// Target virtual address is not mapped</span>
+    <span class="cn">HugePage</span>,           <span class="cmt">// 2 MiB page — cannot unmap as 4 KiB</span>
+}</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">⚠️ Warning</div>
+      <strong>CR3 switch deferred to Sprint 3.</strong> The VMM infrastructure is complete, but the kernel still uses Limine's page tables. Switching to our own tables requires IDT/exception handlers for debugging page faults. This is the first task in Sprint 3.
+    </div>
+
+    <hr>
+
+    <h2 id="kernel-heap">Kernel Heap (<code>memory/heap.rs</code>) <a href="#kernel-heap" class="anchor">#</a></h2>
+
+    <h3>Design</h3>
+    <p>A <strong>linked-list free-list allocator</strong> that enables the Rust <code>alloc</code> crate in the kernel. After initialization, <code>Vec</code>, <code>Box</code>, <code>String</code>, <code>Arc</code>, and other heap types work normally.</p>
+
+    <h3>Free Block Structure</h3>
+    <pre class="diagram"><code>┌──────────────────────┐
+│  FreeBlock Header    │
+│  ┌────────────────┐  │
+│  │ size: usize    │  │  ← Total block size (header + payload)
+│  │ next: *mut     │  │  ← Pointer to next free block (or null)
+│  └────────────────┘  │
+│  ... free space ...  │
+└──────────────────────┘</code></pre>
+    <p>Free blocks are maintained in a <strong>sorted linked list</strong> (sorted by address), enabling efficient coalescing.</p>
+
+    <h3>Allocation (First-Fit)</h3>
+    <ol>
+      <li>Walk the free list, find the first block large enough for the requested size + alignment</li>
+      <li>If the block is much larger than needed, split it — allocate the front, return the rest to the free list</li>
+      <li>If the block is a close fit, allocate the entire block (avoids fragmentation from tiny remnants)</li>
+      <li>Return a pointer past the header to the caller</li>
+    </ol>
+
+    <h3>Deallocation (with Coalescing)</h3>
+    <ol>
+      <li>Find the correct position in the sorted free list (by address)</li>
+      <li>Insert the freed block</li>
+      <li><strong>Coalesce with successor</strong>: if the freed block is adjacent to the next free block, merge them</li>
+      <li><strong>Coalesce with predecessor</strong>: if the previous free block is adjacent to the freed block, merge them</li>
+    </ol>
+    <p>Coalescing prevents fragmentation — when allocations are freed in any order, adjacent free blocks merge back into large contiguous regions.</p>
+
+    <h3>Initialization</h3>
+    <p><code>heap::init()</code>:</p>
+    <ol>
+      <li>Allocates 64 contiguous physical frames from the PMM (256 KiB)</li>
+      <li>Maps them into virtual memory via the HHDM</li>
+      <li>Creates a single large free block covering the entire heap</li>
+      <li>Registers as <code>#[global_allocator]</code></li>
+    </ol>
+
+    <h3>API</h3>
+    <table>
+      <thead><tr><th>Function</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>heap::init()</code></td><td>Initialize the kernel heap (256 KiB)</td></tr>
+        <tr><td><code>heap::allocated_bytes() → usize</code></td><td>Current heap usage</td></tr>
+        <tr><td><code>heap::total_bytes() → usize</code></td><td>Total heap capacity</td></tr>
+      </tbody>
+    </table>
+    <p>The allocator implements <code>GlobalAlloc</code> (<code>alloc</code> and <code>dealloc</code>), so standard Rust allocation works transparently.</p>
+
+    <h3>Verification</h3>
+    <p>Tested during boot — Vec allocation/deallocation with coalescing verification:</p>
+    <pre><code>[heap] Test allocation OK: [42, 1337, 3735928559] (heap used: 32 bytes)
+[heap] After drop: 0 bytes used / 256 KiB total</code></pre>
+    <p>Zero bytes after drop confirms coalescing works correctly.</p>
+
+    <hr>
+
+    <h2 id="linker-script-changes">Linker Script Changes <a href="#linker-script-changes" class="anchor">#</a></h2>
+    <p>Sprint 2 required a linker script fix: the compiler generated a <code>.got</code> (Global Offset Table) section that created a non-page-aligned LOAD segment, breaking Limine's ELF loader.</p>
+    <p><strong>Fix</strong>: Merge <code>.got</code> and <code>.got.*</code> into the <code>.rodata</code> section:</p>
+    <pre><code>.rodata ALIGN(4K) : {
+    _rodata_start = .;
+    *(.rodata .rodata.*)
+    *(.got .got.*)          <span class="cmt">/* GOT merged here */</span>
+    _rodata_end = .;
+}</code></pre>
+
+    <hr>
+
+    <h2 id="memory-subsystem-interaction">Memory Subsystem Interaction <a href="#memory-subsystem-interaction" class="anchor">#</a></h2>
+    <pre class="diagram"><code>                ┌──────────────┐
+                │  alloc crate │  Vec, Box, String, etc.
+                │  (Rust std)  │
+                └──────┬───────┘
+                       │ GlobalAlloc::alloc / dealloc
+                ┌──────▼───────┐
+                │  Kernel Heap │  Linked-list free-list
+                │  (heap.rs)   │  with coalescing
+                └──────┬───────┘
+                       │ pmm::alloc_contiguous(64)
+                ┌──────▼───────┐
+                │     PMM      │  Bitmap frame allocator
+                │  (pmm.rs)    │  Tracks 4 KiB frames
+                └──────┬───────┘
+                       │ HHDM translation
+                ┌──────▼───────┐
+                │   Physical   │  RAM on the machine
+                │   Memory     │
+                └──────────────┘</code></pre>
+    <p>The VMM (<code>vmm.rs</code>) sits alongside this stack, providing page table manipulation that will be used when the kernel creates its own page tables in Sprint 3.</p>
+
+    <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>
+  </div>
+</main>
+
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0})" aria-label="Back to top">↑</button>
+<script>
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
+window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+</body>
+</html>

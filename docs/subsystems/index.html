@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subsystems — MinimalOS NextGen</title>
+  <meta name="description" content="Detailed documentation for each kernel subsystem, organized by implementation sprint.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+  <a href="../index.html" class="logo"><span class="logo-icon">M</span> MinimalOS NextGen</a>
+  <div class="header-right"><a href="https://github.com/example/MinimalOS" target="_blank">GitHub ↗</a></div>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+<aside class="sidebar" id="sidebar">
+  <nav>
+    <ul>
+      <li><a href="../index.html">Home</a></li>
+      <li><a href="../getting-started.html">Getting Started</a></li>
+      <li><a href="../architecture.html">Architecture</a></li>
+      <li>
+        <span class="nav-section-title">Subsystems</span>
+        <ul>
+          <li><a href="index.html" class="active">Overview</a></li>
+          <li><a href="boot.html">Boot &amp; Serial Output</a></li>
+          <li><a href="memory.html">Memory Management</a></li>
+          <li><a href="interrupts.html">Interrupts &amp; Exceptions</a></li>
+          <li><a href="scheduler.html">Processes &amp; Scheduler</a></li>
+          <li><a href="capabilities.html">Capabilities &amp; IPC</a></li>
+          <li><a href="syscalls.html">Syscalls &amp; Userspace</a></li>
+          <li><a href="userspace.html">Init &amp; Userspace</a></li>
+        </ul>
+      </li>
+      <li><a href="../roadmap.html">Roadmap</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main class="main-content">
+  <div class="content-wrapper">
+
+    <h1>Subsystems</h1>
+    <p class="subtitle">Detailed documentation for each kernel subsystem, organized by implementation sprint.</p>
+
+    <p>Each subsystem page covers the design, implementation details, data structures, and API of a major kernel component. Completed subsystems include full implementation details; planned subsystems describe the intended design.</p>
+
+    <table>
+      <thead><tr><th>Sprint</th><th>Subsystem</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><a href="boot.html">Boot &amp; Serial Output</a></td><td><span class="label label-green">✅ Complete</span></td></tr>
+        <tr><td>2</td><td><a href="memory.html">Memory Management</a></td><td><span class="label label-green">✅ Complete</span></td></tr>
+        <tr><td>3</td><td><a href="interrupts.html">Interrupts &amp; Exceptions</a></td><td><span class="label label-green">✅ Complete</span></td></tr>
+        <tr><td>4</td><td><a href="scheduler.html">Processes &amp; Scheduler</a></td><td><span class="label label-yellow">🔲 Planned</span></td></tr>
+        <tr><td>5</td><td><a href="capabilities.html">Capabilities &amp; IPC</a></td><td><span class="label label-yellow">🔲 Planned</span></td></tr>
+        <tr><td>6</td><td><a href="syscalls.html">Syscalls &amp; Userspace</a></td><td><span class="label label-yellow">🔲 Planned</span></td></tr>
+        <tr><td>7</td><td><a href="userspace.html">Init &amp; Userspace</a></td><td><span class="label label-yellow">🔲 Planned</span></td></tr>
+      </tbody>
+    </table>
+
+    <footer class="site-footer">MinimalOS NextGen — Capability-based microkernel for x86_64</footer>
+  </div>
+</main>
+
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0})" aria-label="Back to top">↑</button>
+<script>
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('visible');}
+window.addEventListener('scroll',()=>{document.getElementById('backToTop').classList.toggle('visible',window.scrollY>300);});
+</script>
+</body>
+</html>
