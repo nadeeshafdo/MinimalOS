@@ -104,6 +104,9 @@ const SYS_DELEGATE: u64 = 9;
 /// SYS_SPAWN_THREAD — Create a Ring 3 thread inside a target Process.
 const SYS_SPAWN_THREAD: u64 = 10;
 
+/// SYS_DROP_CAP — Remove (drop) a capability from the caller's CNode slot.
+const SYS_DROP_CAP: u64 = 11;
+
 // =============================================================================
 // CpuLocal Field Offsets (used by naked assembly)
 // =============================================================================
@@ -472,6 +475,10 @@ pub extern "C" fn syscall_dispatch(frame: &mut SyscallFrame) -> u64 {
             let user_rip = frame.rsi;
             let user_rsp = frame.rdx;
             sys_spawn_thread(proc_slot, user_rip, user_rsp)
+        }
+        SYS_DROP_CAP => {
+            let slot = frame.rdi;
+            sys_drop_cap(slot)
         }
         _ => {
             kprintln!("[syscall] UNKNOWN syscall number {} from RIP={:#018X}",
@@ -1257,6 +1264,40 @@ fn sys_spawn_thread(proc_slot: u64, user_rip: u64, user_rsp: u64) -> u64 {
     crate::sched::scheduler::spawn_thread(new_thread);
 
     tid
+}
+
+// =============================================================================
+// SYS_DROP_CAP — Remove a capability from the caller's CNode (Syscall 11)
+// =============================================================================
+
+/// Drops (removes) a capability from the specified slot in the caller's CNode.
+///
+/// This is a non-destructive operation from the system's perspective — it
+/// simply makes the slot empty again. The physical resource (frame, endpoint,
+/// etc.) is NOT freed; only the handle is released. Resource reclamation
+/// happens at process teardown via the Reaper.
+///
+/// # Arguments
+/// - `slot`: CNode slot index to clear.
+///
+/// # Returns
+/// `0` on success, error code on failure.
+fn sys_drop_cap(slot: u64) -> u64 {
+    let cpu_local = unsafe { CpuLocal::get_mut() };
+    let thread = unsafe { &*cpu_local.current_thread };
+    let process = unsafe { &mut *thread.process };
+
+    match process.cnode.remove(slot as usize) {
+        Some(_cap) => {
+            // Cap removed. The slot is now free for reuse.
+            0
+        }
+        None => {
+            kprintln!("[syscall] SYS_DROP_CAP: PID {} slot {} already empty or invalid",
+                process.pid, slot);
+            u64::MAX
+        }
+    }
 }
 
 // =============================================================================

@@ -19,6 +19,9 @@ version.workspace = true
 edition.workspace = true
 description = "MinimalOS userspace syscall library"
 
+[dependencies]
+linked_list_allocator = "0.10"
+
 [lib]
 name = "libmnos"
 path = "src/lib.rs"

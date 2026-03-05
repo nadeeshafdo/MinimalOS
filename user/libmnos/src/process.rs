@@ -24,6 +24,7 @@ const SYS_ALLOC_MEMORY: u64 = 7;
 const SYS_MAP_MEMORY: u64 = 8;
 const SYS_DELEGATE: u64 = 9;
 const SYS_SPAWN_THREAD: u64 = 10;
+const SYS_DROP_CAP: u64 = 11;
 
 /// Creates a new process with an isolated PML4 and empty CNode.
 ///
@@ -143,6 +144,25 @@ pub fn sys_spawn_thread(
     let result = unsafe { syscall4(SYS_SPAWN_THREAD, proc_slot, user_rip, user_rsp, 0) };
     if result < u64::MAX - 10 {
         Ok(result)
+    } else {
+        Err(SyscallError(result))
+    }
+}
+
+/// Drops (removes) a capability from the caller's CNode slot.
+///
+/// Frees the slot for reuse. Does NOT free the underlying physical resource.
+///
+/// # Arguments
+/// - `slot`: CNode slot index to clear.
+///
+/// # Returns
+/// `Ok(())` on success, `Err(SyscallError)` if the slot was already empty.
+#[inline(always)]
+pub fn sys_drop_cap(slot: u64) -> Result<(), SyscallError> {
+    let result = unsafe { syscall4(SYS_DROP_CAP, slot, 0, 0, 0) };
+    if result == 0 {
+        Ok(())
     } else {
         Err(SyscallError(result))
     }

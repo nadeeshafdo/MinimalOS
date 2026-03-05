@@ -13,17 +13,20 @@
 // The kernel maps the initrd TarFS pages at virtual address 0x1000_0000
 // (read-only) so Init can parse the archive from Ring 3.
 //
-// THIS SPRINT PROVES:
-//   1. Init boots in Ring 3 and prints via IoPort capability
-//   2. Init parses TarFS from mapped initrd pages
-//   3. Init allocates a physical frame (SYS_ALLOC_MEMORY)
-//   4. Init maps the frame into its own address space (SYS_MAP_MEMORY)
-//   5. Init writes to the mapped page as proof of working memory management
+// SPRINT 10, PHASE 1 PROVES:
+//   1. Init boots the Ring 3 global allocator (linked_list_allocator)
+//   2. Uses capability-gated SYS_ALLOC_MEMORY + SYS_MAP_MEMORY to build heap
+//   3. Constructs a Vec<u64> in Ring 3 — proving dynamic allocation works
+//   4. Retains all Sprint 9 proofs (TarFS parsing, memory management)
 //
 // =============================================================================
 
 #![no_std]
 #![no_main]
+
+extern crate alloc;
+
+use alloc::vec::Vec;
 
 // =============================================================================
 // Constants — Capability Slot Layout
@@ -50,11 +53,14 @@ const LSR_TX_EMPTY: u8 = 1 << 5;
 /// Virtual address where the kernel maps the initrd TarFS pages.
 const INITRD_BASE: usize = 0x1000_0000;
 
-/// CNode slot for the first dynamically allocated frame.
-const FRAME_SLOT: u64 = 10;
+/// CNode scratch slot for dynamic frame allocation (reused each iteration).
+const SCRATCH_SLOT: u64 = 10;
 
-/// Virtual address where we'll map the allocated frame.
-const TEST_MAP_VADDR: u64 = 0x2000_0000;
+/// Virtual base address for the Ring 3 heap.
+const HEAP_BASE: u64 = 0x4000_0000;
+
+/// Number of 4 KiB pages for the Ring 3 heap (100 pages = 400 KiB).
+const HEAP_PAGES: u64 = 100;
 
 // =============================================================================
 // Init Entry Point
@@ -73,7 +79,7 @@ pub extern "C" fn _start() -> ! {
     print_str(b"\r\n");
     print_str(b"==========================================================\r\n");
     print_str(b"  [init] The God Process (PID 1) -- Ring 3\r\n");
-    print_str(b"  Sprint 9 Phase 3: Init Lifecycle Proof\r\n");
+    print_str(b"  Sprint 10 Phase 1: Ring 3 Global Allocator\r\n");
     print_str(b"==========================================================\r\n");
     print_str(b"\r\n");
 
@@ -82,11 +88,7 @@ pub extern "C" fn _start() -> ! {
     // =========================================================================
     print_str(b"[init] Parsing initrd TarFS at 0x1000_0000...\r\n");
 
-    // The kernel told us the initrd size via a marker at a known location.
-    // For now, scan until we hit two consecutive zero blocks (USTAR EOF).
     let initrd = unsafe {
-        // We don't have the exact size, so use a generous upper bound.
-        // The TarFS scanner stops at the first two zero-blocks.
         core::slice::from_raw_parts(INITRD_BASE as *const u8, 4 * 1024 * 1024)
     };
 
@@ -96,69 +98,73 @@ pub extern "C" fn _start() -> ! {
     print_str(b" file(s) in initrd\r\n");
 
     // =========================================================================
-    // Phase 3: Prove memory allocation (SYS_ALLOC_MEMORY)
+    // Phase 3: Bootstrap Ring 3 Heap
     // =========================================================================
-    print_str(b"\r\n[init] Proving SYS_ALLOC_MEMORY...\r\n");
-    print_str(b"[init]   alloc_slot=1 (PmmAllocator), target_slot=10\r\n");
+    print_str(b"\r\n[init] Bootstrapping Ring 3 heap...\r\n");
+    print_str(b"[init]   heap_base=0x4000_0000, pages=100 (400 KiB)\r\n");
+    print_str(b"[init]   alloc_slot=1 (PmmAllocator), proc_slot=3 (self)\r\n");
 
-    match libmnos::process::sys_alloc_memory(PMM_SLOT, FRAME_SLOT) {
-        Ok(()) => {
-            print_str(b"[init]   OK: Physical frame allocated into slot 10\r\n");
-        }
-        Err(e) => {
-            print_str(b"[init]   FAIL: SYS_ALLOC_MEMORY returned error ");
-            print_hex(e.0);
-            print_str(b"\r\n");
-            halt_loop();
-        }
+    libmnos::heap::init_heap(HEAP_BASE, HEAP_PAGES, PMM_SLOT, SELF_PROC_SLOT, SCRATCH_SLOT);
+
+    print_str(b"[init]   OK: Heap initialized (400 KiB at 0x4000_0000)\r\n");
+
+    // =========================================================================
+    // Phase 4: Prove Vec allocation in Ring 3
+    // =========================================================================
+    print_str(b"\r\n[init] Proving Vec<u64> allocation in Ring 3...\r\n");
+
+    let mut vec: Vec<u64> = Vec::new();
+    vec.push(0xDEAD_BEEF);
+    vec.push(0xCAFE_BABE);
+    vec.push(0x1337_C0DE);
+
+    print_str(b"[init]   vec.len() = ");
+    print_dec(vec.len() as u64);
+    print_str(b"\r\n");
+
+    for (i, &val) in vec.iter().enumerate() {
+        print_str(b"[init]   vec[");
+        print_dec(i as u64);
+        print_str(b"] = ");
+        print_hex(val);
+        print_str(b"\r\n");
     }
 
-    // =========================================================================
-    // Phase 4: Prove memory mapping (SYS_MAP_MEMORY)
-    // =========================================================================
-    print_str(b"[init] Proving SYS_MAP_MEMORY...\r\n");
-    print_str(b"[init]   proc_slot=3 (self), frame_slot=10, vaddr=0x2000_0000\r\n");
+    // Validate values are correct
+    assert_eq!(vec[0], 0xDEAD_BEEF);
+    assert_eq!(vec[1], 0xCAFE_BABE);
+    assert_eq!(vec[2], 0x1337_C0DE);
 
-    // flags: bit 0 = WRITABLE, bit 1 = 0 → NO_EXECUTE
-    match libmnos::process::sys_map_memory(SELF_PROC_SLOT, FRAME_SLOT, TEST_MAP_VADDR, 0x01) {
-        Ok(()) => {
-            print_str(b"[init]   OK: Frame mapped at 0x2000_0000 (WRITABLE)\r\n");
-        }
-        Err(e) => {
-            print_str(b"[init]   FAIL: SYS_MAP_MEMORY returned error ");
-            print_hex(e.0);
-            print_str(b"\r\n");
-            halt_loop();
-        }
-    }
+    print_str(b"[init]   OK: All values verified!\r\n");
 
-    // =========================================================================
-    // Phase 5: Write to the mapped page as proof
-    // =========================================================================
-    print_str(b"[init] Writing magic value 0xDEADBEEF to 0x2000_0000...\r\n");
-    unsafe {
-        let ptr = TEST_MAP_VADDR as *mut u32;
-        core::ptr::write_volatile(ptr, 0xDEAD_BEEF);
-        let readback = core::ptr::read_volatile(ptr);
-        if readback == 0xDEAD_BEEF {
-            print_str(b"[init]   OK: Readback matches -- memory management PROVEN!\r\n");
-        } else {
-            print_str(b"[init]   FAIL: Readback mismatch!\r\n");
-            halt_loop();
-        }
+    // Prove we can grow the vector (forces reallocation)
+    print_str(b"\r\n[init] Proving Vec growth (reallocation)...\r\n");
+    for i in 0..100u64 {
+        vec.push(i);
     }
+    print_str(b"[init]   vec.len() = ");
+    print_dec(vec.len() as u64);
+    print_str(b" (after pushing 100 more)\r\n");
+    print_str(b"[init]   vec.capacity() = ");
+    print_dec(vec.capacity() as u64);
+    print_str(b"\r\n");
+    print_str(b"[init]   OK: Vector reallocation succeeded!\r\n");
+
+    // Drop the vector to prove the allocator handles deallocation
+    drop(vec);
+    print_str(b"[init]   OK: Vec dropped (memory returned to allocator)\r\n");
 
     // =========================================================================
     // Victory Banner
     // =========================================================================
     print_str(b"\r\n");
     print_str(b"==========================================================\r\n");
-    print_str(b"  [init] SUCCESS: The God Process holds absolute power!\r\n");
-    print_str(b"  [init]   - TarFS parsed from Ring 3 memory\r\n");
-    print_str(b"  [init]   - Physical frame allocated (SYS_ALLOC_MEMORY)\r\n");
-    print_str(b"  [init]   - Frame mapped into own space (SYS_MAP_MEMORY)\r\n");
-    print_str(b"  [init]   - Write + readback verified\r\n");
-    print_str(b"  [init] Sprint 9 Phase 3 COMPLETE.\r\n");
+    print_str(b"  [init] SUCCESS: Ring 3 Global Allocator PROVEN!\r\n");
+    print_str(b"  [init]   - 100 pages mapped via capability syscalls\r\n");
+    print_str(b"  [init]   - linked_list_allocator initialized (400 KiB)\r\n");
+    print_str(b"  [init]   - Vec<u64> constructed, grown, and dropped\r\n");
+    print_str(b"  [init]   - Dynamic allocation works in Ring 3!\r\n");
+    print_str(b"  [init] Sprint 10 Phase 1 COMPLETE.\r\n");
     print_str(b"==========================================================\r\n");
 
     halt_loop();

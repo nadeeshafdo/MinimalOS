@@ -29,9 +29,25 @@
 // =============================================================================
 
 #![no_std]
+#![feature(alloc_error_handler)]
+
+extern crate alloc;
 
 pub mod syscall;
 pub mod ipc;
 pub mod io;
 pub mod irq;
 pub mod process;
+pub mod heap;
+
+use linked_list_allocator::LockedHeap;
+
+/// Ring 3 global allocator — fed by `init_heap()` at startup.
+#[global_allocator]
+pub static HEAP: LockedHeap = LockedHeap::empty();
+
+/// Out-of-memory handler for the `alloc` crate.
+#[alloc_error_handler]
+fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
+    panic!("Ring 3 heap OOM: {:?}", layout);
+}
