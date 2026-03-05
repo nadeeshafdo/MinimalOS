@@ -818,6 +818,105 @@ pub unsafe fn split_huge_page(
 // Internal helpers
 // =============================================================================
 
+// =============================================================================
+// Address space destruction
+// =============================================================================
+
+/// Destroys a user-mode address space by walking the lower half of a PML4
+/// (indices 0..=255) and freeing every user page frame along with the
+/// intermediate page-table frames, then the PML4 frame itself.
+///
+/// The upper half (indices 256..=511) is the kernel mirror and is **never
+/// touched** — freeing those would instantly triple-fault the machine.
+///
+/// # Algorithm (bottom-up)
+/// 1. For each present PML4 entry [0..256):
+///    a. Walk the PDPT (512 entries).
+///    b. For each present PDPT entry, walk the PD.
+///    c. For each present PD entry:
+///       - If HUGE_PAGE (2 MiB leaf): free the 2 MiB-aligned frame.
+///       - Otherwise walk the PT:
+///         * Free every present 4 KiB leaf frame.
+///         * Then free the PT frame.
+///    d. Free the PD frame.
+///    e. Free the PDPT frame.
+/// 2. Finally, free the PML4 frame.
+///
+/// # Safety
+/// - `pml4_phys` must be a valid, page-aligned physical address of a PML4
+///   that is **not** the currently active CR3 on any core.
+/// - The address space must have no running threads (all have been reaped).
+/// - Page table frames must have been allocated via PMM.
+pub unsafe fn destroy_user_address_space(pml4_phys: PhysAddr) -> (usize, usize) {
+    let pml4 = unsafe { &*pml4_phys.to_virt().as_ptr::<PageTable>() };
+    let mut freed_user_pages: usize = 0;
+    let mut freed_table_pages: usize = 0;
+
+    // ONLY the lower half — indices 0..256.  Index 256+ is the kernel mirror.
+    for pml4_idx in 0..256usize {
+        let pml4e = pml4[pml4_idx];
+        if !pml4e.is_present() {
+            continue;
+        }
+        let pdpt_phys = pml4e.addr();
+        let pdpt = unsafe { &*pdpt_phys.to_virt().as_ptr::<PageTable>() };
+
+        for pdpt_idx in 0..512usize {
+            let pdpte = pdpt[pdpt_idx];
+            if !pdpte.is_present() {
+                continue;
+            }
+            if pdpte.is_huge() {
+                // 1 GiB huge page — free the single frame
+                pmm::free_frame(pdpte.addr());
+                freed_user_pages += 512 * 512; // equivalent 4K pages
+                continue;
+            }
+            let pd_phys = pdpte.addr();
+            let pd = unsafe { &*pd_phys.to_virt().as_ptr::<PageTable>() };
+
+            for pd_idx in 0..512usize {
+                let pde = pd[pd_idx];
+                if !pde.is_present() {
+                    continue;
+                }
+                if pde.is_huge() {
+                    // 2 MiB huge page — free the single frame
+                    pmm::free_frame(pde.addr());
+                    freed_user_pages += 512; // equivalent 4K pages
+                    continue;
+                }
+                // Walk the PT (level 1) — leaf 4 KiB pages
+                let pt_phys = pde.addr();
+                let pt = unsafe { &*pt_phys.to_virt().as_ptr::<PageTable>() };
+
+                for pt_idx in 0..512usize {
+                    let pte = pt[pt_idx];
+                    if pte.is_present() {
+                        pmm::free_frame(pte.addr());
+                        freed_user_pages += 1;
+                    }
+                }
+                // Free the PT frame
+                pmm::free_frame(pt_phys);
+                freed_table_pages += 1;
+            }
+            // Free the PD frame
+            pmm::free_frame(pd_phys);
+            freed_table_pages += 1;
+        }
+        // Free the PDPT frame
+        pmm::free_frame(pdpt_phys);
+        freed_table_pages += 1;
+    }
+
+    // Free the PML4 frame itself
+    pmm::free_frame(pml4_phys);
+    freed_table_pages += 1;
+
+    (freed_user_pages, freed_table_pages)
+}
+
 /// If the entry is present, return the physical address it points to.
 /// If not, allocate a new zeroed page table, set the entry, and return its address.
 fn get_or_create_next_table(
