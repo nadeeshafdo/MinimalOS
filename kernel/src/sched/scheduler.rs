@@ -332,10 +332,12 @@ pub unsafe fn schedule() {
     unsafe { context::switch_context(prev_rsp_ptr, next_rsp_val); }
 }
 
-/// Reaper daemon: runs as a normal kernel thread. Wakes when there are
-/// entries in `DEAD_QUEUE`, pops a dead `Box<Thread>` and performs cleanup.
-/// For now it logs the reaped thread; later it will free kernel stacks,
-/// unmap user pages and drop process state.
+/// Reaper daemon: runs as a normal kernel thread. Wakes periodically, pops
+/// dead `Box<Thread>` entries from `DEAD_QUEUE` and performs full teardown:
+///   1. Reclaim the kernel stack physical frames (16 KiB = 4 pages)
+///   2. If this was the last thread of a user process, destroy the entire
+///      address space via the VMM PML4 walker and purge the PROCESS_TABLE.
+///   3. Drop the `Box<Thread>` (frees the TCB heap allocation).
 pub extern "C" fn reaper_entry(_arg: u64) {
     loop {
         // Acquire the dead queue and pop one if available.
@@ -344,20 +346,79 @@ pub extern "C" fn reaper_entry(_arg: u64) {
             // Nothing to do — release lock and halt until an interrupt
             // (timer/IPI) wakes us. We'll re-check after waking.
             drop(guard);
-            unsafe { cpu::halt(); }
+            cpu::halt();
             continue;
         }
 
         let dead = guard.pop().unwrap();
         drop(guard);
 
-        kprintln!("[reaper] Reaped thread {} ('{}')", dead.id, dead.name_str());
+        let tid = dead.id;
+        let name = dead.name_str();
 
-        // TODO: perform actual teardown: free kernel stack physical frames,
-        // walk and free user PML4 lower-half, drop CNode caps, remove from
-        // PROCESS_TABLE, and finally drop the Thread box to free TCB memory.
-        // For now, dropping `dead` will free the TCB; stack/pages are leaked
-        // until the PML4 walker is implemented in a follow-up step.
+        // Snapshot PMM stats before reclamation.
+        let before = crate::memory::pmm::stats();
+
+        // ── 1. Reclaim kernel stack ────────────────────────────────────────
+        let kstack_base = dead.kernel_stack_base;
+        let kstack_size = dead.kernel_stack_size;
+        if kstack_base != 0 && kstack_size != 0 {
+            // kernel_stack_base is a virtual address in the HHDM. Subtract
+            // the HHDM offset to recover the physical base, then free each
+            // contiguous 4 KiB page.
+            let hhdm = crate::memory::address::hhdm_offset();
+            let phys_base = kstack_base - hhdm;
+            let page_count = kstack_size / crate::memory::address::PAGE_SIZE as usize;
+            for i in 0..page_count {
+                let frame = crate::memory::address::PhysAddr::new(
+                    phys_base + (i as u64) * crate::memory::address::PAGE_SIZE,
+                );
+                crate::memory::pmm::free_frame(frame);
+            }
+            kprintln!("[reaper] Thread {} '{}': freed {} kernel stack pages (phys {:#010X})",
+                tid, name, page_count, phys_base);
+        }
+
+        // ── 2. Process teardown (if user process & last thread) ────────────
+        let proc_ptr = dead.process;
+        let is_user = dead.user_rip != 0;
+        // Drop the Thread TCB — its heap memory is freed here.
+        drop(dead);
+
+        if is_user && !proc_ptr.is_null() {
+            let proc = unsafe { &*proc_ptr };
+            let pid = proc.pid;
+            let pml4_phys_val = proc.pml4_phys;
+
+            // Remove from PROCESS_TABLE and take ownership back.
+            if let Some(ptr) = crate::sched::process::unregister_process(pid) {
+                // Destroy the entire lower-half address space.
+                let pml4 = crate::memory::address::PhysAddr::new(pml4_phys_val);
+                let (user_pages, table_pages) = unsafe {
+                    crate::memory::vmm::destroy_user_address_space(pml4)
+                };
+                kprintln!(
+                    "[reaper] PID {} address space destroyed: {} user pages + {} table pages freed",
+                    pid, user_pages, table_pages
+                );
+
+                // Drop the Process (frees CNode + PCB heap allocation).
+                let _ = unsafe { alloc::boxed::Box::from_raw(ptr) };
+                kprintln!("[reaper] PID {} purged from PROCESS_TABLE", pid);
+            }
+        }
+
+        // Snapshot PMM stats after reclamation.
+        let after = crate::memory::pmm::stats();
+        let reclaimed = after.free_frames as i64 - before.free_frames as i64;
+        kprintln!(
+            "[reaper] Thread {} done — PMM free: {} → {} ({}{} frames)",
+            tid,
+            before.free_frames,
+            after.free_frames,
+            if reclaimed >= 0 { "+" } else { "" },
+            reclaimed
+        );
     }
 }
 
