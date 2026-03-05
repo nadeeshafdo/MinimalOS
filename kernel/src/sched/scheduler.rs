@@ -21,10 +21,13 @@
 extern crate alloc;
 use alloc::collections::VecDeque;
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 
 
 use crate::kprintln;
+use crate::arch::cpu;
+use crate::sync::spinlock::SpinLock;
 use crate::sched::thread::{Thread, ThreadState};
 use crate::sched::context;
 use crate::sched::percpu::CpuLocal;
@@ -69,6 +72,9 @@ impl RunQueue {
 /// Temporary global queue for threads spawned before CpuLocal is ready.
 static BOOT_QUEUE: crate::sync::spinlock::SpinLock<RunQueue> =
     crate::sync::spinlock::SpinLock::new(RunQueue::new());
+
+/// Global queue of dead threads awaiting cleanup by the reaper daemon.
+static DEAD_QUEUE: SpinLock<Vec<Box<Thread>>> = SpinLock::new(Vec::new());
 
 /// Spawns a new kernel thread and adds it to the boot queue.
 ///
@@ -154,6 +160,18 @@ pub fn init(kernel_process: *mut Process) {
         }
         kprintln!("[sched] Drained {} threads from boot queue to BSP run queue", drained);
     }
+
+    // Spawn the reaper daemon as a kernel thread and add it to the BSP run queue.
+    // The reaper will pull dead threads from `DEAD_QUEUE` and perform teardown.
+    let reaper_thread = Thread::new("reaper", reaper_entry, 0, kernel_process);
+    unsafe { (*rq_ptr).push(reaper_thread); }
+    kprintln!("[sched] Reaper daemon spawned");
+
+    // Spawn a short-lived test thread that returns immediately so we can
+    // exercise the reaper path during boot and observe its serial output.
+    let exiter = Thread::new("test-exiter", test_exiter, 0, kernel_process);
+    unsafe { (*rq_ptr).push(exiter); }
+    kprintln!("[sched] Spawned test-exiter to exercise reaper");
 
     // 5. Arm the LAPIC timer for periodic preemption (10ms quantum)
     crate::arch::lapic::set_timer_oneshot(10_000); // 10ms
@@ -251,10 +269,11 @@ pub unsafe fn schedule() {
             // switch_context RSP save because the Endpoint keeps it alive.
         }
         ThreadState::Dead => {
-            // Thread has terminated. For now, leak the TCB memory.
-            // TODO: Free kernel stack pages and TCB in a future sprint.
-            // We can't free the stack RIGHT NOW because switch_context
-            // is about to save RSP into it — we're still on this stack.
+            // Thread has terminated. Move ownership of the TCB to the
+            // global DEAD_QUEUE so the reaper daemon can reclaim resources
+            // (kernel stack, page tables, capabilities) off-stack.
+            let current_box = unsafe { Box::from_raw(current_ptr) };
+            DEAD_QUEUE.lock().push(current_box);
         }
         ThreadState::Ready => {
             // Shouldn't happen — Ready means it should be in the RunQueue.
@@ -313,6 +332,35 @@ pub unsafe fn schedule() {
     unsafe { context::switch_context(prev_rsp_ptr, next_rsp_val); }
 }
 
+/// Reaper daemon: runs as a normal kernel thread. Wakes when there are
+/// entries in `DEAD_QUEUE`, pops a dead `Box<Thread>` and performs cleanup.
+/// For now it logs the reaped thread; later it will free kernel stacks,
+/// unmap user pages and drop process state.
+pub extern "C" fn reaper_entry(_arg: u64) {
+    loop {
+        // Acquire the dead queue and pop one if available.
+        let mut guard = DEAD_QUEUE.lock();
+        if guard.is_empty() {
+            // Nothing to do — release lock and halt until an interrupt
+            // (timer/IPI) wakes us. We'll re-check after waking.
+            drop(guard);
+            unsafe { cpu::halt(); }
+            continue;
+        }
+
+        let dead = guard.pop().unwrap();
+        drop(guard);
+
+        kprintln!("[reaper] Reaped thread {} ('{}')", dead.id, dead.name_str());
+
+        // TODO: perform actual teardown: free kernel stack physical frames,
+        // walk and free user PML4 lower-half, drop CNode caps, remove from
+        // PROCESS_TABLE, and finally drop the Thread box to free TCB memory.
+        // For now, dropping `dead` will free the TCB; stack/pages are leaked
+        // until the PML4 walker is implemented in a follow-up step.
+    }
+}
+
 /// Test thread A — prints iterations to verify preemption.
 pub extern "C" fn test_thread_a(_arg: u64) {
     for i in 0..5 {
@@ -329,6 +377,14 @@ pub extern "C" fn test_thread_b(_arg: u64) {
         busy_wait();
     }
     kprintln!("[thread-B] DONE");
+}
+
+/// Short-lived test thread that returns immediately to exercise thread_exit
+/// and the reaper pipeline.
+pub extern "C" fn test_exiter(_arg: u64) {
+    kprintln!("[test-exiter] running and will return");
+    // Returning from this function will cause `thread_exit()` to be called
+    // by the entry trampoline and the thread will be marked Dead.
 }
 
 /// Busy-wait that actually burns CPU time (~50ms at typical clock speeds).
