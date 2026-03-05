@@ -77,6 +77,13 @@ pub fn lookup_process(pid: u64) -> Option<*mut Process> {
     PROCESS_TABLE.lock().0.get(&pid).copied()
 }
 
+/// Removes a process from the global table. Returns the raw pointer if it
+/// was registered, or None. The caller is responsible for dropping the
+/// Process (e.g., via `Box::from_raw`) to reclaim the CNode and PCB memory.
+pub fn unregister_process(pid: u64) -> Option<*mut Process> {
+    PROCESS_TABLE.lock().0.remove(&pid)
+}
+
 /// Global process ID counter. PID 0 is reserved for the kernel.
 static NEXT_PID: AtomicU64 = AtomicU64::new(1);
 
