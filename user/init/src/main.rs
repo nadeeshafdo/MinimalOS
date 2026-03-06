@@ -13,13 +13,17 @@
 // The kernel maps the initrd TarFS pages at virtual address 0x1000_0000
 // (read-only) so Init can parse the archive from Ring 3.
 //
-// SPRINT 10, PHASE 2 PROVES:
+// SPRINT 10, PHASE 3 PROVES:
 //   1. Ring 3 global allocator (linked_list_allocator) — 4 MiB heap
 //   2. Capability-gated SYS_ALLOC_MEMORY + SYS_MAP_MEMORY for heap
 //   3. TarFS extraction of a .wasm payload from initrd
 //   4. wasmi WebAssembly interpreter running entirely in Ring 3
-//   5. Wasm module instantiation + exported function call → result 42
-//   6. Software Fault Isolation proven: untrusted code in a Wasm sandbox
+//   5. Wasm add(10, 32) → 42 (computational isolation)
+//   6. host_print() host function registered via wasmi Linker
+//   7. Wasm run_guest() calls host_print(ptr, len)
+//   8. Host reads Wasm linear memory → COM1 via IoPort capability
+//   9. Full chain: Wasm→wasmi→Ring3 Heap→host_print→SYS_PORT_OUT→COM1
+//  10. SFI Hardware Bridge: PROVEN
 //
 // =============================================================================
 
@@ -29,7 +33,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use wasmi::{Engine, Linker, Module, Store, Value};
+use wasmi::{Caller, Engine, Linker, Module, Store, Value};
 
 // =============================================================================
 // Constants — Capability Slot Layout
@@ -83,7 +87,7 @@ pub extern "C" fn _start() -> ! {
     print_str(b"\r\n");
     print_str(b"==========================================================\r\n");
     print_str(b"  [init] The God Process (PID 1) -- Ring 3\r\n");
-    print_str(b"  Sprint 10 Phase 2: Wasm SFI via wasmi\r\n");
+    print_str(b"  Sprint 10 Phase 3: SFI Hardware Bridge\r\n");
     print_str(b"==========================================================\r\n");
     print_str(b"\r\n");
 
@@ -168,9 +172,36 @@ pub extern "C" fn _start() -> ! {
     print_str(b"[init]   Creating Store...\r\n");
     let mut store = Store::new(&engine, ());
 
-    // Step 4: Create a Linker (no host functions to link)
-    print_str(b"[init]   Creating Linker...\r\n");
-    let linker = Linker::<()>::new(&engine);
+    // Step 4: Create a Linker and register the host_print bridge
+    print_str(b"[init]   Creating Linker + registering host_print...\r\n");
+    let mut linker = Linker::<()>::new(&engine);
+
+    // Register host_print(ptr: i32, len: i32) — the SFI hardware bridge.
+    // When Wasm calls host_print, wasmi invokes this closure which:
+    //   1. Reads the Wasm linear memory at [ptr..ptr+len]
+    //   2. Prints each byte to COM1 via the IoPort capability (Slot 2)
+    linker.func_wrap("env", "host_print", |caller: Caller<'_, ()>, ptr: i32, len: i32| {
+        // Extract the Wasm module's exported linear memory
+        let memory = match caller.get_export("memory") {
+            Some(ext) => match ext.into_memory() {
+                Some(mem) => mem,
+                None => return,
+            },
+            None => return,
+        };
+
+        // Allocate a buffer on the Ring 3 heap and read from Wasm memory
+        let size = len as usize;
+        let mut buffer = alloc::vec![0u8; size];
+        if memory.read(&caller, ptr as usize, &mut buffer).is_err() {
+            return;
+        }
+
+        // Print each byte to COM1 using polled TX via IoPort capability
+        for &b in &buffer {
+            host_write_byte(b);
+        }
+    }).expect("[init] FATAL: failed to register host_print");
 
     // Step 5: Instantiate the module
     print_str(b"[init]   Instantiating...\r\n");
@@ -189,7 +220,7 @@ pub extern "C" fn _start() -> ! {
     };
 
     // =========================================================================
-    // Phase 7: Call exported add(10, 32) → expect 42
+    // Phase 7: Call exported add(10, 32) → expect 42  (Sprint 10 Phase 2 proof)
     // =========================================================================
     print_str(b"\r\n[init] Calling add(10, 32) from Wasm...\r\n");
 
@@ -218,10 +249,37 @@ pub extern "C" fn _start() -> ! {
         }
     };
 
-    // Print the result
     print_str(b"[init]   Result: ");
     print_i32(result_val);
     print_str(b"\r\n");
+
+    // =========================================================================
+    // Phase 8: Call run_guest() — Wasm → Host bridge  (Sprint 10 Phase 3 proof)
+    //
+    //   Wasm run_guest() → host_print(ptr, len) → wasmi host closure
+    //   → Memory::read from Wasm linear memory → write_byte() per char
+    //   → SYS_PORT_OUT via IoPort capability → COM1 hardware
+    // =========================================================================
+    print_str(b"\r\n[init] Calling run_guest() from Wasm...\r\n");
+    print_str(b"[init]   (Wasm will call host_print -> COM1 via IoPort cap)\r\n");
+
+    let run_func = match instance.get_func(&store, "run_guest") {
+        Some(f) => f,
+        None => {
+            print_str(b"[init] FATAL: export 'run_guest' not found!\r\n");
+            halt_loop();
+        }
+    };
+
+    match run_func.call(&mut store, &[], &mut []) {
+        Ok(()) => {}
+        Err(_) => {
+            print_str(b"[init] FATAL: run_guest() call failed!\r\n");
+            halt_loop();
+        }
+    }
+
+    print_str(b"[init]   run_guest() returned successfully\r\n");
 
     // =========================================================================
     // Victory Banner
@@ -234,13 +292,20 @@ pub extern "C" fn _start() -> ! {
     print_str(b"==========================================================\r\n");
     print_str(b"\r\n");
     print_str(b"==========================================================\r\n");
-    print_str(b"  [init] SUCCESS: WebAssembly SFI PROVEN in Ring 3!\r\n");
-    print_str(b"  [init]   - 1000 pages mapped (4 MiB heap)\r\n");
-    print_str(b"  [init]   - hello_wasm.wasm extracted from TarFS\r\n");
-    print_str(b"  [init]   - wasmi Engine + Module + Store created\r\n");
-    print_str(b"  [init]   - Wasm add(10,32) returned 42\r\n");
-    print_str(b"  [init]   - Software Fault Isolation: PROVEN\r\n");
-    print_str(b"  [init] Sprint 10 Phase 2 COMPLETE.\r\n");
+    print_str(b"  [init] SUCCESS: SFI Hardware Bridge PROVEN in Ring 3!\r\n");
+    print_str(b"  [init]\r\n");
+    print_str(b"  [init]   Phase 2: Wasm add(10,32) = 42   [PROVEN]\r\n");
+    print_str(b"  [init]   Phase 3: Wasm -> Host Bridge    [PROVEN]\r\n");
+    print_str(b"  [init]\r\n");
+    print_str(b"  [init]   Chain: Wasm run_guest()\r\n");
+    print_str(b"  [init]        -> host_print(ptr, len)\r\n");
+    print_str(b"  [init]        -> wasmi host closure\r\n");
+    print_str(b"  [init]        -> Memory::read (Wasm linear memory)\r\n");
+    print_str(b"  [init]        -> write_byte() per char\r\n");
+    print_str(b"  [init]        -> SYS_PORT_OUT (IoPort cap, slot 2)\r\n");
+    print_str(b"  [init]        -> COM1 hardware (0x3F8)\r\n");
+    print_str(b"  [init]\r\n");
+    print_str(b"  [init] Sprint 10 Phase 3 COMPLETE.\r\n");
     print_str(b"==========================================================\r\n");
 
     halt_loop();
@@ -262,6 +327,17 @@ fn write_byte(byte: u8) {
         }
     }
     let _ = libmnos::io::sys_port_out(IO_SLOT, COM1_DATA, byte);
+}
+
+/// Identical to `write_byte` — used by the wasmi host_print closure.
+///
+/// We define this as a separate free function so the closure passed to
+/// `linker.func_wrap()` can call it without capturing anything. The closure
+/// must satisfy `Send + Sync + 'static`, and calling a free function does
+/// not require any captures.
+#[inline(always)]
+fn host_write_byte(byte: u8) {
+    write_byte(byte);
 }
 
 /// Prints a byte string to COM1.
