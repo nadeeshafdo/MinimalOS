@@ -809,6 +809,18 @@ extern "C" fn kmain() -> ! {
             CapObject::Process { pid: init_pid },
             CapRights::ALL,
         )).expect("[init] FATAL: cannot install Process(self) capability");
+
+        // Slot 4: IoPort capability for Virtio-Block (dynamically discovered)
+        if let Some((vio_base, vio_size)) = arch::pci::get_virtio_blk_io_base() {
+            (*init_proc).cnode.insert_at(4, Capability::new(
+                CapObject::IoPort { base: vio_base, size: vio_size },
+                CapRights::ALL,
+            )).expect("[init] FATAL: cannot install Virtio IoPort capability");
+            kprintln!("[init]   Slot 4: IoPort(0x{:04X}, {}) [ALL] (Virtio-Blk)",
+                vio_base, vio_size);
+        } else {
+            kprintln!("[init]   Slot 4: (empty) — no Virtio-Blk device found");
+        }
     }
 
     kprintln!("[init] Init CNode (PID={}):",
@@ -817,6 +829,10 @@ extern "C" fn kmain() -> ! {
     kprintln!("[init]   Slot 2: IoPort(0x3F8, 8) [ALL]");
     kprintln!("[init]   Slot 3: Process(pid={}) [ALL] (self)",
         unsafe { (*init_proc).pid });
+    if arch::pci::get_virtio_blk_io_base().is_some() {
+        let (vb, vs) = arch::pci::get_virtio_blk_io_base().unwrap();
+        kprintln!("[init]   Slot 4: IoPort(0x{:04X}, {}) [ALL] (Virtio-Blk)", vb, vs);
+    }
 
     // --- 7j. Spawn Init thread owned by its Process ---
     {
