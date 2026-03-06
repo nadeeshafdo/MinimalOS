@@ -227,38 +227,66 @@
     <h2 id="wasm-hypervisor">Wasm Hypervisor (Sprint 10) <a href="#wasm-hypervisor" class="anchor">#</a></h2>
 
     <div class="callout info">
-      <div class="callout-title">✅ Proven — Software Fault Isolation via WebAssembly</div>
+      <div class="callout-title">✅ Proven — SFI Hardware Bridge (Wasm → COM1 via Capability Chain)</div>
     </div>
 
     <h3>Architecture</h3>
-    <p>Sprint 10 embeds the <strong>wasmi v0.31.2</strong> WebAssembly interpreter directly into Init (PID 1), running entirely in Ring 3. This proves that MinimalOS's capability-gated memory allocator can sustain a real-world interpreter's allocation patterns, and that untrusted code can be sandboxed via Wasm's linear memory model.</p>
+    <p>Sprint 10 embeds the <strong>wasmi v0.31.2</strong> WebAssembly interpreter directly into Init (PID 1), running entirely in Ring 3. Phase 2 proved computational isolation (<code>add(10, 32) = 42</code>). Phase 3 proved the <strong>SFI Hardware Bridge</strong>: a Wasm module calls a host function that reads from Wasm linear memory and writes to physical COM1 hardware through the capability system.</p>
 
     <h3>Components</h3>
     <table>
       <thead><tr><th>Component</th><th>Location</th><th>Description</th></tr></thead>
       <tbody>
-        <tr><td><strong>hello_wasm</strong></td><td><code>apps/hello_wasm/</code></td><td>Minimal Wasm payload: exports <code>add(a: i32, b: i32) -> i32</code>, compiled to wasm32-unknown-unknown (384 bytes)</td></tr>
+        <tr><td><strong>hello_wasm</strong></td><td><code>apps/hello_wasm/</code></td><td>Wasm payload: exports <code>add()</code> + <code>run_guest()</code>, imports <code>host_print(ptr, len)</code>, 549 bytes</td></tr>
         <tr><td><strong>wasmi engine</strong></td><td><code>user/init/</code> (dep)</td><td>wasmi v0.31.2, <code>default-features = false</code> for <code>no_std + alloc</code></td></tr>
         <tr><td><strong>tar_find()</strong></td><td><code>user/init/src/main.rs</code></td><td>USTAR TarFS extractor — locates <code>hello_wasm.wasm</code> in the initrd</td></tr>
+        <tr><td><strong>host_print closure</strong></td><td><code>user/init/src/main.rs</code></td><td>Registered via <code>Linker::func_wrap()</code> — reads Wasm memory, writes to COM1</td></tr>
       </tbody>
     </table>
 
     <h3>Execution Flow</h3>
     <ol>
       <li><strong>Heap bootstrap</strong> — 1000 pages (4 MiB) at <code>0x4000_0000</code></li>
-      <li><strong>TarFS extraction</strong> — <code>tar_find("hello_wasm.wasm")</code> returns 384-byte slice</li>
+      <li><strong>TarFS extraction</strong> — <code>tar_find("hello_wasm.wasm")</code> returns 549-byte slice</li>
       <li><strong>wasmi Engine</strong> — <code>Engine::default()</code> creates the interpreter engine on the Ring 3 heap</li>
       <li><strong>Module parse</strong> — <code>Module::new(&amp;engine, wasm_bytes)</code> validates and compiles the Wasm bytecode</li>
-      <li><strong>Instantiation</strong> — <code>Linker::new(&amp;engine).instantiate(&amp;mut store, &amp;module)?.start(&amp;mut store)?</code></li>
-      <li><strong>Function call</strong> — <code>instance.get_func(&amp;store, "add")</code> → <code>func.call(&amp;mut store, &amp;[Value::I32(10), Value::I32(32)])</code></li>
-      <li><strong>Result</strong> — <code>Value::I32(42)</code> — <strong>Software Fault Isolation proven</strong></li>
+      <li><strong>Host function registration</strong> — <code>linker.func_wrap("env", "host_print", closure)</code></li>
+      <li><strong>Instantiation</strong> — <code>linker.instantiate(&amp;mut store, &amp;module)?.start(&amp;mut store)?</code></li>
+      <li><strong>Phase 2 proof</strong> — <code>add(10, 32)</code> → <code>Value::I32(42)</code> — computational isolation</li>
+      <li><strong>Phase 3 proof</strong> — <code>run_guest()</code> → <code>host_print(ptr, len)</code> → Wasm memory read → COM1 output</li>
     </ol>
+
+    <h3>The SFI Hardware Bridge (Phase 3)</h3>
+    <p>The complete execution chain from a Wasm instruction to COM1 hardware:</p>
+    <pre class="mermaid">
+    sequenceDiagram
+      participant W as Wasm Module
+      participant E as wasmi Engine
+      participant H as host_print closure
+      participant M as Wasm Linear Memory
+      participant L as libmnos (Ring 3)
+      participant K as Kernel (Ring 0)
+      participant C as COM1 (0x3F8)
+      W->>E: call host_print(ptr, len)
+      E->>H: invoke registered closure
+      H->>M: Memory::read(ptr, len)
+      M-->>H: byte buffer
+      loop For each byte
+        H->>L: sys_port_out(slot 2, 0x3F8, byte)
+        L->>K: SYSCALL → SYS_PORT_OUT
+        K->>K: CNode slot 2 validation
+        K->>C: OUT 0x3F8, byte
+      end
+      Note over C: "Hello from the Wasm Sandbox!"
+    </pre>
 
     <h3>What This Proves</h3>
     <ul>
       <li><strong>Ring 3 heap scalability</strong> — 4 MiB heap sustains wasmi's ~11 dependency crates' allocation patterns</li>
       <li><strong>Software Fault Isolation</strong> — Wasm modules execute inside wasmi's sandbox, which itself runs in Ring 3 with no kernel privileges</li>
-      <li><strong>Capability-gated resources</strong> — every page of heap and stack memory was allocated through the capability syscall interface</li>
+      <li><strong>Host function bridging</strong> — Wasm can securely call host functions that access real hardware through capabilities</li>
+      <li><strong>Wasm linear memory access</strong> — Host reads data from the Wasm module's isolated address space via <code>Memory::read()</code></li>
+      <li><strong>Capability-gated I/O</strong> — every byte written to COM1 traverses the full CNode validation path (IoPort slot 2)</li>
       <li><strong>User stack sizing</strong> — 64 pages (256 KiB) for wasmi's recursive wasm parser (up from 1 page)</li>
     </ul>
 
