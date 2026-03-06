@@ -61,6 +61,7 @@
         <li><a href="#sprint-7">Sprint 7 — Init Process &amp; First Program</a></li>
         <li><a href="#sprint-95">Sprint 9.5 — Reaper &amp; Resource Teardown ✅</a></li>
         <li><a href="#sprint-10">Sprint 10 — Wasm Hypervisor ✅</a></li>
+        <li><a href="#sprint-11">Sprint 11 — PCI &amp; Device Discovery 🔧</a></li>
         <li><a href="#future-milestones">Future Milestones</a></li>
         <li><a href="#contributing">Contributing</a></li>
       </ul>
@@ -82,6 +83,7 @@
         <tr><td>7–9</td><td><a href="subsystems/userspace.html">Userspace</a></td><td><span class="label label-green">✅ Complete</span></td><td>Init (PID 1), libmnos, TarFS, delegation, memory management</td></tr>
         <tr><td>9.5</td><td>Reaper</td><td><span class="label label-green">✅ Complete</span></td><td>DEAD_QUEUE, kernel stack reclamation, VMM walker, process teardown</td></tr>
         <tr><td>10</td><td>Wasm Hypervisor</td><td><span class="label label-green">✅ Complete</span></td><td>Ring 3 heap (4 MiB), wasmi interpreter, SFI hardware bridge (Wasm→COM1)</td></tr>
+        <tr><td>11</td><td>PCI &amp; Devices</td><td><span class="label label-yellow">🔧 In Progress</span></td><td>PCI bus enumeration, BAR parsing, virtio-blk driver, capability-gated MMIO</td></tr>
       </tbody>
     </table>
 
@@ -210,6 +212,22 @@
       <li class="done"><strong>Host function bridge</strong> — <code>host_print(ptr, len)</code> registered via <code>Linker::func_wrap()</code>, reads Wasm linear memory (Phase 3)</li>
       <li class="done"><strong>SFI hardware bridge</strong> — Wasm <code>run_guest()</code> → <code>host_print</code> → <code>Memory::read</code> → <code>SYS_PORT_OUT</code> → COM1 hardware (Phase 3)</li>
       <li class="done"><strong>“Hello from the Wasm Sandbox!”</strong> — printed from inside Wasm through the full capability chain (Phase 3)</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="sprint-11">Sprint 11 — PCI &amp; Device Discovery 🔧 <a href="#sprint-11" class="anchor">#</a></h2>
+    <blockquote><em>The Hardware Census — teach the kernel to see every device on the PCI bus.</em></blockquote>
+    <ul class="checklist">
+      <li class="done"><strong>PCI Configuration Space driver</strong> — legacy Port I/O (0xCF8/0xCFC), <code>read_config_32(bus, device, func, offset)</code></li>
+      <li class="done"><strong>Bus enumeration</strong> — brute-force scan 256 buses × 32 devices, multi-function detection via Header Type bit 7</li>
+      <li class="done"><strong>Device logging</strong> — BDF address, Vendor/Device ID, Class/Subclass/ProgIF with human-readable names</li>
+      <li class="done"><strong>Virtio-blk detection</strong> — Vendor 0x1AF4, Device 0x1001 confirmed on QEMU with <code>-drive if=virtio</code></li>
+      <li class="done"><strong>Full QEMU topology proven</strong> — 7 devices: Host Bridge, ISA Bridge, IDE, ACPI Bridge, VGA, Ethernet, Virtio Block</li>
+      <li>BAR parsing — decode Base Address Registers (MMIO vs I/O port, 32-bit vs 64-bit)</li>
+      <li>PCI capability list walking — MSI/MSI-X detection for interrupt-driven I/O</li>
+      <li>Capability-gated MMIO — new CapType::MmioRegion for userspace device drivers</li>
+      <li>Virtio-blk driver — block read/write through virtqueues, Ring 3 driver process</li>
     </ul>
 
     <hr>

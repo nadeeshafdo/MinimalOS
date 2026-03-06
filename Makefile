@@ -278,7 +278,9 @@ run: iso
 	@echo "  Booting MinimalOS NextGen (debug) in QEMU..."
 	@echo "  Press Ctrl+A, X to exit."
 	@echo ""
-	$(QEMU) -cdrom $(ISO_DEBUG) -smp $(QEMU_CPUS) -m $(QEMU_MEMORY) $(QEMU_FLAGS)
+	@test -f $(BUILD_DIR)/virtio-test.img || dd if=/dev/zero of=$(BUILD_DIR)/virtio-test.img bs=1M count=1 2>/dev/null
+	$(QEMU) -cdrom $(ISO_DEBUG) -smp $(QEMU_CPUS) -m $(QEMU_MEMORY) $(QEMU_FLAGS) \
+		-drive file=$(BUILD_DIR)/virtio-test.img,format=raw,if=virtio
 
 run-release: iso-release
 	@echo ""
@@ -295,7 +297,9 @@ TIMEOUT ?= 10
 run-headless: iso
 	@echo "[qemu] Booting headless (timeout=$(TIMEOUT)s)..."
 	@rm -f $(BUILD_DIR)/serial.log
+	@test -f $(BUILD_DIR)/virtio-test.img || dd if=/dev/zero of=$(BUILD_DIR)/virtio-test.img bs=1M count=1 2>/dev/null
 	@$(QEMU) -cdrom $(ISO_DEBUG) -smp $(QEMU_CPUS) -m $(QEMU_MEMORY) \
+		-drive file=$(BUILD_DIR)/virtio-test.img,format=raw,if=virtio \
 		-serial file:$(BUILD_DIR)/serial.log \
 		-display none \
 		-no-reboot -no-shutdown \
