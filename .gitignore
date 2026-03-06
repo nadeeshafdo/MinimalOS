@@ -1,5 +1,5 @@
 # Build artifacts (cargo output)
-/target/
+target/
 
 # Agent
 .github/copilot-instructions.md

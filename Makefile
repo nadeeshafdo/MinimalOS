@@ -54,6 +54,9 @@ INIT_ELF_RELEASE       := $(BUILD_DIR)/$(TARGET)/release/init
 INITRD_DEBUG           := $(BUILD_DIR)/initrd-debug.tar
 INITRD_RELEASE         := $(BUILD_DIR)/initrd-release.tar
 
+# Wasm payload paths (compiled separately with wasm32-unknown-unknown target)
+WASM_HELLO_RELEASE     := $(BUILD_DIR)/wasm32-unknown-unknown/release/hello_wasm.wasm
+
 # Output ISO paths
 ISO_DEBUG       := $(BUILD_DIR)/minimalos-debug.iso
 ISO_RELEASE     := $(BUILD_DIR)/minimalos-release.iso
@@ -128,7 +131,14 @@ release: kernel-release
 # The initrd.tar is loaded by Limine as a boot module and parsed by the
 # kernel's TarFS parser at runtime. This replaces the flat binary hack.
 
-.PHONY: kernel-debug kernel-release serial-drv-debug serial-drv-release init-debug init-release initrd-debug initrd-release
+.PHONY: kernel-debug kernel-release serial-drv-debug serial-drv-release init-debug init-release initrd-debug initrd-release wasm-hello
+
+# --- Wasm payload (built with standard cargo, NOT workspace — separate target) ---
+
+wasm-hello:
+	@echo "[wasm] Building hello_wasm for wasm32-unknown-unknown..."
+	cargo build --manifest-path apps/hello_wasm/Cargo.toml --target wasm32-unknown-unknown --target-dir $(BUILD_DIR) --release
+	@echo "[wasm] $(WASM_HELLO_RELEASE) ($$(wc -c < $(WASM_HELLO_RELEASE)) bytes)"
 
 # --- User binaries ---
 
@@ -150,17 +160,19 @@ init-release:
 
 # --- Initrd TAR archive (contains all userspace ELF binaries) ---
 
-initrd-debug: init-debug serial-drv-debug
+initrd-debug: init-debug serial-drv-debug wasm-hello
 	@mkdir -p $(BUILD_DIR)/initrd-staging
 	@cp $(INIT_ELF_DEBUG) $(BUILD_DIR)/initrd-staging/init
 	@cp $(SERIAL_DRV_ELF_DEBUG) $(BUILD_DIR)/initrd-staging/serial_drv
+	@cp $(WASM_HELLO_RELEASE) $(BUILD_DIR)/initrd-staging/hello_wasm.wasm
 	@cd $(BUILD_DIR)/initrd-staging && tar cf ../initrd-debug.tar --format=ustar *
 	@echo "[initrd] $(INITRD_DEBUG) ($$(wc -c < $(INITRD_DEBUG)) bytes, $$(tar tf $(INITRD_DEBUG) | wc -l) files)"
 
-initrd-release: init-release serial-drv-release
+initrd-release: init-release serial-drv-release wasm-hello
 	@mkdir -p $(BUILD_DIR)/initrd-staging
 	@cp $(INIT_ELF_RELEASE) $(BUILD_DIR)/initrd-staging/init
 	@cp $(SERIAL_DRV_ELF_RELEASE) $(BUILD_DIR)/initrd-staging/serial_drv
+	@cp $(WASM_HELLO_RELEASE) $(BUILD_DIR)/initrd-staging/hello_wasm.wasm
 	@cd $(BUILD_DIR)/initrd-staging && tar cf ../initrd-release.tar --format=ustar *
 	@echo "[initrd] $(INITRD_RELEASE) ($$(wc -c < $(INITRD_RELEASE)) bytes, $$(tar tf $(INITRD_RELEASE) | wc -l) files)"
 

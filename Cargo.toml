@@ -19,6 +19,9 @@ members = [
     "user/serial_drv",
     "user/init",
 ]
+exclude = [
+    "apps/hello_wasm",
+]
 
 # =============================================================================
 # Workspace-wide settings
