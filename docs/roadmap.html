@@ -81,7 +81,7 @@
         <tr><td>6</td><td><a href="subsystems/syscalls.html">Syscalls</a></td><td><span class="label label-green">✅ Complete</span></td><td>SYSCALL/SYSRET, 12 syscalls, ELF loader, Ring 3 entry</td></tr>
         <tr><td>7–9</td><td><a href="subsystems/userspace.html">Userspace</a></td><td><span class="label label-green">✅ Complete</span></td><td>Init (PID 1), libmnos, TarFS, delegation, memory management</td></tr>
         <tr><td>9.5</td><td>Reaper</td><td><span class="label label-green">✅ Complete</span></td><td>DEAD_QUEUE, kernel stack reclamation, VMM walker, process teardown</td></tr>
-        <tr><td>10</td><td>Wasm Hypervisor</td><td><span class="label label-green">✅ Complete</span></td><td>Ring 3 heap (4 MiB), wasmi interpreter, Wasm SFI proven (add(10,32)=42)</td></tr>
+        <tr><td>10</td><td>Wasm Hypervisor</td><td><span class="label label-green">✅ Complete</span></td><td>Ring 3 heap (4 MiB), wasmi interpreter, SFI hardware bridge (Wasm→COM1)</td></tr>
       </tbody>
     </table>
 
@@ -198,15 +198,18 @@
     <hr>
 
     <h2 id="sprint-10">Sprint 10 — Wasm Hypervisor ✅ <a href="#sprint-10" class="anchor">#</a></h2>
-    <blockquote><em>Turn Init into the WebAssembly hypervisor — Software Fault Isolation proven.</em></blockquote>
+    <blockquote><em>Turn Init into the WebAssembly hypervisor — SFI Hardware Bridge proven.</em></blockquote>
     <ul class="checklist">
       <li class="done"><strong>Ring 3 global allocator</strong> — linked_list_allocator in libmnos, fed by capability-gated page allocation</li>
       <li class="done"><strong>init_heap() bootstrap</strong> — 1000 pages (4 MiB) at 0x4000_0000 via SYS_ALLOC_MEMORY + SYS_MAP_MEMORY + SYS_DROP_CAP loop</li>
       <li class="done"><strong>Vec in Ring 3</strong> — Vec&lt;u64&gt; constructed, grown (reallocation), and dropped in pure userspace</li>
       <li class="done"><strong>wasmi integration</strong> — wasmi v0.31.2 WebAssembly interpreter running in Ring 3 (no_std + alloc)</li>
-      <li class="done"><strong>Wasm module loading</strong> — hello_wasm.wasm (384 bytes) extracted from initrd TarFS, parsed by wasmi Module::new()</li>
-      <li class="done"><strong>Wasm execution proof</strong> — Wasm <code>add(10, 32)</code> returned <code>42</code> via wasmi in Ring 3 — Software Fault Isolation proven</li>
+      <li class="done"><strong>Wasm module loading</strong> — hello_wasm.wasm (549 bytes) extracted from initrd TarFS, parsed by wasmi Module::new()</li>
+      <li class="done"><strong>Wasm execution proof</strong> — Wasm <code>add(10, 32)</code> returned <code>42</code> via wasmi in Ring 3 (Phase 2)</li>
       <li class="done"><strong>User stack expansion</strong> — 64 pages (256 KiB) for wasmi's recursive parser, stack-overflow-free</li>
+      <li class="done"><strong>Host function bridge</strong> — <code>host_print(ptr, len)</code> registered via <code>Linker::func_wrap()</code>, reads Wasm linear memory (Phase 3)</li>
+      <li class="done"><strong>SFI hardware bridge</strong> — Wasm <code>run_guest()</code> → <code>host_print</code> → <code>Memory::read</code> → <code>SYS_PORT_OUT</code> → COM1 hardware (Phase 3)</li>
+      <li class="done"><strong>“Hello from the Wasm Sandbox!”</strong> — printed from inside Wasm through the full capability chain (Phase 3)</li>
     </ul>
 
     <hr>
