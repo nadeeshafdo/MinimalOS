@@ -28,6 +28,23 @@ const CONFIG_ADDRESS: u16 = 0xCF8;
 /// PCI Configuration Data port (read/write for register access).
 const CONFIG_DATA: u16 = 0xCFC;
 
+// ─── Discovered Virtio-Block I/O Base ───────────────────────────────────────
+
+/// Cached I/O port base for the first Virtio-Block device found during
+/// PCI enumeration (vendor 0x1AF4, device 0x1001, BAR 0 in I/O space).
+///
+/// Written once during single-threaded boot, read-only after.
+static mut VIRTIO_BLK_IO_BASE: Option<(u16, u16)> = None;
+
+/// Returns the Virtio-Block device's I/O port base and size, if one was
+/// discovered during PCI enumeration.
+///
+/// # Safety
+/// Safe to call after `enumerate_buses()` has completed (single-threaded init).
+pub fn get_virtio_blk_io_base() -> Option<(u16, u16)> {
+    unsafe { VIRTIO_BLK_IO_BASE }
+}
+
 // ─── Raw PCI Configuration Space Access ─────────────────────────────────────
 
 /// Reads a 32-bit register from the PCI configuration space.
@@ -285,6 +302,15 @@ fn probe_bars_if_virtio(bus: u8, device: u8, func: u8) {
                         "[pci]     BAR {}: I/O  port=0x{:04X} size={} bytes",
                         bar_idx, port_base, size
                     );
+                    // Cache the first I/O BAR of a Virtio-Block device (0x1001)
+                    // for capability minting in Phase 7i.
+                    if device_id == 0x1001 && bar_idx == 0 {
+                        unsafe { VIRTIO_BLK_IO_BASE = Some((*port_base, *size)); }
+                        kprintln!(
+                            "[pci]     ╰─ Cached Virtio-Blk I/O base=0x{:04X} size={}",
+                            port_base, size
+                        );
+                    }
                 }
                 BarType::Memory { base_addr, size, prefetchable } => {
                     kprintln!(
