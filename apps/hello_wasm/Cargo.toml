@@ -1,0 +1,25 @@
+# =============================================================================
+# hello_wasm — Minimal Wasm Payload for MinimalOS SFI
+# =============================================================================
+#
+# A trivial WebAssembly module that exports a pure math function.
+# Compiled to wasm32-unknown-unknown, packaged into initrd.tar,
+# loaded and executed by Init (PID 1) via the wasmi interpreter.
+#
+# Build: cargo build --target wasm32-unknown-unknown --release
+# Output: target/wasm32-unknown-unknown/release/hello_wasm.wasm
+#
+# =============================================================================
+
+[package]
+name = "hello_wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+opt-level = 'z'
+panic = "abort"
