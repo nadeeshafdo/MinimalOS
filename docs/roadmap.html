@@ -224,7 +224,10 @@
       <li class="done"><strong>Device logging</strong> — BDF address, Vendor/Device ID, Class/Subclass/ProgIF with human-readable names</li>
       <li class="done"><strong>Virtio-blk detection</strong> — Vendor 0x1AF4, Device 0x1001 confirmed on QEMU with <code>-drive if=virtio</code></li>
       <li class="done"><strong>Full QEMU topology proven</strong> — 7 devices: Host Bridge, ISA Bridge, IDE, ACPI Bridge, VGA, Ethernet, Virtio Block</li>
-      <li>BAR parsing — decode Base Address Registers (MMIO vs I/O port, 32-bit vs 64-bit)</li>
+      <li class="done"><strong>BAR parsing</strong> — <code>write_config_32</code> + <code>read_bar</code>: decode MMIO vs I/O, 32-bit vs 64-bit, size probing via all-ones write</li>
+      <li class="done"><strong>Virtio BAR 0</strong> — I/O port 0xC000, 128 bytes (legacy virtio control registers)</li>
+      <li class="done"><strong>Virtio BAR 1</strong> — MMIO at 0x81060000, 4096 bytes (device-specific configuration)</li>
+      <li class="done"><strong>Virtio BAR 4</strong> — MMIO at 0xC000000000, 16384 bytes prefetchable (modern virtio / MSI-X)</li>
       <li>PCI capability list walking — MSI/MSI-X detection for interrupt-driven I/O</li>
       <li>Capability-gated MMIO — new CapType::MmioRegion for userspace device drivers</li>
       <li>Virtio-blk driver — block read/write through virtqueues, Ring 3 driver process</li>
