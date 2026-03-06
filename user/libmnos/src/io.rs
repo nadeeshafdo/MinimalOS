@@ -69,12 +69,78 @@ pub fn sys_port_in(slot: u64, port: u16) -> Result<u8, SyscallError> {
             inlateout("rax") SYS_PORT_IN => result,
             inlateout("rdi") slot => value,
             in("rsi") port as u64,
+            inlateout("r10") 0u64 => _,
             lateout("rdx") _,
-            lateout("r10") _,
             lateout("rcx") _,
             lateout("r11") _,
             options(nostack),
         );
     }
     if result == 0 { Ok(value as u8) } else { Err(SyscallError(result)) }
+}
+
+// =============================================================================
+// 32-bit (dword) Port I/O — Width-Extended Variants
+// =============================================================================
+
+/// Writes a 32-bit dword to a hardware I/O port.
+///
+/// Uses the width-extension protocol: R10 = 4 tells the kernel to execute
+/// `out dx, eax` instead of `out dx, al`.
+///
+/// # Arguments
+/// - `slot`:  CNode slot index containing an IoPort capability with WRITE.
+/// - `port`:  16-bit I/O port address.
+/// - `value`: 32-bit value to write.
+///
+/// # Returns
+/// `Ok(())` on success, `Err(SyscallError)` on capability violation.
+#[inline(always)]
+pub fn sys_port_out_32(slot: u64, port: u16, value: u32) -> Result<(), SyscallError> {
+    let result: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") SYS_PORT_OUT => result,
+            in("rdi") slot,
+            in("rsi") port as u64,
+            in("rdx") value as u64,
+            inlateout("r10") 4u64 => _,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    if result == 0 { Ok(()) } else { Err(SyscallError(result)) }
+}
+
+/// Reads a 32-bit dword from a hardware I/O port.
+///
+/// Uses the width-extension protocol: R10 = 4 tells the kernel to execute
+/// `in eax, dx` instead of `in al, dx`.
+///
+/// # Arguments
+/// - `slot`: CNode slot index containing an IoPort capability with READ.
+/// - `port`: 16-bit I/O port address.
+///
+/// # Returns
+/// `Ok(dword)` with the 32-bit read value, or `Err(SyscallError)`.
+#[inline(always)]
+pub fn sys_port_in_32(slot: u64, port: u16) -> Result<u32, SyscallError> {
+    let result: u64;
+    let value: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") SYS_PORT_IN => result,
+            inlateout("rdi") slot => value,
+            in("rsi") port as u64,
+            inlateout("r10") 4u64 => _,
+            lateout("rdx") _,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    if result == 0 { Ok(value as u32) } else { Err(SyscallError(result)) }
 }
