@@ -438,12 +438,14 @@ pub extern "C" fn syscall_dispatch(frame: &mut SyscallFrame) -> u64 {
             let slot = frame.rdi;
             let port = frame.rsi;
             let value = frame.rdx;
-            sys_port_out(slot, port, value)
+            let width = frame.r10;
+            sys_port_out(slot, port, value, width)
         }
         SYS_PORT_IN => {
             let slot = frame.rdi;
             let port = frame.rsi;
-            sys_port_in(frame, slot, port)
+            let width = frame.r10;
+            sys_port_in(frame, slot, port, width)
         }
         SYS_WAIT_IRQ => {
             let slot = frame.rdi;
@@ -637,7 +639,7 @@ fn sys_recv(frame: &mut SyscallFrame, slot: u64) -> u64 {
 // SYS_PORT_OUT — Write a byte to an I/O port
 // =============================================================================
 
-/// Writes a byte to a hardware I/O port, gated by an IoPort capability.
+/// Writes to a hardware I/O port, gated by an IoPort capability.
 ///
 /// The kernel mediates ALL port I/O from userspace. Ring 3 code cannot
 /// execute IN/OUT instructions directly (#GP). Instead, the user calls
@@ -647,11 +649,12 @@ fn sys_recv(frame: &mut SyscallFrame, slot: u64) -> u64 {
 /// # Arguments (from syscall registers)
 ///   - slot:  CNode slot index containing an IoPort capability with WRITE
 ///   - port:  16-bit I/O port address
-///   - value: byte value to write (low 8 bits of u64)
+///   - value: value to write (8-bit or 32-bit depending on width)
+///   - width: I/O width — 0 or 1 = byte (backward compatible), 4 = dword
 ///
 /// # Returns
 ///   0 on success. Error codes like the other syscalls.
-fn sys_port_out(slot: u64, port: u64, value: u64) -> u64 {
+fn sys_port_out(slot: u64, port: u64, value: u64, width: u64) -> u64 {
     let cpu_local = unsafe { CpuLocal::get() };
     let thread = unsafe { &*cpu_local.current_thread };
     let process = unsafe { &*thread.process };
@@ -690,15 +693,32 @@ fn sys_port_out(slot: u64, port: u64, value: u64) -> u64 {
         return u64::MAX - 4;
     }
 
-    // 4. Perform the privileged OUT instruction
-    let byte = value as u8;
-    unsafe {
-        core::arch::asm!(
-            "out dx, al",
-            in("dx") port16,
-            in("al") byte,
-            options(nomem, nostack, preserves_flags)
-        );
+    // 4. Perform the privileged OUT instruction (width-aware)
+    match width {
+        4 => {
+            // 32-bit OUT — for Virtio and other devices needing dword access
+            let dword = value as u32;
+            unsafe {
+                core::arch::asm!(
+                    "out dx, eax",
+                    in("dx") port16,
+                    in("eax") dword,
+                    options(nomem, nostack, preserves_flags)
+                );
+            }
+        }
+        _ => {
+            // 8-bit OUT — default, backward compatible (width=0 from existing callers)
+            let byte = value as u8;
+            unsafe {
+                core::arch::asm!(
+                    "out dx, al",
+                    in("dx") port16,
+                    in("al") byte,
+                    options(nomem, nostack, preserves_flags)
+                );
+            }
+        }
     }
 
     0 // Success
@@ -708,16 +728,17 @@ fn sys_port_out(slot: u64, port: u64, value: u64) -> u64 {
 // SYS_PORT_IN — Read a byte from an I/O port
 // =============================================================================
 
-/// Reads a byte from a hardware I/O port, gated by an IoPort capability.
+/// Reads from a hardware I/O port, gated by an IoPort capability.
 ///
 /// # Arguments (from syscall registers)
-///   - slot: CNode slot index containing an IoPort capability with READ
-///   - port: 16-bit I/O port address
+///   - slot:  CNode slot index containing an IoPort capability with READ
+///   - port:  16-bit I/O port address
+///   - width: I/O width — 0 or 1 = byte (backward compatible), 4 = dword
 ///
 /// # Returns
-///   RAX = 0 on success. The read byte is placed in frame.rdi so the
-///   user sees it in RDI after SYSRET.
-fn sys_port_in(frame: &mut SyscallFrame, slot: u64, port: u64) -> u64 {
+///   RAX = 0 on success. The read value is placed in frame.rdi so the
+///   user sees it in RDI register after SYSRET.
+fn sys_port_in(frame: &mut SyscallFrame, slot: u64, port: u64, width: u64) -> u64 {
     let cpu_local = unsafe { CpuLocal::get() };
     let thread = unsafe { &*cpu_local.current_thread };
     let process = unsafe { &*thread.process };
@@ -756,19 +777,37 @@ fn sys_port_in(frame: &mut SyscallFrame, slot: u64, port: u64) -> u64 {
         return u64::MAX - 4;
     }
 
-    // 4. Perform the privileged IN instruction
-    let byte: u8;
-    unsafe {
-        core::arch::asm!(
-            "in al, dx",
-            out("al") byte,
-            in("dx") port16,
-            options(nomem, nostack, preserves_flags)
-        );
+    // 4. Perform the privileged IN instruction (width-aware)
+    match width {
+        4 => {
+            // 32-bit IN — for Virtio and other devices needing dword access
+            let dword: u32;
+            unsafe {
+                core::arch::asm!(
+                    "in eax, dx",
+                    out("eax") dword,
+                    in("dx") port16,
+                    options(nomem, nostack, preserves_flags)
+                );
+            }
+            // Return 32-bit value in RDI
+            frame.rdi = dword as u64;
+        }
+        _ => {
+            // 8-bit IN — default, backward compatible
+            let byte: u8;
+            unsafe {
+                core::arch::asm!(
+                    "in al, dx",
+                    out("al") byte,
+                    in("dx") port16,
+                    options(nomem, nostack, preserves_flags)
+                );
+            }
+            // Return byte value in RDI
+            frame.rdi = byte as u64;
+        }
     }
-
-    // 5. Return value in RDI (user sees it in RDI register after SYSRET)
-    frame.rdi = byte as u64;
 
     0 // Success
 }
