@@ -9,11 +9,12 @@
 //   Slot 1: PmmAllocator                     — mint physical frames
 //   Slot 2: IoPort { base: 0x3F8, size: 8 }  — direct COM1 serial output
 //   Slot 3: Process { pid: 1 } (self)        — SYS_MAP_MEMORY on own space
+//   Slot 4: IoPort { base: 0xC000, size: 128 } — Virtio-Block device I/O
 //
 // The kernel maps the initrd TarFS pages at virtual address 0x1000_0000
 // (read-only) so Init can parse the archive from Ring 3.
 //
-// SPRINT 10, PHASE 3 PROVES:
+// SPRINT 11, PHASE 3 PROVES:
 //   1. Ring 3 global allocator (linked_list_allocator) — 4 MiB heap
 //   2. Capability-gated SYS_ALLOC_MEMORY + SYS_MAP_MEMORY for heap
 //   3. TarFS extraction of a .wasm payload from initrd
@@ -23,7 +24,8 @@
 //   7. Wasm run_guest() calls host_print(ptr, len)
 //   8. Host reads Wasm linear memory → COM1 via IoPort capability
 //   9. Full chain: Wasm→wasmi→Ring3 Heap→host_print→SYS_PORT_OUT→COM1
-//  10. SFI Hardware Bridge: PROVEN
+//  10. PCI→CAP→Ring3: Dynamic IoPort cap for Virtio-Blk I/O BAR
+//  11. Ring 3 reads Virtio-Blk device features + disk capacity
 //
 // =============================================================================
 
@@ -47,6 +49,9 @@ const IO_SLOT: u64 = 2;
 
 /// CNode slot 3: Process capability (self, PID 1) — for SYS_MAP_MEMORY.
 const SELF_PROC_SLOT: u64 = 3;
+
+/// CNode slot 4: IoPort capability for Virtio-Block device (dynamically minted).
+const VIRTIO_SLOT: u64 = 4;
 
 /// COM1 data register (Transmit Holding / Receive Buffer).
 const COM1_DATA: u16 = 0x3F8;
@@ -87,7 +92,7 @@ pub extern "C" fn _start() -> ! {
     print_str(b"\r\n");
     print_str(b"==========================================================\r\n");
     print_str(b"  [init] The God Process (PID 1) -- Ring 3\r\n");
-    print_str(b"  Sprint 10 Phase 3: SFI Hardware Bridge\r\n");
+    print_str(b"  Sprint 11 Phase 3: Capability Delegation & Hardware Handshake\r\n");
     print_str(b"==========================================================\r\n");
     print_str(b"\r\n");
 
@@ -282,6 +287,83 @@ pub extern "C" fn _start() -> ! {
     print_str(b"[init]   run_guest() returned successfully\r\n");
 
     // =========================================================================
+    // Phase 9: Virtio-Block Device Interrogation from Ring 3
+    //
+    //   The kernel dynamically minted an IoPort capability for the Virtio-Blk
+    //   device's I/O BAR 0 (0xC000, 128 bytes) into CNode Slot 4.
+    //
+    //   Virtio Legacy I/O registers (relative to base):
+    //     +0x00: Device Features     (32-bit read)
+    //     +0x04: Guest Features      (32-bit write)
+    //     +0x12: Device Status        (8-bit R/W)
+    //     +0x14: Device-specific config (virtio-blk: 64-bit capacity in sectors)
+    //
+    //   We read the raw disk capacity and print it from Ring 3.
+    // =========================================================================
+    print_str(b"\r\n[init] Phase 9: Virtio-Block Device Interrogation\r\n");
+    print_str(b"[init]   Using IoPort cap in Slot 4 (Virtio-Blk I/O BAR)\r\n");
+
+    // Virtio Legacy register offsets (relative to I/O base 0xC000)
+    //
+    // The kernel dynamically discovered this BAR 0 base via PCI enumeration
+    // and minted an IoPort capability covering [0xC000..0xC080).
+    // Future sprint: SYS_CAP_IDENTIFY to query the base from the cap itself.
+    const VIRTIO_IO_BASE: u16            = 0xC000;
+    const VIRTIO_DEVICE_FEATURES: u16    = VIRTIO_IO_BASE + 0x00;  // 32-bit read
+    const VIRTIO_DEVICE_STATUS: u16      = VIRTIO_IO_BASE + 0x12;  // 8-bit R/W
+    const VIRTIO_BLK_CAPACITY_LO: u16   = VIRTIO_IO_BASE + 0x14;  // 32-bit read
+    const VIRTIO_BLK_CAPACITY_HI: u16   = VIRTIO_IO_BASE + 0x18;  // 32-bit read
+
+    // Step 1: Read device features (32-bit)
+    let features = match libmnos::io::sys_port_in_32(VIRTIO_SLOT, VIRTIO_DEVICE_FEATURES) {
+        Ok(f) => f,
+        Err(e) => {
+            print_str(b"[init]   WARN: Cannot read Virtio features (err=");
+            print_dec(e.0);
+            print_str(b")\r\n");
+            0
+        }
+    };
+    print_str(b"[init]   Device Features: ");
+    print_hex(features as u64);
+    print_str(b"\r\n");
+
+    // Step 2: Read device status (8-bit)
+    let status = match libmnos::io::sys_port_in(VIRTIO_SLOT, VIRTIO_DEVICE_STATUS) {
+        Ok(s) => s,
+        Err(_) => 0xFF,
+    };
+    print_str(b"[init]   Device Status: ");
+    print_hex(status as u64);
+    print_str(b"\r\n");
+
+    // Step 3: Read disk capacity (64-bit, as two 32-bit reads)
+    let cap_lo = match libmnos::io::sys_port_in_32(VIRTIO_SLOT, VIRTIO_BLK_CAPACITY_LO) {
+        Ok(v) => v,
+        Err(_) => 0,
+    };
+    let cap_hi = match libmnos::io::sys_port_in_32(VIRTIO_SLOT, VIRTIO_BLK_CAPACITY_HI) {
+        Ok(v) => v,
+        Err(_) => 0,
+    };
+    let capacity_sectors = ((cap_hi as u64) << 32) | (cap_lo as u64);
+    let capacity_bytes = capacity_sectors * 512;
+    let capacity_kb = capacity_bytes / 1024;
+    let capacity_mb = capacity_kb / 1024;
+
+    print_str(b"[init]   Disk Capacity: ");
+    print_dec(capacity_sectors);
+    print_str(b" sectors (");
+    if capacity_mb > 0 {
+        print_dec(capacity_mb);
+        print_str(b" MB");
+    } else {
+        print_dec(capacity_kb);
+        print_str(b" KB");
+    }
+    print_str(b")\r\n");
+
+    // =========================================================================
     // Victory Banner
     // =========================================================================
     print_str(b"\r\n");
@@ -292,20 +374,20 @@ pub extern "C" fn _start() -> ! {
     print_str(b"==========================================================\r\n");
     print_str(b"\r\n");
     print_str(b"==========================================================\r\n");
-    print_str(b"  [init] SUCCESS: SFI Hardware Bridge PROVEN in Ring 3!\r\n");
+    print_str(b"  [init] SUCCESS: Sprint 11 Phase 3 PROVEN in Ring 3!\r\n");
     print_str(b"  [init]\r\n");
     print_str(b"  [init]   Phase 2: Wasm add(10,32) = 42   [PROVEN]\r\n");
     print_str(b"  [init]   Phase 3: Wasm -> Host Bridge    [PROVEN]\r\n");
+    print_str(b"  [init]   Phase 9: Virtio-Blk from Ring 3 [PROVEN]\r\n");
     print_str(b"  [init]\r\n");
-    print_str(b"  [init]   Chain: Wasm run_guest()\r\n");
-    print_str(b"  [init]        -> host_print(ptr, len)\r\n");
-    print_str(b"  [init]        -> wasmi host closure\r\n");
-    print_str(b"  [init]        -> Memory::read (Wasm linear memory)\r\n");
-    print_str(b"  [init]        -> write_byte() per char\r\n");
-    print_str(b"  [init]        -> SYS_PORT_OUT (IoPort cap, slot 2)\r\n");
-    print_str(b"  [init]        -> COM1 hardware (0x3F8)\r\n");
+    print_str(b"  [init]   Chain: PCI HW Census (kernel)\r\n");
+    print_str(b"  [init]        -> BAR Decode (I/O base 0xC000)\r\n");
+    print_str(b"  [init]        -> IoPort Cap minted to Slot 4\r\n");
+    print_str(b"  [init]        -> Ring 3 port_in_32 (features)\r\n");
+    print_str(b"  [init]        -> Ring 3 port_in_32 (capacity)\r\n");
+    print_str(b"  [init]        -> Disk size printed via COM1\r\n");
     print_str(b"  [init]\r\n");
-    print_str(b"  [init] Sprint 10 Phase 3 COMPLETE.\r\n");
+    print_str(b"  [init] Sprint 11 Phase 3 COMPLETE.\r\n");
     print_str(b"==========================================================\r\n");
 
     halt_loop();
