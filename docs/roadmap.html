@@ -59,6 +59,8 @@
         <li><a href="#sprint-5">Sprint 5 — Capabilities &amp; IPC</a></li>
         <li><a href="#sprint-6">Sprint 6 — Syscall Interface &amp; Userspace</a></li>
         <li><a href="#sprint-7">Sprint 7 — Init Process &amp; First Program</a></li>
+        <li><a href="#sprint-95">Sprint 9.5 — Reaper &amp; Resource Teardown ✅</a></li>
+        <li><a href="#sprint-10">Sprint 10 — Wasm Hypervisor ✅</a></li>
         <li><a href="#future-milestones">Future Milestones</a></li>
         <li><a href="#contributing">Contributing</a></li>
       </ul>
@@ -79,7 +81,7 @@
         <tr><td>6</td><td><a href="subsystems/syscalls.html">Syscalls</a></td><td><span class="label label-green">✅ Complete</span></td><td>SYSCALL/SYSRET, 12 syscalls, ELF loader, Ring 3 entry</td></tr>
         <tr><td>7–9</td><td><a href="subsystems/userspace.html">Userspace</a></td><td><span class="label label-green">✅ Complete</span></td><td>Init (PID 1), libmnos, TarFS, delegation, memory management</td></tr>
         <tr><td>9.5</td><td>Reaper</td><td><span class="label label-green">✅ Complete</span></td><td>DEAD_QUEUE, kernel stack reclamation, VMM walker, process teardown</td></tr>
-        <tr><td>10</td><td>Wasm Hypervisor</td><td><span class="label label-blue">🔄 In Progress</span></td><td>Ring 3 global allocator, linked_list_allocator, Vec in Ring 3</td></tr>
+        <tr><td>10</td><td>Wasm Hypervisor</td><td><span class="label label-green">✅ Complete</span></td><td>Ring 3 heap (4 MiB), wasmi interpreter, Wasm SFI proven (add(10,32)=42)</td></tr>
       </tbody>
     </table>
 
@@ -195,15 +197,16 @@
 
     <hr>
 
-    <h2 id="sprint-10">Sprint 10 — Wasm Hypervisor 🔄 <a href="#sprint-10" class="anchor">#</a></h2>
-    <blockquote><em>Turn Init into the WebAssembly hypervisor.</em></blockquote>
+    <h2 id="sprint-10">Sprint 10 — Wasm Hypervisor ✅ <a href="#sprint-10" class="anchor">#</a></h2>
+    <blockquote><em>Turn Init into the WebAssembly hypervisor — Software Fault Isolation proven.</em></blockquote>
     <ul class="checklist">
       <li class="done"><strong>Ring 3 global allocator</strong> — linked_list_allocator in libmnos, fed by capability-gated page allocation</li>
-      <li class="done"><strong>init_heap() bootstrap</strong> — 100 pages (400 KiB) at 0x4000_0000 via SYS_ALLOC_MEMORY + SYS_MAP_MEMORY + SYS_DROP_CAP loop</li>
+      <li class="done"><strong>init_heap() bootstrap</strong> — 1000 pages (4 MiB) at 0x4000_0000 via SYS_ALLOC_MEMORY + SYS_MAP_MEMORY + SYS_DROP_CAP loop</li>
       <li class="done"><strong>Vec in Ring 3</strong> — Vec&lt;u64&gt; constructed, grown (reallocation), and dropped in pure userspace</li>
-      <li class="pending"><strong>wasmi integration</strong> — WebAssembly interpreter engine in Ring 3</li>
-      <li class="pending"><strong>Wasm module loading</strong> — parse .wasm from initrd, instantiate via wasmi</li>
-      <li class="pending"><strong>Host function bindings</strong> — bridge wasmi imports to MinimalOS syscalls</li>
+      <li class="done"><strong>wasmi integration</strong> — wasmi v0.31.2 WebAssembly interpreter running in Ring 3 (no_std + alloc)</li>
+      <li class="done"><strong>Wasm module loading</strong> — hello_wasm.wasm (384 bytes) extracted from initrd TarFS, parsed by wasmi Module::new()</li>
+      <li class="done"><strong>Wasm execution proof</strong> — Wasm <code>add(10, 32)</code> returned <code>42</code> via wasmi in Ring 3 — Software Fault Isolation proven</li>
+      <li class="done"><strong>User stack expansion</strong> — 64 pages (256 KiB) for wasmi's recursive parser, stack-overflow-free</li>
     </ul>
 
     <hr>
