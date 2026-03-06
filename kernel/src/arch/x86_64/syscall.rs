@@ -975,7 +975,8 @@ fn sys_alloc_memory(alloc_slot: u64, target_slot: u64) -> u64 {
         Err(()) => {
             kprintln!("[syscall] SYS_ALLOC_MEMORY: PID {} target slot {} invalid/occupied",
                 process.pid, target_slot);
-            // TODO: Free the frame back to PMM
+            // Return the frame to PMM — insert failed, nobody holds this frame.
+            pmm::free_frame(phys);
             u64::MAX - 3
         }
     }

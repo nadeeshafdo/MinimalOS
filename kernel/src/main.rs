@@ -702,23 +702,30 @@ extern "C" fn kmain() -> ! {
         elf_result.bytes_copied, elf_result.bss_zeroed);
 
     // --- 7g. Map user stack into Init's PML4 ---
+    // wasmi (Wasm interpreter) needs significant stack space for Module::new(),
+    // so we allocate 64 pages (256 KiB) instead of 1.
     let user_stack_top = {
         use memory::vmm::{self, PageTableFlags};
 
-        let stack_phys = memory::pmm::alloc_frame_zeroed()
-            .expect("[init] FATAL: cannot allocate user stack page");
-        let stack_virt = memory::address::VirtAddr::new(0x0000_0000_0080_0000);
+        let stack_pages: u64 = 64; // 256 KiB — enough for wasmi's parser
+        let stack_base_virt = 0x0000_0000_0080_0000u64 - stack_pages * memory::address::PAGE_SIZE as u64;
 
-        unsafe {
-            vmm::map_page(init_pml4, stack_virt, stack_phys,
-                PageTableFlags::PRESENT | PageTableFlags::WRITABLE
-                    | PageTableFlags::USER | PageTableFlags::NO_EXECUTE,
-            ).expect("[init] FATAL: cannot map user stack page");
+        for i in 0..stack_pages {
+            let stack_phys = memory::pmm::alloc_frame_zeroed()
+                .expect("[init] FATAL: cannot allocate user stack page");
+            let page_virt = memory::address::VirtAddr::new(stack_base_virt + i * memory::address::PAGE_SIZE as u64);
+
+            unsafe {
+                vmm::map_page(init_pml4, page_virt, stack_phys,
+                    PageTableFlags::PRESENT | PageTableFlags::WRITABLE
+                        | PageTableFlags::USER | PageTableFlags::NO_EXECUTE,
+                ).expect("[init] FATAL: cannot map user stack page");
+            }
         }
 
-        let top = stack_virt.as_u64() + memory::address::PAGE_SIZE as u64;
-        kprintln!("[init] User stack mapped in PID {} PML4: {:#010X} — {:#010X}",
-            unsafe { (*init_proc).pid }, stack_virt.as_u64(), top);
+        let top = stack_base_virt + stack_pages * memory::address::PAGE_SIZE as u64;
+        kprintln!("[init] User stack mapped in PID {} PML4: {:#010X} — {:#010X} ({} pages)",
+            unsafe { (*init_proc).pid }, stack_base_virt, top, stack_pages);
         top
     };
 
@@ -735,19 +742,39 @@ extern "C" fn kmain() -> ! {
         let page_count = (initrd_size as u64 + page_size - 1) / page_size;
         let mut mapped = 0u64;
 
+        // IMPORTANT: We allocate fresh PMM frames and COPY the initrd data
+        // instead of mapping bootloader-owned physical pages directly.
+        // Direct mapping of non-PMM pages causes `destroy_user_address_space`
+        // to call `pmm::free_frame()` on pages that were never allocated from
+        // PMM, corrupting the bitmap and causing double-free panics.
+        let hhdm = memory::address::hhdm_offset();
         for i in 0..page_count {
-            let phys = PhysAddr::new(initrd_phys_base + i * page_size);
+            let src_phys = initrd_phys_base + i * page_size;
+            let frame = memory::pmm::alloc_frame_zeroed()
+                .expect("[init] FATAL: cannot allocate frame for initrd copy");
             let virt = memory::address::VirtAddr::new(initrd_map_base + i * page_size);
 
+            // Copy initrd page data from bootloader memory into the fresh PMM frame
             unsafe {
-                vmm::map_page(init_pml4, virt, phys,
+                let src = (hhdm + src_phys) as *const u8;
+                let dst = frame.to_virt().as_mut_ptr::<u8>();
+                let copy_len = if (i + 1) * page_size <= initrd_size as u64 {
+                    page_size as usize
+                } else {
+                    (initrd_size as u64 - i * page_size) as usize
+                };
+                core::ptr::copy_nonoverlapping(src, dst, copy_len);
+            }
+
+            unsafe {
+                vmm::map_page(init_pml4, virt, frame,
                     PageTableFlags::PRESENT | PageTableFlags::USER | PageTableFlags::NO_EXECUTE,
                 ).expect("[init] FATAL: cannot map initrd page into Init PML4");
             }
             mapped += 1;
         }
 
-        kprintln!("[init] Initrd mapped into Init PML4: {:#010X} — {:#010X} ({} pages, read-only)",
+        kprintln!("[init] Initrd copied+mapped into Init PML4: {:#010X} — {:#010X} ({} pages, read-only)",
             initrd_map_base,
             initrd_map_base + page_count * page_size,
             mapped);
