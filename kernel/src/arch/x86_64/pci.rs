@@ -71,6 +71,125 @@ pub unsafe fn read_config_32(bus: u8, device: u8, func: u8, offset: u8) -> u32 {
     data
 }
 
+/// Writes a 32-bit value to the PCI configuration space.
+///
+/// # Safety
+/// Performs raw x86 I/O port operations. Must be called from Ring 0.
+/// Writing to the wrong register can brick a device or corrupt system state.
+#[inline]
+pub unsafe fn write_config_32(bus: u8, device: u8, func: u8, offset: u8, value: u32) {
+    let address: u32 = 0x8000_0000
+        | ((bus as u32) << 16)
+        | ((device as u32) << 11)
+        | ((func as u32) << 8)
+        | ((offset as u32) & 0xFC);
+
+    // Write address to CONFIG_ADDRESS
+    unsafe {
+        asm!(
+            "out dx, eax",
+            in("dx") CONFIG_ADDRESS,
+            in("eax") address,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+
+    // Write 32-bit data to CONFIG_DATA
+    unsafe {
+        asm!(
+            "out dx, eax",
+            in("dx") CONFIG_DATA,
+            in("eax") value,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+}
+
+// ─── BAR Decoding ───────────────────────────────────────────────────────────
+
+/// Decoded PCI Base Address Register — the physical coordinates of a device.
+#[derive(Debug)]
+pub enum BarType {
+    /// Memory-Mapped I/O region.
+    Memory { base_addr: u64, size: u64, prefetchable: bool },
+    /// I/O port range.
+    Io { port_base: u16, size: u16 },
+}
+
+/// Reads and decodes a single BAR for a given PCI function.
+///
+/// Uses the standard size-probing technique:
+///   1. Save original BAR value
+///   2. Disable I/O + Memory decoding (Command register bits 0-1)
+///   3. Write 0xFFFFFFFF, read back to determine size mask
+///   4. Restore original BAR value and Command register
+///
+/// Returns `None` if the BAR is unimplemented (reads as zero).
+///
+/// # Arguments
+/// - `bar_index`: BAR number 0-5 (offset 0x10 + index*4)
+///
+/// # Safety
+/// Temporarily writes to PCI config space. Must be called from Ring 0
+/// with interrupts in a safe state (no concurrent PCI access).
+pub unsafe fn read_bar(bus: u8, device: u8, func: u8, bar_index: u8) -> Option<BarType> {
+    let offset = 0x10 + (bar_index * 4);
+    let bar_val = unsafe { read_config_32(bus, device, func, offset) };
+
+    if bar_val == 0 {
+        return None; // Unimplemented BAR
+    }
+
+    // Save and disable I/O + Memory decoding during size probe
+    let old_command = unsafe { read_config_32(bus, device, func, 0x04) };
+    unsafe { write_config_32(bus, device, func, 0x04, old_command & !0x03) };
+
+    // Write all-ones, read back the size mask
+    unsafe { write_config_32(bus, device, func, offset, 0xFFFF_FFFF) };
+    let size_mask = unsafe { read_config_32(bus, device, func, offset) };
+    unsafe { write_config_32(bus, device, func, offset, bar_val) }; // Restore
+
+    // Restore command register
+    unsafe { write_config_32(bus, device, func, 0x04, old_command) };
+
+    if (bar_val & 0x01) == 1 {
+        // ── I/O Space BAR ──
+        let port_base = (bar_val & 0xFFFC) as u16;
+        let size = (!(size_mask & 0xFFFC)).wrapping_add(1) as u16;
+        Some(BarType::Io { port_base, size })
+    } else {
+        // ── Memory-Mapped I/O BAR ──
+        let type_flag = (bar_val >> 1) & 0x03;
+        let prefetchable = (bar_val & 0x08) != 0;
+
+        let mut base_addr = (bar_val & 0xFFFF_FFF0) as u64;
+        let mut size_mask_64 = (size_mask & 0xFFFF_FFF0) as u64;
+
+        if type_flag == 2 {
+            // 64-bit BAR — upper 32 bits live in the next register
+            let upper_val = unsafe { read_config_32(bus, device, func, offset + 4) };
+            base_addr |= (upper_val as u64) << 32;
+
+            // Probe upper 32 bits for size
+            unsafe { write_config_32(bus, device, func, offset + 4, 0xFFFF_FFFF) };
+            let upper_mask = unsafe { read_config_32(bus, device, func, offset + 4) };
+            unsafe { write_config_32(bus, device, func, offset + 4, upper_val) }; // Restore
+
+            size_mask_64 |= (upper_mask as u64) << 32;
+        }
+
+        let size = if type_flag == 2 {
+            // 64-bit BAR: negate the full 64-bit mask
+            (!size_mask_64).wrapping_add(1)
+        } else {
+            // 32-bit BAR: negate in 32-bit arithmetic to avoid upper-bit pollution
+            let mask_32 = (size_mask & 0xFFFF_FFF0) as u32;
+            (!mask_32).wrapping_add(1) as u64
+        };
+        Some(BarType::Memory { base_addr, size, prefetchable })
+    }
+}
+
 // ─── PCI Bus Enumeration ────────────────────────────────────────────────────
 
 /// Enumerates the entire PCI configuration space (buses 0-255).
@@ -95,6 +214,7 @@ pub fn enumerate_buses() {
             }
 
             log_device(bus as u8, device, 0);
+            probe_bars_if_virtio(bus as u8, device, 0);
             device_count += 1;
 
             // Check if multi-function (Header Type bit 7)
@@ -104,6 +224,7 @@ pub fn enumerate_buses() {
                     let vendor = unsafe { read_config_32(bus as u8, device, func, 0) } & 0xFFFF;
                     if vendor != 0xFFFF {
                         log_device(bus as u8, device, func);
+                        probe_bars_if_virtio(bus as u8, device, func);
                         device_count += 1;
                     }
                 }
@@ -134,6 +255,56 @@ fn log_device(bus: u8, device: u8, func: u8) {
         class, subclass, prog_if,
         class_name(class, subclass),
     );
+}
+
+/// Probes and logs all BARs for Virtio devices (Vendor 0x1AF4).
+///
+/// When a Virtio device (specifically the Block device 0x1001) is found,
+/// this decodes all 6 BARs and logs their physical coordinates.
+fn probe_bars_if_virtio(bus: u8, device: u8, func: u8) {
+    let reg0 = unsafe { read_config_32(bus, device, func, 0x00) };
+    let vendor_id = reg0 & 0xFFFF;
+    let device_id = reg0 >> 16;
+
+    // Only probe Virtio devices (Red Hat / Virtio vendor)
+    if vendor_id != 0x1AF4 {
+        return;
+    }
+
+    kprintln!(
+        "[pci]   ╰─ Virtio device {:04X}:{:04X} — probing BARs...",
+        vendor_id, device_id
+    );
+
+    let mut bar_idx = 0u8;
+    while bar_idx < 6 {
+        if let Some(bar) = unsafe { read_bar(bus, device, func, bar_idx) } {
+            match &bar {
+                BarType::Io { port_base, size } => {
+                    kprintln!(
+                        "[pci]     BAR {}: I/O  port=0x{:04X} size={} bytes",
+                        bar_idx, port_base, size
+                    );
+                }
+                BarType::Memory { base_addr, size, prefetchable } => {
+                    kprintln!(
+                        "[pci]     BAR {}: MMIO base=0x{:016X} size={} bytes{}",
+                        bar_idx, base_addr, size,
+                        if *prefetchable { " [prefetchable]" } else { "" }
+                    );
+                    // 64-bit MMIO BAR consumes the next BAR slot
+                    if let BarType::Memory { .. } = &bar {
+                        let bar_val = unsafe { read_config_32(bus, device, func, 0x10 + bar_idx * 4) };
+                        let type_flag = (bar_val >> 1) & 0x03;
+                        if type_flag == 2 {
+                            bar_idx += 1; // Skip upper-half BAR
+                        }
+                    }
+                }
+            }
+        }
+        bar_idx += 1;
+    }
 }
 
 /// Returns a human-readable name for a PCI class/subclass pair.
