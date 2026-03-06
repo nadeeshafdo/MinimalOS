@@ -27,3 +27,4 @@ description = "MinimalOS Ring 3 Init process (PID 1)"
 
 [dependencies]
 libmnos = { path = "../libmnos" }
+wasmi = { version = "0.31", default-features = false }
