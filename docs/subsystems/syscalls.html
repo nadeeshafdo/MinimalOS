@@ -137,8 +137,8 @@
         <tr><td>0</td><td><code>SYS_EXIT</code></td><td>—</td><td>Terminate calling thread (thread → Dead, schedule away)</td></tr>
         <tr><td>1</td><td><code>SYS_SEND</code></td><td>slot, label, data0, data1</td><td>IPC send on endpoint capability</td></tr>
         <tr><td>2</td><td><code>SYS_RECV</code></td><td>slot</td><td>IPC receive — blocks until message arrives</td></tr>
-        <tr><td>3</td><td><code>SYS_PORT_OUT</code></td><td>slot, port, value</td><td>Write byte to I/O port via IoPort capability</td></tr>
-        <tr><td>4</td><td><code>SYS_PORT_IN</code></td><td>slot, port</td><td>Read byte from I/O port via IoPort capability</td></tr>
+        <tr><td>3</td><td><code>SYS_PORT_OUT</code></td><td>slot, port, value, width</td><td>Write to I/O port via IoPort capability. R10 width: 0/1=byte, 4=dword</td></tr>
+        <tr><td>4</td><td><code>SYS_PORT_IN</code></td><td>slot, port, width</td><td>Read from I/O port via IoPort capability. R10 width: 0/1=byte (RDI=u8), 4=dword (RDI=u32)</td></tr>
         <tr><td>5</td><td><code>SYS_WAIT_IRQ</code></td><td>slot</td><td>Block until hardware IRQ fires on IrqLine capability</td></tr>
         <tr><td>6</td><td><code>SYS_SPAWN_PROCESS</code></td><td>—</td><td>Create empty child process, returns CNode slot of Process cap</td></tr>
         <tr><td>7</td><td><code>SYS_ALLOC_MEMORY</code></td><td>alloc_slot, target_slot</td><td>Allocate physical frame via PmmAllocator, store MemoryFrame cap in target_slot</td></tr>
@@ -237,6 +237,7 @@
           <li>Slot 1: <strong>PmmAllocator</strong> — right to allocate physical frames</li>
           <li>Slot 2: <strong>IoPort { base: 0x3F8, size: 8 }</strong> — COM1 serial</li>
           <li>Slot 3: <strong>Process { pid: 1 }</strong> — self-reference for memory mapping</li>
+          <li>Slot 4: <strong>IoPort { base: 0xC000, size: 128 }</strong> — Virtio-Blk I/O BAR (dynamically discovered via PCI)</li>
         </ul>
       </li>
       <li><strong>Switch to user page tables</strong> — schedule() swaps CR3 to process PML4</li>

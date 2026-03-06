@@ -85,6 +85,7 @@
         <tr><td>1</td><td><strong>PmmAllocator</strong></td><td>Physical memory allocator</td><td>ALL (can allocate frames)</td></tr>
         <tr><td>2</td><td><strong>IoPort</strong></td><td>base=0x3F8, size=8 (COM1)</td><td>ALL (port_in, port_out)</td></tr>
         <tr><td>3</td><td><strong>Process</strong></td><td>pid=1 (self-reference)</td><td>ALL (map memory into own VA)</td></tr>
+        <tr><td>4</td><td><strong>IoPort</strong></td><td>base=0xC000, size=128 (Virtio-Blk BAR 0)</td><td>ALL (dynamically minted from PCI discovery)</td></tr>
       </tbody>
     </table>
 
@@ -95,6 +96,7 @@
       <li><strong>Heap bootstrap</strong> — 1000 pages (4 MiB) at <code>0x4000_0000</code> via SYS_ALLOC_MEMORY + SYS_MAP_MEMORY + SYS_DROP_CAP loop</li>
       <li><strong>Vec&lt;u64&gt; proof</strong> — construct, push 3 elements, verify, drop</li>
       <li><strong>Wasm SFI proof</strong> — extract hello_wasm.wasm from TarFS, instantiate via wasmi, call <code>add(10, 32)</code> → <code>42</code></li>
+      <li><strong>Virtio-Blk interrogation</strong> — read device features + disk capacity (2048 sectors / 1 MB) via 32-bit port I/O through Slot 4 IoPort cap (Sprint 11)</li>
       <li><strong>Halt loop</strong> — infinite <code>core::hint::spin_loop()</code></li>
     </ol>
 
@@ -123,7 +125,7 @@
       <tbody>
         <tr><td><code>syscall</code></td><td>Raw <code>syscall4()</code> — inline asm SYSCALL with 4 args (RAX, RDI, RSI, RDX, R10)</td></tr>
         <tr><td><code>ipc</code></td><td><code>sys_send()</code>, <code>sys_recv()</code> — synchronous IPC on endpoint capabilities</td></tr>
-        <tr><td><code>io</code></td><td><code>sys_port_out()</code>, <code>sys_port_in()</code> — I/O port access via IoPort capability</td></tr>
+        <tr><td><code>io</code></td><td><code>sys_port_out()</code>, <code>sys_port_in()</code> — byte I/O; <code>sys_port_out_32()</code>, <code>sys_port_in_32()</code> — dword I/O via IoPort capability</td></tr>
         <tr><td><code>irq</code></td><td><code>sys_wait_irq()</code> — block until hardware IRQ on IrqLine capability</td></tr>
         <tr><td><code>process</code></td><td><code>sys_spawn_process()</code>, <code>sys_alloc_memory()</code>, <code>sys_map_memory()</code>, <code>sys_delegate()</code>, <code>sys_spawn_thread()</code>, <code>sys_drop_cap()</code></td></tr>
         <tr><td><code>heap</code></td><td><code>init_heap()</code> — Ring 3 global allocator bootstrap via linked_list_allocator</td></tr>

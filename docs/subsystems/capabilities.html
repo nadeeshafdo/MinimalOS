@@ -92,7 +92,8 @@
         S1["Slot 1: PmmAllocator\nRights: ALL"]
         S2["Slot 2: IoPort\nbase=0x3F8, size=8\nRights: ALL"]
         S3["Slot 3: Process\npid=1 (self)\nRights: ALL"]
-        S4["Slot 4–63: Empty"]
+        S4["Slot 4: IoPort\nbase=0xC000, size=128\nRights: ALL (Virtio-Blk)"]
+        S5["Slot 5–63: Empty"]
       end
     </pre>
     <p>Syscalls reference capabilities by <strong>slot index</strong>: <code>sys_map_memory(proc_slot=3, frame_slot=10, vaddr, flags)</code>.</p>

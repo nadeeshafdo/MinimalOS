@@ -228,6 +228,10 @@
       <li class="done"><strong>Virtio BAR 0</strong> — I/O port 0xC000, 128 bytes (legacy virtio control registers)</li>
       <li class="done"><strong>Virtio BAR 1</strong> — MMIO at 0x81060000, 4096 bytes (device-specific configuration)</li>
       <li class="done"><strong>Virtio BAR 4</strong> — MMIO at 0xC000000000, 16384 bytes prefetchable (modern virtio / MSI-X)</li>
+      <li class="done"><strong>Width-extended PORT_IN/PORT_OUT</strong> — R10 width parameter (0/1=byte, 4=dword), backward compatible with all existing 8-bit callers</li>
+      <li class="done"><strong>Dynamic IoPort capability minting</strong> — kernel discovers Virtio BAR 0 via PCI, mints IoPort(0xC000, 128) into Init’s CNode Slot 4 at boot</li>
+      <li class="done"><strong>Ring 3 Virtio-Blk interrogation</strong> — Init reads device features (0x79007E54) and disk capacity (2048 sectors / 1 MB) via 32-bit port I/O</li>
+      <li class="done"><strong>libmnos 32-bit I/O</strong> — <code>sys_port_in_32()</code> / <code>sys_port_out_32()</code> wrappers passing R10=4 for dword width</li>
       <li>PCI capability list walking — MSI/MSI-X detection for interrupt-driven I/O</li>
       <li>Capability-gated MMIO — new CapType::MmioRegion for userspace device drivers</li>
       <li>Virtio-blk driver — block read/write through virtqueues, Ring 3 driver process</li>
